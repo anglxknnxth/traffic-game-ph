@@ -108,6 +108,17 @@ export class LevelManager {
           out.push({ type: o.type, label: `Emergency delay ≤ ${o.target}s`, value: `${em.cleared}/${em.arrivals} · worst ${em.worst.toFixed(0)}s`, pass: ok, progress: em.arrivals ? em.cleared / em.arrivals : 1 });
           break;
         }
+        case 'pedCrossed': {
+          const n = sim.peds.stats.crossed;
+          out.push({ type: o.type, label: `Pedestrians across ≥ ${o.target}`, value: `${n}`, pass: n >= o.target, progress: Math.min(1, n / o.target) });
+          break;
+        }
+        case 'pedWait': {
+          const st = sim.peds.stats;
+          const w = st.crossed ? st.totalWait / st.crossed : 0;
+          out.push({ type: o.type, label: `Pedestrian wait ≤ ${o.target}s`, value: `${w.toFixed(1)}s`, pass: w <= o.target, progress: w <= o.target ? 1 : o.target / w });
+          break;
+        }
         case 'clearGridlock': {
           if (tracker.clearRun >= o.target) tracker.cleared = true;
           out.push({ type: o.type, label: `Clear the box for ${o.target}s`, value: tracker.cleared ? 'cleared' : `${tracker.clearRun.toFixed(0)}s`, pass: tracker.cleared, progress: tracker.cleared ? 1 : tracker.clearRun / o.target });

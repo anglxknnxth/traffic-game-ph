@@ -1,11 +1,13 @@
-// World renderer. Draw order: cached static road layer -> dynamic road overlays -> under-effects ->
-// vehicles -> over-effects -> traffic lights. The camera is strictly overhead (scale + translate).
+// World renderer. Draw order: cached static road layer -> dynamic road overlays -> pedestrians -> under-effects ->
+// vehicles -> over-effects -> elevated structures -> traffic lights -> weather and night (signal heads
+// are drawn again over the darkness). The camera is strictly overhead (scale + translate).
 
 import { RoadRenderer } from './RoadRenderer.js';
 import { drawVehicle } from './VehicleRenderer.js';
 import { TrafficLightRenderer } from './TrafficLightRenderer.js';
 import { EffectsRenderer } from './EffectsRenderer.js';
 import { WeatherRenderer } from './WeatherRenderer.js';
+import { drawPedestrians, drawPedSignals } from './PedestrianRenderer.js';
 
 export class Renderer {
   constructor(canvas, camera) {
@@ -63,6 +65,10 @@ export class Renderer {
     if (debug) this.effects.drawReservations(ctx, sim);
 
     const vr = cam.visibleRect(8);
+    if (sim.peds?.enabled) {
+      drawPedSignals(ctx, sim, time);
+      drawPedestrians(ctx, sim.peds.peds, sim.env?.rain || 0, vr);
+    }
     const visible = this._visible;
     visible.length = 0;
     for (const v of sim.vehicles) {
@@ -72,6 +78,7 @@ export class Renderer {
     for (const v of visible) drawVehicle(ctx, v, time);
     this.effects.drawOver(ctx, visible, time);
     this.road.drawOverlays(ctx, time);
+    this.lights.draw(ctx, sim, time, hoveredHead);
     this.weather.drawAtmosphere(ctx, this.canvas, cam, sim, this.road.scenery.posts, visible, time);
     // Signal heads stay readable at night: draw them over the darkness.
     if (sim.env?.darkness > 0.02) {

@@ -22,6 +22,10 @@ const objectiveText = (o) => {
       return `Get every emergency vehicle through with at most <b>${o.target}s</b> delay`;
     case 'clearGridlock':
       return `Clear the box and keep traffic flowing for <b>${o.target}s</b>`;
+    case 'pedCrossed':
+      return `Help at least <b>${o.target}</b> pedestrians across`;
+    case 'pedWait':
+      return `Keep the average pedestrian wait at or below <b>${o.target}s</b>`;
     default:
       return '';
   }
@@ -151,6 +155,8 @@ export class Menu {
     if (signals > 1) extra.push(`${signals} connected signals`);
     if (map.nodes.some((n) => n.kind === 'uturn')) extra.push('U-turn slots');
     if (map.nodes.some((n) => n.kind === 'yield')) extra.push('Yield junctions');
+    if (lvl.pedestrians?.cross) extra.push('🚶 Pedestrians');
+    if (lvl.pedestrians?.jaywalk) extra.push('Pasaway jaywalkers');
     if (lvl.emergency) extra.push('Emergency vehicles');
     if (lvl.blockages?.length) extra.push('Blocked exits');
     if (lvl.env) {

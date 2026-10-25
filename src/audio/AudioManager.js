@@ -127,6 +127,16 @@ export class AudioManager {
     }, dur * 1000);
   }
 
+  /** Traffic enforcer's whistle for pasaway pedestrians (rate-limited). */
+  whistle(pan = 0) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - (this.lastWhistle || 0) < 2.5) return;
+    this.lastWhistle = now;
+    this._tone(now, [2950, 3080], 0.16, 'square', pan, 0.045, 6500);
+    this._tone(now + 0.22, [2950, 3080], 0.3, 'square', pan, 0.045, 6500);
+  }
+
   click() {
     if (!this.ready) return;
     this._tone(this.ctx.currentTime, [880], 0.05, 'triangle', 0, 0.06, 4000);

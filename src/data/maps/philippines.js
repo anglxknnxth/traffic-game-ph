@@ -25,6 +25,7 @@ export const edsa = {
       kind: 'signal',
       arms: { N: 'edsa', S: 'edsa', E: 'aurora', W: 'aurora' },
       noLeft: ['N', 'S'],
+      noCrossing: ['N', 'S'],
       shape: { E: [{ straight: 44 }, { curve: 22, radius: 120 }], W: [{ straight: 44 }, { curve: 16, radius: 140 }] },
     },
     { id: 'U1', x: 0, y: -88, kind: 'uturn', arms: { N: 'edsa', S: 'edsa' }, uturn: ['S'], uturnRate: 0.3 },
@@ -59,6 +60,7 @@ export const commonwealth = {
       kind: 'signal',
       arms: { N: 'tandang', S: 'tandang', E: 'cw', W: 'cw' },
       noLeft: ['E', 'W'],
+      noCrossing: ['E', 'W'],
       shape: {
         W: [{ straight: 34 }, { curve: -18, radius: 160 }],
         N: [{ straight: 44 }, { curve: 35, radius: 45 }],
@@ -73,6 +75,7 @@ export const commonwealth = {
       kind: 'signal',
       arms: { N: 'antonio', S: 'antonio', E: 'cw', W: 'cw' },
       noLeft: ['E', 'W'],
+      noCrossing: ['E', 'W'],
       shape: { E: [{ straight: 34 }, { curve: 22, radius: 150 }], N: [{ straight: 44 }, { curve: -40, radius: 40 }] },
     },
   ],

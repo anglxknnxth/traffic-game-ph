@@ -90,9 +90,13 @@ export class LaneChanger {
     const ce = v.nextConnEntry();
     const limit = ce ? ce.start : v.route.length - 12;
     const room = limit - v.front;
-    const L = Math.min(24, Math.max(moto ? 5 : 7, v.v * 2.8));
+    // Long vehicles change lanes gently: a short change would swing a bus body 40° and sweep its tail
+    // across the next lane (or over the kerb).
+    const L = Math.max(v.spec.length * 2.2, Math.min(24, Math.max(moto ? 5 : 7, v.v * 2.8)));
     if (room < L + 12) return null;
     if (seg.gate && !v.gatePassed && this.sim.gateFront(v) !== null && this.sim.gateFront(v) - v.front < L + 6) return null;
+    // Never swerve round someone crossing the road ahead: the body would still be in their lane.
+    if (this.sim.blockageOnLane(seg, v.localS, v.front + L + 15, 'ped')) return null;
     const move = ce ? ce.seg.movement : null;
 
     const own = this._around(seg, v.localS, v);
@@ -108,6 +112,7 @@ export class LaneChanger {
     for (const B of LaneChanger.neighbours(seg)) {
       if (!B.allows(v.type)) continue;
       if (move && !B.connectors[move]) continue;
+      if (this.sim.blockageOnLane(B, v.localS - v.hl - 2, v.localS + 45)) continue;
       // Do not drift into a dedicated lane you may use but did not pick (buses stay in the busway, motos in the moto lane, unless forced).
       if (B.allowed && !forced && seg.allowed !== B.allowed && !B.allowed.has(v.type)) continue;
       const { lead, follow } = this._around(B, v.localS, v);

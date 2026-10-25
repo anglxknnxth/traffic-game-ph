@@ -207,6 +207,12 @@ export class Network {
     lane.start = points[0];
     lane.end = points[points.length - 1];
     lane.curves = curveLimits(center, u0, u1, reversed);
+    // Where the lane sits on its road (pedestrians crossing mid-block use this).
+    lane.center = center;
+    lane.cu0 = u0;
+    lane.cu1 = u1;
+    lane.cReversed = reversed;
+    lane.cOffset = d;
     lane.allowed = LANE_ALLOWED[lane.type] || null;
     lane.allows = (type) => !lane.allowed || lane.allowed.has(type);
     this.lanes.push(lane);

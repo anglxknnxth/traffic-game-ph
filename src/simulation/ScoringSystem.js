@@ -20,6 +20,8 @@ export class ScoringSystem {
       unsafe: 0,
       boxBlock: 0,
       emergencyPenalty: 0,
+      peds: 0,
+      pedWaiting: 0,
     };
     this.safety = 100;
     this.counts = { processed: 0, earlyRequests: 0, boxBlocks: 0, emergencies: 0, slowEmergencies: 0, recoveries: 0 };
@@ -54,6 +56,22 @@ export class ScoringSystem {
     }
   }
 
+  /** A pedestrian made it across the crosswalk after waiting `wait` seconds. */
+  onPedCrossed(wait) {
+    this.b.peds += 4 + Math.max(0, 5 - wait / 8);
+  }
+
+  /** A pedestrian gave up waiting and crossed against the light. */
+  onPedRedCross() {
+    this.b.unsafe -= 4;
+    this.safety -= 1;
+  }
+
+  /** People kept waiting too long at the crosswalks. */
+  pedWaiting(dt, longWaiting) {
+    if (longWaiting > 0) this.b.pedWaiting -= Math.min(longWaiting, 20) * 0.05 * dt;
+  }
+
   onRecovery(fromLevel) {
     this.counts.recoveries++;
     this.b.recovery += fromLevel === CONGESTION.GRIDLOCK ? 60 : 25;
@@ -72,12 +90,12 @@ export class ScoringSystem {
 
   positive() {
     const b = this.b;
-    return b.flow + b.waitBonus + b.emergency + b.recovery;
+    return b.flow + b.waitBonus + b.emergency + b.recovery + b.peds;
   }
 
   negative() {
     const b = this.b;
-    return b.gridlock + b.waiting + b.unsafe + b.boxBlock + b.emergencyPenalty;
+    return b.gridlock + b.waiting + b.unsafe + b.boxBlock + b.emergencyPenalty + b.pedWaiting;
   }
 
   total() {
@@ -95,8 +113,14 @@ export class ScoringSystem {
       { label: 'Gridlock recovery', value: r(this.b.recovery) },
       { label: 'Gridlock / blockage', value: r(this.b.gridlock) },
       { label: 'Excessive waiting', value: r(this.b.waiting) },
-      { label: 'Early signal requests', value: r(this.b.unsafe) },
+      { label: 'Safety penalties', value: r(this.b.unsafe) },
       { label: 'Box-blocking entries', value: r(this.b.boxBlock) },
+      ...(this.b.peds || this.b.pedWaiting
+        ? [
+            { label: 'Pedestrians crossed', value: r(this.b.peds) },
+            { label: 'Pedestrians kept waiting', value: r(this.b.pedWaiting) },
+          ]
+        : []),
       { label: 'Safety rating', value: `${Math.round(this.safety)}%` },
     ];
   }

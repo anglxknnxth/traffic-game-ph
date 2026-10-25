@@ -303,6 +303,7 @@ export class HUD {
         <div class="row"><span>Longest queue</span><b>${m.longestQueue}</b></div>
         <div class="row"><span>Blocked approaches</span><b class="${m.blockedApproaches ? 'bad' : ''}">${m.blockedApproaches}</b></div>
         <div class="row"><span>Horns</span><b>${m.horns} <small>(${m.hornRate}/10s)</small></b></div>
+        ${sim.peds?.crossings.length ? `<div class="row"><span>Pedestrians across</span><b>${m.pedsCrossed}</b></div><div class="row"><span>Waiting to cross</span><b class="${m.pedMaxWait > 45 ? 'bad' : ''}">${m.pedsWaiting}${m.pedMaxWait > 1 ? ` <small>max ${m.pedMaxWait.toFixed(0)}s</small>` : ''}</b></div>` : ''}
         <div class="row"><span>Congestion</span><b class="${cong > 70 ? 'bad' : cong > 45 ? 'warnc' : ''}">${cong}%</b></div>
         <div class="bar"><i style="width:${cong}%;background:${cong > 70 ? '#ef4444' : cong > 45 ? '#f59e0b' : '#22c55e'}"></i></div>
         <div class="row small"><span>Phase</span><b>${phases}</b></div>

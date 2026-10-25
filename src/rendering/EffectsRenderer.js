@@ -70,9 +70,9 @@ export class EffectsRenderer {
   drawReservations(ctx, sim) {
     for (const mgr of sim.imgr.values()) {
       mgr.forEachReserved((x, y, size, owners) => {
-        const id = owners[0].id;
-        const hue = (id * 67) % 360;
-        ctx.fillStyle = `hsla(${hue},85%,55%,${owners.length > 1 ? 0.55 : 0.32})`;
+        const o = owners[0];
+        // Pedestrian crossings in white, vehicle paths in a colour per vehicle.
+        ctx.fillStyle = o.isPed ? 'rgba(255,255,255,0.45)' : `hsla(${(o.id * 67) % 360},85%,55%,${owners.length > 1 ? 0.55 : 0.32})`;
         ctx.fillRect(x - size / 2, y - size / 2, size, size);
       });
     }

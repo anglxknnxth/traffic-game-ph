@@ -109,9 +109,10 @@ export class IntersectionManager {
     const last = Float64Array.from(cells, (c) => lastS.get(c));
 
     // Cells outside the core that intrude on *other* approach lanes: those lanes must keep clear.
+    // (Pedestrian crossings never reach into a lane outside the box.)
     const keepClear = [];
     const lanes = [];
-    for (const arm of ARMS) for (const l of this.I.approachLanes[arm] || []) if (l !== conn.fromLane) lanes.push(l);
+    if (!conn.ped) for (const arm of ARMS) for (const l of this.I.approachLanes[arm] || []) if (l !== conn.fromLane) lanes.push(l);
     const outer = [];
     for (let i = 0; i < cells.length; i++) if (!this._isCore(cells[i])) outer.push(i);
     if (outer.length) {
@@ -278,6 +279,46 @@ export class IntersectionManager {
   _finish(vehicle, res) {
     for (const kc of res.fp.keepClear) kc.lane.keepClear.delete(vehicle);
     vehicle.reservations.delete(this.id);
+  }
+
+  // ---------------------------------------------------------------- pedestrians
+  // Pedestrians reserve their crosswalk line exactly like vehicles reserve a path. They share cells
+  // with each other (people walk past one another) but never with a vehicle, in either direction.
+
+  /** The vehicle holding any cell of footprint `fp`, or null when a pedestrian may step out. */
+  vehicleOn(fp) {
+    for (let i = 0; i < fp.cells.length; i++) {
+      const owners = this.owners[fp.cells[i]];
+      for (let j = 0; j < owners.length; j++) if (!owners[j].isPed) return owners[j];
+    }
+    return null;
+  }
+
+  reservePed(ped, conn, fp) {
+    const held = new Uint8Array(fp.cells.length).fill(1);
+    for (let i = 0; i < fp.cells.length; i++) this.owners[fp.cells[i]].push(ped);
+    ped.reservations.set(this.id, { conn, fp, held, remaining: fp.cells.length });
+  }
+
+  /** Release crossing cells the pedestrian has walked past. */
+  releasePed(ped, progress) {
+    const res = ped.reservations.get(this.id);
+    if (!res) return;
+    for (let i = 0; i < res.held.length; i++) {
+      if (res.held[i] && progress > res.fp.lastS[i]) {
+        res.held[i] = 0;
+        res.remaining--;
+        this._removeOwner(res.fp.cells[i], ped);
+      }
+    }
+    if (res.remaining <= 0) ped.reservations.delete(this.id);
+  }
+
+  releasePedAll(ped) {
+    const res = ped.reservations.get(this.id);
+    if (!res) return;
+    for (let i = 0; i < res.held.length; i++) if (res.held[i]) this._removeOwner(res.fp.cells[i], ped);
+    ped.reservations.delete(this.id);
   }
 
   /** Iterate reserved cells: fn(x, y, size, ownerList). */

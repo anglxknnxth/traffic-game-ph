@@ -281,6 +281,9 @@ export class Game {
         if (e.type === 'horn' && playing) {
           const p = this.camera.worldToScreen(e.x, e.y);
           if (p.x > -80 && p.x < this.camera.w + 80 && p.y > -80 && p.y < this.camera.h + 80) this.audio.horn(e.horn, (p.x / this.camera.w) * 2 - 1, e.double);
+        } else if (e.type === 'pasaway' && playing) {
+          const p = this.camera.worldToScreen(e.x, e.y);
+          if (p.x > -80 && p.x < this.camera.w + 80 && p.y > -80 && p.y < this.camera.h + 80) this.audio.whistle((p.x / this.camera.w) * 2 - 1);
         } else if (e.type === 'notify') {
           this.hud.notify(e);
         }

@@ -30,7 +30,8 @@ const level = (over = {}) =>
 describe('Emergency vehicles ignore red lights', () => {
   it('cross against a red without collisions and with little delay', () => {
     // The player never touches the lights: East–West stays green the whole time.
-    const sim = new TrafficSimulator(level({ emergency: { times: [4, 22, 40, 58, 76, 94, 112, 130] } }), { seed: 5 });
+    // Light North–South demand so the red queue never reaches the map edge (ambulances must be able to spawn).
+    const sim = new TrafficSimulator(level({ demand: { N: 3, S: 3, E: 12, W: 12 }, emergency: { times: [4, 22, 40, 58, 76, 94, 112, 130] } }), { seed: 5 });
     const onRed = new Set();
     run(sim, 160, (s) => {
       for (const v of s.vehicles) {

@@ -22,6 +22,7 @@ import { GridlockDetector, CONGESTION, rankOf } from './GridlockDetector.js';
 import { ScoringSystem } from './ScoringSystem.js';
 import { Environment } from './Environment.js';
 import { LaneChanger } from './LaneChange.js';
+import { PedestrianManager } from './PedestrianManager.js';
 
 const METRIC_INTERVAL = 0.25;
 const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's stop lines
@@ -74,6 +75,7 @@ export class TrafficSimulator {
     }
     this.resetStats();
     this.spawner = new VehicleSpawner(this);
+    this.peds = new PedestrianManager(this);
     this.metrics = this._emptyMetrics();
   }
 
@@ -93,6 +95,7 @@ export class TrafficSimulator {
       spawned: 0,
     };
     this.scoring?.reset();
+    this.peds?.resetStats();
     for (const d of this.detectors?.values() || []) {
       d.gridlockTime = 0;
       d.partialTime = 0;
@@ -128,6 +131,7 @@ export class TrafficSimulator {
     this.lights.update(dt);
     this.updatePriority();
     this.updateBlockages();
+    this.peds.update(dt);
     this.spawner.update(dt);
     this.updateGates(dt);
 
@@ -347,11 +351,21 @@ export class TrafficSimulator {
       for (const lane of b.laneObjs) {
         const start = v.route.startOf(lane);
         if (start < 0) continue;
-        const bs = start + b.s;
+        const bs = start + (b.sOf ? b.sOf.get(lane) : b.s);
         if (bs >= v.front - 0.05 && bs - v.front < 90 && (best === null || bs < best)) best = bs;
       }
     }
     return best;
+  }
+
+  /** True when an active blockage sits on `lane` between lane coordinates s0 and s1. */
+  blockageOnLane(lane, s0, s1, kind = null) {
+    for (const b of this.blockages) {
+      if (!b.active || !b.laneObjs.includes(lane) || (kind && b.kind !== kind)) continue;
+      const bs = b.sOf ? b.sOf.get(lane) : b.s;
+      if (bs >= s0 && bs <= s1) return true;
+    }
+    return false;
   }
 
   isLaneHead(v, ce) {
@@ -373,7 +387,7 @@ export class TrafficSimulator {
     const first = lane.vehicles[0];
     let free = first ? first.localS - first.hl : lane.length;
     for (const c of lane.committed) if (c !== v) free -= footprint(c);
-    for (const b of this.blockages) if (b.active && b.laneObjs.includes(lane)) free = Math.min(free, b.s - 0.5);
+    for (const b of this.blockages) if (b.active && b.laneObjs.includes(lane)) free = Math.min(free, (b.sOf ? b.sOf.get(lane) : b.s) - 0.5);
     if (!strict && first && first.v > 2) free += Math.min(first.v * 1.5, 12);
     const need = footprint(v);
     if (free >= need) return 'ok';
@@ -459,7 +473,7 @@ export class TrafficSimulator {
     const mgr = this.imgr.get(I.id);
     const blocker = mgr.findBlocker(v, conn);
     if (blocker) {
-      v.blockReason = 'box';
+      v.blockReason = blocker.isPed ? 'pedestrian' : 'box';
       v.blockerId = blocker.id;
       return false;
     }
@@ -540,7 +554,7 @@ export class TrafficSimulator {
 
   updateBlockages() {
     for (const b of this.blockages) {
-      if (b.done) continue;
+      if (b.done || b.kind === 'ped') continue; // pedestrians manage their own blockages
       const t = this.scheduleTime;
       if (!b.active && t >= b.start && t < b.end) {
         // A breakdown only "appears" on a free stretch of road.
@@ -674,7 +688,8 @@ export class TrafficSimulator {
           const lead = lane.vehicles[lane.vehicles.length - 1];
           if (lead && !lead.reservations.has(I.id) && lane.length - lead.localS - lead.hl < 8) {
             anyHead = true;
-            if (lead.blockReason !== 'yield' && lead.blockReason !== 'emergency') allYield = false;
+            // Yielding to oncoming traffic, an emergency vehicle or people on the crosswalk is not a blockage.
+            if (lead.blockReason !== 'yield' && lead.blockReason !== 'emergency' && lead.blockReason !== 'pedestrian') allYield = false;
             if (lead.blockReason === 'exit' && lead.greenWait >= 5) exitLanes++;
             if (lead.greenWait >= headWait) {
               headWait = lead.greenWait;
@@ -729,6 +744,10 @@ export class TrafficSimulator {
     m.level = worst;
     m.congestion = congestion;
     m.gridlockTime = gridlockTime;
+    const ps = this.peds.stats;
+    m.pedsWaiting = ps.waiting;
+    m.pedMaxWait = ps.maxWait;
+    m.pedsCrossed = ps.crossed;
     this.hornIntensity = 1 + 1.4 * congestion + (worst === CONGESTION.GRIDLOCK ? 0.6 : 0);
     if (m.hornRate >= 14) this.notify('HEAVY_HONKING', NOTIFY_TEXT.HEAVY_HONKING, 'warn');
     this.scoring.update(dt, worst, longWaiters);

@@ -1,0 +1,19 @@
+{
+  "name": "traffic-control-philippines",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Top-down traffic signal management and gridlock simulation game set in a fictional Metro Manila.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

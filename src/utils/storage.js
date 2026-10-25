@@ -1,0 +1,116 @@
+// Validated localStorage persistence with an in-memory fallback.
+
+import { CAREER_COUNT } from '../data/levels.js';
+
+const KEY = 'tcp.save.v1';
+
+export const DEFAULT_SAVE = Object.freeze({
+  unlockedLevel: 1,
+  bestScores: {},
+  bestStars: {},
+  endlessBest: 0,
+  endlessBestTime: 0,
+  challengesCompleted: [],
+  challengeBest: {},
+  tutorialDone: false,
+  settings: {
+    volume: 0.7,
+    muted: false,
+    speed: 1,
+    debug: false,
+    showMetrics: true,
+  },
+});
+
+let memoryStore = null;
+
+function getStorage() {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const probe = '__tcp_probe__';
+    localStorage.setItem(probe, '1');
+    localStorage.removeItem(probe);
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+
+function sanitizeScoreMap(raw, maxValue) {
+  const out = {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof k === 'string' && k.length < 32 && isNum(v) && v >= 0) out[k] = Math.min(v, maxValue);
+    }
+  }
+  return out;
+}
+
+export function validateSave(raw) {
+  const d = structuredCloneSafe(DEFAULT_SAVE);
+  if (!raw || typeof raw !== 'object') return d;
+  if (isNum(raw.unlockedLevel)) d.unlockedLevel = Math.min(CAREER_COUNT, Math.max(1, Math.floor(raw.unlockedLevel)));
+  d.bestScores = sanitizeScoreMap(raw.bestScores, 1e7);
+  d.bestStars = sanitizeScoreMap(raw.bestStars, 3);
+  d.challengeBest = sanitizeScoreMap(raw.challengeBest, 1e7);
+  if (isNum(raw.endlessBest) && raw.endlessBest >= 0) d.endlessBest = Math.floor(raw.endlessBest);
+  if (isNum(raw.endlessBestTime) && raw.endlessBestTime >= 0) d.endlessBestTime = raw.endlessBestTime;
+  if (Array.isArray(raw.challengesCompleted)) {
+    d.challengesCompleted = [...new Set(raw.challengesCompleted.filter((x) => typeof x === 'string' && x.length < 16))];
+  }
+  d.tutorialDone = raw.tutorialDone === true;
+  const s = raw.settings;
+  if (s && typeof s === 'object') {
+    if (isNum(s.volume)) d.settings.volume = Math.min(1, Math.max(0, s.volume));
+    if (typeof s.muted === 'boolean') d.settings.muted = s.muted;
+    if ([1, 2, 3].includes(s.speed)) d.settings.speed = s.speed;
+    if (typeof s.debug === 'boolean') d.settings.debug = s.debug;
+    if (typeof s.showMetrics === 'boolean') d.settings.showMetrics = s.showMetrics;
+  }
+  return d;
+}
+
+function structuredCloneSafe(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+export function loadSave() {
+  const storage = getStorage();
+  if (!storage) return validateSave(memoryStore);
+  try {
+    const text = storage.getItem(KEY);
+    if (!text) return validateSave(null);
+    return validateSave(JSON.parse(text));
+  } catch {
+    return validateSave(null);
+  }
+}
+
+export function writeSave(data) {
+  const clean = validateSave(data);
+  const storage = getStorage();
+  if (!storage) {
+    memoryStore = clean;
+    return false;
+  }
+  try {
+    storage.setItem(KEY, JSON.stringify(clean));
+    return true;
+  } catch {
+    memoryStore = clean;
+    return false;
+  }
+}
+
+export function clearSave() {
+  memoryStore = null;
+  const storage = getStorage();
+  try {
+    storage?.removeItem(KEY);
+  } catch {
+    /* ignore */
+  }
+  return validateSave(null);
+}

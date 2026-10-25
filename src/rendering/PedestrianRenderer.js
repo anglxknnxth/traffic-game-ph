@@ -97,7 +97,7 @@ export function drawPedSignals(ctx, sim, time) {
   for (const c of peds.crossings) {
     const state = peds.walkState(c);
     const blink = Math.floor(time * 3) % 2 === 0;
-    const on = state === 'walk' ? '#22c55e' : state === 'flash' ? (blink ? '#f97316' : '#3f3f46') : '#ef4444';
+    const on = state === 'walk' ? '#22c55e' : state === 'flash' || state === 'gap' ? (blink ? '#f97316' : '#3f3f46') : '#ef4444';
     for (const side of [-1, 1]) {
       c.g.point(c.A.cwStart + 3.9, side * (c.A.half + 0.8), _p);
       ctx.save();

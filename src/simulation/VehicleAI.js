@@ -30,6 +30,9 @@ const HORN_TEXT = {
   tricycle: ['PRRP!', 'MEEP MEEP!'],
   bus: ['HOOONK!', 'BRAAAP!'],
   truck: ['HOOONK!', 'BWAAAM!'],
+  ejeep: ['PEEP PEEP!', 'BEEEP!'],
+  multicab: ['MEEP!', 'BIP BIP!'],
+  bell: ['KRING KRING!', 'KRING!'],
 };
 
 export class VehicleAI {
@@ -119,12 +122,15 @@ export class VehicleAI {
           constraint = 'sirens';
         }
       }
+      // Right turn on red ("right turn anytime with care"): stop at the line, then turn when the
+      // traffic that has green leaves a gap.
+      const rtor = sig === 'red' && !sirens && conn.movement === 'right' && I.kind === 'signal' && !(I.def.noRightOnRed || []).includes(conn.arm);
       if (!res && distToStop > -0.05) {
         const reqDist = Math.max(8, (v.v * v.v) / (2 * b) + 6);
         let want = false;
         let duringYellow = false;
         if (distToStop <= reqDist) {
-          if (sig === 'green' || sirens) want = true;
+          if (sig === 'green' || sig === 'flash' || sirens || rtor) want = true;
           else if (sig === 'yellow') {
             const stopNeed = (v.v * v.v) / (2 * b);
             const t = distToStop / Math.max(v.v, 0.1);
@@ -132,27 +138,31 @@ export class VehicleAI {
             duringYellow = want;
           }
         }
-        // STOP sign on the minor arms of a yield junction: come to a full stop before looking for a gap.
-        if (want && I.kind === 'yield' && !I.major.has(conn.arm) && v.signStop !== I.id) {
-          if (distToStop < 1.6 && v.v < 0.3) v.signStop = I.id;
-          else {
+        // STOP sign on the minor arms of a yield junction, every approach under flashing yellow, and
+        // a right turn on red: come to a full stop before looking for a gap.
+        const mustStop = (I.kind === 'yield' && !I.major.has(conn.arm)) || (sig === 'flash' && !sirens) || rtor;
+        if (want && mustStop && v.signStop !== I.id) {
+          if (distToStop < 1.6 && v.v < 0.3) {
+            v.signStop = I.id;
+            v.signStopAt = sim.time;
+          } else {
             want = false;
             v.blockReason = 'sign';
           }
         }
         if (want && sim.tryEnter(v, conn, ce.start, distToStop)) {
           res = v.reservations.get(I.id);
-          if (res) res.yellowCommit = duringYellow || sirens;
+          if (res) res.yellowCommit = duringYellow || sirens || rtor;
         }
         if (!res) {
           const aS = idmStop(v.v, distToStop - P.stopMargin, v0, aMax, b);
           if (aS < acc) {
             acc = aS;
-            constraint = sig === 'green' || sirens ? 'waiting' : 'signal';
+            constraint = sig === 'green' || sig === 'flash' || sirens ? 'waiting' : 'signal';
           }
-          if (sig !== 'green' && !sirens && !v.blockReason) v.blockReason = 'signal';
+          if (sig !== 'green' && sig !== 'flash' && !sirens && !rtor && !v.blockReason) v.blockReason = 'signal';
         }
-      } else if (res && distToStop > 0 && sig !== 'green' && !res.yellowCommit && !sirens) {
+      } else if (res && distToStop > 0 && sig !== 'green' && sig !== 'flash' && !res.yellowCommit && !sirens) {
         // Granted earlier but the light changed before we reached the line: stop if we comfortably can.
         const decel = sig === 'yellow' ? b : spec.hardDecel * 0.7;
         const need = (v.v * v.v) / (2 * decel);
@@ -346,7 +356,7 @@ export class VehicleAI {
     if (!atGreen && !inBox) chance *= 0.45; // honking at a red light is less common
     if (sim.rng.chance(Math.min(0.95, chance))) {
       const opts = HORN_TEXT[v.spec.horn] || HORN_TEXT.car;
-      v.hornFlash = v.spec.horn === 'bus' || v.spec.horn === 'truck' ? 0.9 : 0.55;
+      v.hornFlash = v.spec.bigHorn ? 0.9 : 0.55;
       v.hornText = sim.rng.chance(0.45) ? sim.rng.pick(opts) : null;
       v.horns++;
       const [lo, hi] = P.hornCooldown;

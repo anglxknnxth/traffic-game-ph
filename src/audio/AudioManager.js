@@ -1,18 +1,27 @@
-// Procedural traffic audio via the Web Audio API: per-type horns, emergency sirens and an engine
-// rumble bed. Voice-limited and rate-limited so heavy honking never floods the mixer.
-// No audio files are required; the API degrades to silence where Web Audio is unavailable.
+// Procedural traffic audio via the Web Audio API: per-type horns, emergency sirens, an engine
+// rumble bed with a diesel chug, and lo-fi background music (MusicPlayer). Sound effects and music
+// have their own gain buses under the master. Voice-limited and rate-limited so heavy honking never
+// floods the mixer. No audio files are required; the API degrades to silence where Web Audio is
+// unavailable.
+
+import { MusicPlayer } from './MusicPlayer.js';
 
 export class AudioManager {
   constructor() {
     this.ctx = null;
     this.master = null;
-    this.volume = 0.7;
+    this.sfx = null;
+    this.musicBus = null;
+    this.volume = 0.7; // sound effects
+    this.musicVolume = 0.5;
+    this.musicOn = true;
     this.muted = false;
-    this.maxVoices = 7;
+    this.maxVoices = 10;
     this.active = 0;
     this.lastPlay = 0;
     this.siren = null;
     this.ambient = null;
+    this.music = null;
     this.enabled = typeof window !== 'undefined' && !!(window.AudioContext || window.webkitAudioContext);
   }
 
@@ -23,11 +32,16 @@ export class AudioManager {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         this.ctx = new Ctx();
         const comp = this.ctx.createDynamicsCompressor();
-        comp.threshold.value = -16;
-        comp.ratio.value = 6;
+        comp.threshold.value = -14;
+        comp.ratio.value = 5;
         this.master = this.ctx.createGain();
         this.master.connect(comp);
         comp.connect(this.ctx.destination);
+        this.sfx = this.ctx.createGain();
+        this.sfx.connect(this.master);
+        this.musicBus = this.ctx.createGain();
+        this.musicBus.connect(this.master);
+        this.music = new MusicPlayer(this.ctx, this.musicBus);
         this._applyVolume();
       }
       if (this.ctx.state === 'suspended') this.ctx.resume();
@@ -41,6 +55,16 @@ export class AudioManager {
     this._applyVolume();
   }
 
+  setMusicVolume(v) {
+    this.musicVolume = Math.max(0, Math.min(1, v));
+    this._applyVolume();
+  }
+
+  setMusicOn(on) {
+    this.musicOn = !!on;
+    this._applyVolume();
+  }
+
   setMuted(m) {
     this.muted = !!m;
     this._applyVolume();
@@ -48,8 +72,10 @@ export class AudioManager {
 
   _applyVolume() {
     if (!this.master) return;
-    const target = this.muted ? 0 : this.volume * 0.55;
-    this.master.gain.setTargetAtTime(target, this.ctx.currentTime, 0.03);
+    const t = this.ctx.currentTime;
+    this.master.gain.setTargetAtTime(this.muted ? 0 : 1, t, 0.03);
+    this.sfx.gain.setTargetAtTime(this.volume * 0.9, t, 0.03);
+    this.musicBus.gain.setTargetAtTime(this.musicOn ? this.musicVolume * 0.55 : 0, t, 0.08);
   }
 
   get ready() {
@@ -74,7 +100,7 @@ export class AudioManager {
       out = p;
     }
     filter.connect(g);
-    out.connect(this.master);
+    out.connect(this.sfx);
     for (const f of freqs) {
       const osc = ctx.createOscillator();
       osc.type = type;
@@ -86,39 +112,50 @@ export class AudioManager {
     }
   }
 
-  /** Play a horn. kind: car | moto | tricycle | jeepney | bus | truck. pan in [-1, 1]. */
+  /** Play a horn. kind: car | moto | tricycle | jeepney | ejeep | multicab | bus | truck. pan in [-1, 1]. */
   horn(kind, pan = 0, double = false) {
     if (!this.ready) return;
     const now = this.ctx.currentTime;
-    if (now - this.lastPlay < 0.045 || this.active >= this.maxVoices) return;
+    if (now - this.lastPlay < 0.04 || this.active >= this.maxVoices) return;
     this.lastPlay = now;
     let dur = 0.3;
     const t = now + Math.random() * 0.03;
     switch (kind) {
       case 'moto':
-        this._tone(t, [740, 790], 0.11, 'square', pan, 0.09, 3200);
-        this._tone(t + 0.16, [740, 790], 0.11, 'square', pan, 0.09, 3200);
+        this._tone(t, [740, 790], 0.11, 'square', pan, 0.15, 3200);
+        this._tone(t + 0.16, [740, 790], 0.11, 'square', pan, 0.15, 3200);
         dur = 0.3;
         break;
       case 'tricycle':
-        this._tone(t, [580, 615], 0.13, 'sawtooth', pan, 0.09, 2400);
-        this._tone(t + 0.18, [580, 615], 0.13, 'sawtooth', pan, 0.09, 2400);
+      case 'multicab':
+        this._tone(t, [580, 615], 0.13, 'sawtooth', pan, 0.15, 2400);
+        this._tone(t + 0.18, [580, 615], 0.13, 'sawtooth', pan, 0.15, 2400);
         dur = 0.34;
         break;
       case 'jeepney': {
         const notes = Math.random() < 0.5 ? [523, 659, 784] : [784, 659, 784, 988];
-        notes.forEach((f, i) => this._tone(t + i * 0.13, [f, f * 1.005], 0.12, 'sawtooth', pan, 0.08, 2800));
+        notes.forEach((f, i) => this._tone(t + i * 0.13, [f, f * 1.005], 0.12, 'sawtooth', pan, 0.14, 2800));
         dur = notes.length * 0.13 + 0.05;
         break;
       }
+      case 'ejeep':
+        this._tone(t, [466, 587], 0.16, 'square', pan, 0.14, 2600);
+        this._tone(t + 0.22, [466, 587], 0.2, 'square', pan, 0.14, 2600);
+        dur = 0.45;
+        break;
+      case 'bell':
+        // bicycle bell: two bright rings with a metallic overtone
+        for (const dt of [0, 0.12]) this._tone(t + dt, [2093, 2637, 3520], 0.1, 'triangle', pan, 0.08, 7000);
+        dur = 0.25;
+        break;
       case 'bus':
       case 'truck':
-        this._tone(t, [155, 196, 233], double ? 0.9 : 0.6, 'sawtooth', pan, 0.11, 1300);
+        this._tone(t, [155, 196, 233], double ? 0.9 : 0.6, 'sawtooth', pan, 0.19, 1400);
         dur = double ? 0.95 : 0.65;
         break;
       default:
-        this._tone(t, [415, 520], double ? 0.12 : 0.22, 'square', pan, 0.09, 2300);
-        if (double) this._tone(t + 0.2, [415, 520], 0.14, 'square', pan, 0.09, 2300);
+        this._tone(t, [415, 520], double ? 0.12 : 0.22, 'square', pan, 0.15, 2300);
+        if (double) this._tone(t + 0.2, [415, 520], 0.14, 'square', pan, 0.15, 2300);
         dur = double ? 0.38 : 0.24;
     }
     this.active++;
@@ -133,13 +170,13 @@ export class AudioManager {
     const now = this.ctx.currentTime;
     if (now - (this.lastWhistle || 0) < 2.5) return;
     this.lastWhistle = now;
-    this._tone(now, [2950, 3080], 0.16, 'square', pan, 0.045, 6500);
-    this._tone(now + 0.22, [2950, 3080], 0.3, 'square', pan, 0.045, 6500);
+    this._tone(now, [2950, 3080], 0.16, 'square', pan, 0.06, 6500);
+    this._tone(now + 0.22, [2950, 3080], 0.3, 'square', pan, 0.06, 6500);
   }
 
   click() {
     if (!this.ready) return;
-    this._tone(this.ctx.currentTime, [880], 0.05, 'triangle', 0, 0.06, 4000);
+    this._tone(this.ctx.currentTime, [880], 0.05, 'triangle', 0, 0.08, 4000);
   }
 
   /** Continuous siren while emergency vehicles are on screen. */
@@ -161,8 +198,8 @@ export class AudioManager {
       if (ctx.createStereoPanner) {
         pan = ctx.createStereoPanner();
         g.connect(pan);
-        pan.connect(this.master);
-      } else g.connect(this.master);
+        pan.connect(this.sfx);
+      } else g.connect(this.sfx);
       osc.start();
       this.siren = { osc, g, pan };
     }
@@ -186,15 +223,18 @@ export class AudioManager {
     const phase = (time % period) / period;
     const f = fire ? 700 + 650 * (phase < 0.5 ? phase * 2 : 2 - phase * 2) : 650 + 700 * (0.5 - 0.5 * Math.cos(phase * Math.PI * 2));
     this.siren.osc.frequency.setTargetAtTime(f, now, 0.03);
-    this.siren.g.gain.setTargetAtTime(0.05 + 0.02 * Math.min(2, emergencies.length - 1), now, 0.1);
+    this.siren.g.gain.setTargetAtTime(0.07 + 0.025 * Math.min(2, emergencies.length - 1), now, 0.1);
     if (this.siren.pan && panFn) {
       const avg = emergencies.reduce((a, v) => a + panFn(v), 0) / emergencies.length;
       this.siren.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, avg)), now, 0.1);
     }
   }
 
-  /** Low engine rumble scaled by how much traffic is moving. */
-  updateAmbient(level) {
+  /**
+   * Engine bed: a low noise rumble scaled by moving traffic, plus a pulsing diesel chug that grows
+   * with the share of jeepneys, buses and trucks in view (`heavy`, 0..1).
+   */
+  updateAmbient(level, heavy = 0) {
     if (!this.ctx) return;
     if (!this.ambient && this.ready) {
       const ctx = this.ctx;
@@ -211,23 +251,57 @@ export class AudioManager {
       src.loop = true;
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.value = 320;
+      filter.frequency.value = 380;
       const g = ctx.createGain();
       g.gain.value = 0;
       src.connect(filter);
       filter.connect(g);
-      g.connect(this.master);
+      g.connect(this.sfx);
       src.start();
-      this.ambient = { src, g };
+      // Diesel chug: a low sawtooth whose loudness is pulsed by a slow LFO.
+      const chug = ctx.createOscillator();
+      chug.type = 'sawtooth';
+      chug.frequency.value = 46;
+      const chugFilter = ctx.createBiquadFilter();
+      chugFilter.type = 'lowpass';
+      chugFilter.frequency.value = 220;
+      const chugGain = ctx.createGain();
+      chugGain.gain.value = 0;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 7.5;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0;
+      lfo.connect(lfoGain);
+      lfoGain.connect(chugGain.gain);
+      chug.connect(chugFilter);
+      chugFilter.connect(chugGain);
+      chugGain.connect(this.sfx);
+      chug.start();
+      lfo.start();
+      this.ambient = { src, g, chug, chugGain, lfoGain };
     }
     if (this.ambient) {
-      const target = this.ready ? Math.min(0.12, 0.02 + level * 0.1) : 0;
-      this.ambient.g.gain.setTargetAtTime(target, this.ctx.currentTime, 0.4);
+      const t = this.ctx.currentTime;
+      const on = this.ready;
+      this.ambient.g.gain.setTargetAtTime(on ? Math.min(0.22, 0.04 + level * 0.18) : 0, t, 0.4);
+      const chug = on ? Math.min(0.09, (0.015 + level * 0.05) * (0.4 + heavy * 1.6)) : 0;
+      this.ambient.chugGain.gain.setTargetAtTime(chug, t, 0.5);
+      this.ambient.lfoGain.gain.setTargetAtTime(chug * 0.8, t, 0.5);
     }
   }
 
+  /** Background music mood: 'menu' | 'day' | 'night' | 'rain' | 'tense'. */
+  updateMusic(mood) {
+    if (!this.music || this.ctx.state !== 'running') return;
+    this.music.update(this.musicOn && !this.muted && this.musicVolume > 0 ? mood : null);
+  }
+
   silence() {
-    if (this.ambient) this.ambient.g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+    if (this.ambient) {
+      this.ambient.g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+      this.ambient.chugGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+      this.ambient.lfoGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+    }
     if (this.siren) this.updateSiren([], 0);
   }
 }

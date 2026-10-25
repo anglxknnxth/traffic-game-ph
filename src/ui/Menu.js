@@ -155,6 +155,10 @@ export class Menu {
     if (signals > 1) extra.push(`${signals} connected signals`);
     if (map.nodes.some((n) => n.kind === 'uturn')) extra.push('U-turn slots');
     if (map.nodes.some((n) => n.kind === 'yield')) extra.push('Yield junctions');
+    if (map.river) extra.push('🌊 River & bridge');
+    if (Object.values(map.roads || {}).some((r) => r.types?.includes('bike'))) extra.push('🚲 Bike lanes');
+    const heavy = ['truck', 'dumptruck', 'tanker'].reduce((n, t) => n + (lvl.mix?.[t] || 0), 0);
+    if (heavy >= 0.1) extra.push('🚚 Trucks');
     if (lvl.pedestrians?.cross) extra.push('🚶 Pedestrians');
     if (lvl.pedestrians?.jaywalk) extra.push('Pasaway jaywalkers');
     if (lvl.emergency) extra.push('Emergency vehicles');
@@ -216,7 +220,7 @@ export class Menu {
           <button class="btn" data-nav="settings">Settings</button>
           <button class="btn" data-nav="quit">Quit to main menu</button>
         </div>
-        <p class="muted small">Keys: 1/2 switch phases · Space pause · F speed · M mute · R restart · +/− zoom</p>
+        <p class="muted small">Keys: 1–4 green a road (arrows too) · Y flashing yellow · Space pause · F speed · M mute · R restart · +/− zoom</p>
       </div>`,
       'dim',
     );

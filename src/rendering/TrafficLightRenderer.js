@@ -12,7 +12,9 @@ export class TrafficLightRenderer {
   draw(ctx, sim, time, hovered) {
     for (const h of sim.lights.heads) {
       const mgr = sim.lights.manager(h.intersectionId);
-      const sig = mgr.signalForGroup(h.group);
+      let sig = mgr.signalForGroup(h.group);
+      // Flashing yellow: the amber lamp blinks on every head.
+      if (sig === 'flash') sig = Math.floor(time * 2) % 2 === 0 ? 'yellow' : 'off';
       ctx.save();
       ctx.translate(h.x, h.y);
 

@@ -435,6 +435,51 @@ export class TrafficSimulator {
     return null;
   }
 
+  /**
+   * Flashing yellow: a vehicle on a crossing path that came to a stop at its line before v did
+   * (and has not gone yet). Arrival order is a strict total order, so waits never form a cycle.
+   */
+  stopOrderBlocker(v, conn) {
+    const I = conn.intersection;
+    const mine = v.signStop === I.id ? v.signStopAt : Infinity;
+    for (const pc of this.imgr.get(I.id).crossConflicts(conn)) {
+      const o = pc.fromLane.vehicles[pc.fromLane.vehicles.length - 1];
+      if (!o || o === v || o.signStop !== I.id || o.reservations.has(I.id)) continue;
+      const oce = o.nextConnEntry();
+      if (!oce || oce.seg !== pc) continue;
+      if (o.signStopAt < mine || (o.signStopAt === mine && o.seq < v.seq)) return o;
+    }
+    return null;
+  }
+
+  /**
+   * Right turn on red: a vehicle with a green or yellow light whose path crosses or merges into
+   * v's, and that is already in the box or about to arrive. Null when the turn is clear.
+   */
+  rightOnRedBlocker(v, conn) {
+    const I = conn.intersection;
+    for (const pc of this.imgr.get(I.id).crossConflicts(conn)) {
+      const s = this.lights.signal(I.id, pc.arm, pc.movement);
+      if (s !== 'green' && s !== 'yellow') continue;
+      for (const o of pc.fromLane.vehicles) {
+        if (o === v) continue;
+        const oce = o.nextConnEntry();
+        if (!oce || oce.seg.intersection !== I) continue;
+        // Wide-swing twins share the same approach lane: any connector of this lane into the
+        // conflicting move counts.
+        if (oce.seg.arm !== pc.arm || oce.seg.movement !== pc.movement) continue;
+        if (o.reservations.has(I.id)) return o;
+        const d = oce.start - o.front;
+        if (d < -0.01) continue;
+        if (d < 12 || (o.v > 0.5 && d / o.v < v.p.leftGapTime)) return o;
+      }
+      // Vehicles already inside the box on this connector hold its cells; the grid check catches
+      // them, but a reservation on the way out still counts as "coming".
+      for (const o of pc.vehicles) if (o !== v) return o;
+    }
+    return null;
+  }
+
   /** Attempt to reserve the intersection path for v. All safety checks live here. */
   /** True when v is queued in front of an emergency vehicle on its lane into I (it clears the way). */
   isEscort(v, I) {
@@ -477,7 +522,25 @@ export class TrafficSimulator {
       v.blockerId = blocker.id;
       return false;
     }
-    if (I.kind === 'signal') {
+    const sig = I.kind === 'signal' ? this.lights.signal(I.id, conn.arm, conn.movement) : 'green';
+    const onRed = sig === 'red' && !v.emergency && !this.isEscort(v, I);
+    if (onRed && conn.movement === 'right') {
+      // Right turn on red: give way to everything the green releases across or into our path.
+      const g = this.rightOnRedBlocker(v, conn);
+      if (g) {
+        v.blockReason = 'yield';
+        v.blockerId = g.id;
+        return false;
+      }
+    } else if (I.kind === 'signal' && !v.emergency && sig === 'flash') {
+      // Flashing yellow works as an all-way stop: whoever stopped at the line first goes first.
+      const first = this.stopOrderBlocker(v, conn);
+      if (first) {
+        v.blockReason = 'yield';
+        v.blockerId = first.id;
+        return false;
+      }
+    } else if (I.kind === 'signal') {
       if (conn.movement === 'left' && !this.leftGapOk(v, conn)) {
         v.blockReason = 'yield';
         return false;
@@ -493,7 +556,7 @@ export class TrafficSimulator {
     const space = this.exitSpace(v, conn);
     if (space !== 'ok') {
       v.blockReason = 'exit';
-      if (space === 'strict' || v.emergency) return false;
+      if (space === 'strict' || v.emergency || onRed) return false;
       if (distToStop > 3 || v.v > 2 || v.decisionTimer > 0) return false;
       v.decisionTimer = this.rng.range(1.8, 3.2);
       let p = space === 'tight' ? v.p.tightAccept : v.p.noneAccept;
@@ -603,6 +666,13 @@ export class TrafficSimulator {
       this.stats.earlyRequests++;
       this.scoring.onEarlyRequest();
     }
+    return res;
+  }
+
+  /** Flashing yellow at a node: every approach stops, then goes in arrival order when clear. */
+  requestFlash(intersectionId) {
+    const res = this.lights.requestFlash(intersectionId);
+    if (res.status === 'accepted') this.notify(`FLASH:${intersectionId}`, NOTIFY_TEXT.FLASH, 'info');
     return res;
   }
 

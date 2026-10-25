@@ -1,4 +1,5 @@
-// World renderer. Draw order: cached static road layer -> dynamic road overlays -> pedestrians -> under-effects ->
+// World renderer. Draw order: cached static road layer -> river ripples and boats -> dynamic road
+// overlays -> pedestrians -> under-effects ->
 // vehicles -> over-effects -> elevated structures -> traffic lights -> weather and night (signal heads
 // are drawn again over the darkness). The camera is strictly overhead (scale + translate).
 
@@ -61,6 +62,7 @@ export class Renderer {
     this.weather.drawWet(ctx, this.canvas, sim.env);
 
     cam.apply(ctx);
+    this.road.drawWater(ctx, time);
     this.road.drawDynamic(ctx, sim, time);
     if (debug) this.effects.drawReservations(ctx, sim);
 

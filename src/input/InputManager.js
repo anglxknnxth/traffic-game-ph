@@ -142,7 +142,7 @@ export class InputManager {
       return;
     }
     if (!g.session || g.session.ended) return;
-    // 1–9: every phase of every signal in order (classic junction: 1 = N–S, 2 = E–W, 3/4 = second junction).
+    // 1–9: every phase of every signal in order (classic junction: 1–4 = N, E, S, W; 5+ = next junction).
     if (k >= '1' && k <= '9' && k.length === 1) {
       const p = phaseKeys(g.sim)[Number(k) - 1];
       if (p) g.requestPhase(p.id, p.group, 'key');
@@ -156,6 +156,13 @@ export class InputManager {
       return;
     }
     switch (k) {
+      case 'y':
+      case 'Y': {
+        // Flashing yellow on the junction under the cursor (or the first one).
+        const id = g.hoveredHead?.intersectionId || [...g.sim.lights.managers.keys()][0];
+        if (id) g.toggleFlash(id);
+        break;
+      }
       case ' ':
       case 'p':
       case 'P':

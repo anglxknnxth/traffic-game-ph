@@ -5,7 +5,9 @@ export function settingsMarkup(save, confirmReset = false) {
   return `
     <div class="panel narrow">
       <h2>Settings</h2>
-      <label class="field"><span>Volume</span><input type="range" min="0" max="100" value="${Math.round(s.volume * 100)}" data-set="volume" /></label>
+      <label class="field"><span>Sound effects</span><input type="range" min="0" max="100" value="${Math.round(s.volume * 100)}" data-set="volume" /></label>
+      <label class="field"><span>Music</span><input type="range" min="0" max="100" value="${Math.round(s.music * 100)}" data-set="music" /></label>
+      <label class="field check"><input type="checkbox" ${s.musicOn ? 'checked' : ''} data-set="musicOn" /><span>Background music (chill lo-fi)</span></label>
       <label class="field check"><input type="checkbox" ${s.muted ? 'checked' : ''} data-set="muted" /><span>Mute all sound</span></label>
       <div class="field"><span>Default speed</span>
         <div class="seg">${[1, 2, 3].map((n) => `<button data-set="speed" data-value="${n}" class="${s.speed === n ? 'active' : ''}">${n}x</button>`).join('')}</div>
@@ -23,10 +25,11 @@ export function bindSettings(root, game, rerender) {
   root.querySelectorAll('[data-set]').forEach((el) => {
     const key = el.dataset.set;
     if (el.type === 'range') {
-      el.addEventListener('input', () => game.setVolume(el.value / 100));
+      el.addEventListener('input', () => (key === 'music' ? game.setMusicVolume(el.value / 100) : game.setVolume(el.value / 100)));
     } else if (el.type === 'checkbox') {
       el.addEventListener('change', () => {
         if (key === 'muted') game.setMuted(el.checked);
+        if (key === 'musicOn') game.setMusicOn(el.checked);
         if (key === 'showMetrics') game.setShowMetrics(el.checked);
         if (key === 'debug') game.setDebug(el.checked);
       });

@@ -201,10 +201,11 @@ export class PedestrianManager {
   }
 
   // ------------------------------------------------------------------ signals
-  /** 'walk' | 'flash' | 'stop' for the crosswalk across arm c.arm. */
+  /** 'walk' | 'flash' | 'stop' | 'gap' (flashing yellow: cross when clear) for the crosswalk across arm c.arm. */
   walkState(c) {
     const m = this.sim.lights.manager(c.I.id);
     if (!m) return 'walk';
+    if (m.state === PHASE.FLASH) return 'gap';
     const phase = m.byId.get(m.activeGroup);
     if (phase && phase.arms.has(c.arm)) return 'stop'; // traffic on this road is moving
     if (m.state === PHASE.GREEN) return 'walk';
@@ -401,7 +402,10 @@ export class PedestrianManager {
     const line = c.lines[p.goal.from];
     const ws = this.walkState(c);
     let red = false;
-    if (ws !== 'walk') {
+    if (ws === 'gap') {
+      // Flashing yellow: cross in a gap, taking turns with the drivers stopped at the lines.
+      if (p.wait < 40 && (this._trafficComing(c) || this._driversWaiting(c))) return;
+    } else if (ws !== 'walk') {
       // Pasaway: tired of waiting, crosses against the light when the road looks clear.
       if (ws === 'flash' || p.wait < p.patience || !this.rng.chance(dt * 0.12)) return;
       if (this._trafficComing(c)) return;
@@ -434,9 +438,21 @@ export class PedestrianManager {
     return false;
   }
 
+  /** Under flashing yellow: has a driver already stopped at a line of this junction, waiting to go? */
+  _driversWaiting(c) {
+    for (const v of this.sim.vehicles) {
+      if (v.signStop === c.I.id && !v.reservations.has(c.I.id) && v.v < 0.5) {
+        const ce = v.nextConnEntry();
+        if (ce && ce.seg.intersection === c.I) return true;
+      }
+    }
+    return false;
+  }
+
   _crossing(p, dt) {
     const cr = p.cross;
-    const hurry = this.walkState(cr.c) === 'walk' ? 1 : 1.6;
+    const ws = this.walkState(cr.c);
+    const hurry = ws === 'walk' || ws === 'gap' ? 1 : 1.6;
     cr.s += p.speed * hurry * dt;
     if (cr.s < 0) {
       const t = 1 + cr.s / Math.max(cr.lead, 1e-6);
@@ -487,6 +503,11 @@ export class PedestrianManager {
     p.road = { I: site.I, arm: site.arm };
     p.side = rng.chance(0.5) ? 1 : -1;
     p.u = rng.range(site.u0, site.u1);
+    // Nobody climbs the parapet of a bridge to cross.
+    if (this.sim.network.river) {
+      site.g.point(p.u, 0, _pt);
+      if (this.sim.network.river.contains(_pt.x, _pt.y, 4)) return;
+    }
     p.lat = 0.6;
     p.state = 'jaywait';
     p.wait = 0;
@@ -562,7 +583,7 @@ export class PedestrianManager {
       }
     }
     if (best && best.hornCooldown <= 0.5) {
-      best.hornFlash = best.spec.horn === 'bus' || best.spec.horn === 'truck' ? 0.9 : 0.55;
+      best.hornFlash = best.spec.bigHorn ? 0.9 : 0.55;
       best.hornText = 'HOY!';
       best.hornCooldown = 3;
       this.sim.emitHorn(best, true);
@@ -581,7 +602,7 @@ export class PedestrianManager {
     // Free each lane once the pedestrian is clear of it.
     const b = j.blockage;
     if (b.laneObjs.length) {
-      b.laneObjs = b.laneObjs.filter((lane) => dirY * (j.y - laneOffsetOn(lane, site.g)) < LANE_WIDTH / 2 + PED_RADIUS + 0.4);
+      b.laneObjs = b.laneObjs.filter((lane) => dirY * (j.y - laneOffsetOn(lane, site.g)) < (lane.width ?? LANE_WIDTH) / 2 + PED_RADIUS + 0.4);
     }
     if (dirY * j.y >= site.half + 0.6) {
       b.active = false;

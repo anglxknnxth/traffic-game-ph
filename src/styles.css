@@ -445,6 +445,31 @@ button {
 .sig-btn:active {
   transform: scale(0.96);
 }
+/* Every approach has its own button: keep four per junction compact. */
+.sig-btn {
+  min-width: 74px;
+  height: 52px;
+  font-size: 13px;
+  padding: 0 8px;
+}
+.sig-btn .sig-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signal-panels.compact .sig-btn {
+  min-width: 56px;
+  height: 44px;
+  font-size: 11px;
+  gap: 4px;
+}
+.signal-panels.compact .sig-btn .sig-name {
+  max-width: 64px;
+}
+.signal-panels.compact .phase {
+  min-width: 96px;
+}
 
 .sig-btn .lamp {
   width: 16px;
@@ -468,6 +493,40 @@ button {
 .sig-btn[data-sig='yellow'] .lamp {
   background: var(--yellow);
   box-shadow: 0 0 12px var(--yellow);
+}
+.sig-btn[data-sig='flash'] {
+  border-color: var(--yellow);
+}
+.sig-btn[data-sig='flash'] .lamp {
+  background: var(--yellow);
+  animation: flashLamp 1s steps(2, jump-none) infinite;
+}
+@keyframes flashLamp {
+  50% {
+    background: #3f3f46;
+    box-shadow: none;
+  }
+}
+.music-btn {
+  font-size: 18px;
+  font-weight: 900;
+}
+.flash-btn {
+  margin-top: 3px;
+  align-self: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #1e293b;
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.flash-btn.active {
+  background: #facc15;
+  color: #111827;
+  border-color: #facc15;
 }
 .sig-btn.pending {
   animation: pendingPulse 0.9s infinite;

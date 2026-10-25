@@ -32,26 +32,38 @@ fast-forwards 60 s and `&zoom=2&x=0&y=-46` frames the camera.
 
 ## How to play
 
-The roads at a junction take turns (usually North–South and East–West). Request a change and the
-light runs **GREEN → YELLOW (1.5 s) → ALL-RED (2 s) → next GREEN** straight away. A change in
-progress can be redirected to another phase, or cancelled during yellow. Clicks can never skip
-yellow or all-red, and only one phase is ever green.
+Every road into a junction has **its own green**: when the North road is green, the South road
+(and everything else) is red. A green road releases all of its movements (straight, left and
+right). Request a change and the light runs **GREEN → YELLOW (1.2 s) → ALL-RED (0.8 s) → next
+GREEN** straight away, 2 seconds in all. A change in progress can be redirected to another road, or
+cancelled during yellow. Clicks can never skip yellow or all-red, and only one road is ever green.
 
-Pedestrians cross the road that is **not** moving: the crosswalk across North–South gets its walk
-light while East–West is green, and vice versa. Turning vehicles wait for people on the crosswalk.
-Switch too soon after a walk light and the late walkers are still on the crosswalk when your new
-green starts. Keep people waiting too long and some cross on red anyway.
+**Right turn on red is always allowed** ("right turn anytime with care"): a driver turning right
+at a red light stops at the line, then turns when the traffic that has green leaves a gap. They
+never squeeze into the box without exit space.
+
+**Flashing yellow** (the `⚠ Flash` button or `Y`) turns every light at a junction to blinking
+amber: each driver stops at the line, then goes in arrival order when the way is clear, like an
+all-way stop. It suits light traffic and quiet nights; at rush hour it is slow. Pick any road's
+button to go back to normal greens (after a short all-red).
+
+Pedestrians cross the roads that are **not** moving: every crosswalk except the one across the
+green road gets its walk light. Turning vehicles wait for people on the crosswalk. Switch too soon
+after a walk light and the late walkers are still on the crosswalk when your new green starts. Keep
+people waiting too long and some cross on red anyway. Under flashing yellow people cross in gaps,
+taking turns with the drivers stopped at the lines.
 
 | Action | Mouse / touch | Keyboard |
 | --- | --- | --- |
-| Request North–South green | `N–S` button, a north/south signal head | `1` or ↑ / ↓ |
-| Request East–West green | `E–W` button, an east/west signal head | `2` or ← / → |
-| Other intersections | their own buttons | `3` … `9`, in button order |
-| Toggle the phase | tap the yellow box in the middle | |
+| Green for one road | its button, or its signal head | `1` … `4` (N, E, S, W) or the arrow keys |
+| Other intersections | their own buttons | `5` … `9`, in button order |
+| Next road | tap the yellow box in the middle | |
+| Flashing yellow on / off | `⚠ Flash` button | `Y` (junction under the cursor, or the first) |
 | Pause / resume | pause button | `Space` / `P` / `Esc` |
 | Restart | restart button | `R` |
 | Speed 1x / 2x / 3x | speed buttons | `F` (cycles) |
 | Mute | speaker button | `M` |
+| Music on / off | `♫` button, Settings | |
 | Zoom / pan | wheel, pinch, `+ / −` buttons, drag | `+` / `-` / `0` (reset) |
 | Reservation debug overlay | Settings | `D` |
 
@@ -67,7 +79,9 @@ What you'll see on the map:
 - A blue pulsing ring around a signal means an emergency vehicle is coming on that phase. Emergency
   vehicles go through on red (after slowing down) and everyone else at that junction gives way, but
   a green for them still gets them through faster.
-- Small walk / don't-walk lights stand at each crosswalk; they blink orange during yellow.
+- Small walk / don't-walk lights stand at each crosswalk; they blink orange during yellow and
+  flashing yellow.
+- Rivers run under bridges (parapets, a name plaque), with bangka boats passing underneath.
 - "PASAWAY!" and a whistle mean someone is crossing where (or when) they shouldn't.
 - Rain, dusk and night change how drivers behave: longer gaps, gentler braking, slower starts.
 
@@ -77,11 +91,12 @@ What you'll see on the map:
   jeepneys and tricycles with curbside loading stops, turns and blocked exits, impatient drivers,
   rush-hour gridlock, emergency vehicles, two connected intersections, and a final high-density
   challenge. Clearing a level unlocks the next one.
-- **Pinoy Roads:** eight maps inspired by real Philippine roads, unlocked one after another:
-  Poblacion (a town plaza with STOP-sign barangay roads), Taft under the LRT-1 (two signals, lots of
-  students), España in the rain, Commonwealth (motorcycle lane and a U-turn slot), EDSA (Carousel
-  busway, MRT-3, dusk into night), Liko-Liko (a mountain S-bend), Tatlong Kanto (three signals:
-  build a green wave) and Grid ng Maynila (four signals).
+- **Pinoy Roads:** nine maps inspired by real Philippine roads, unlocked one after another:
+  Poblacion (a town plaza with STOP-sign barangay roads and a river), Taft under the LRT-1 (two
+  signals, lots of students), España in the rain, Commonwealth (motorcycle lane and a U-turn slot),
+  EDSA (Carousel busway, MRT-3, dusk into night), Liko-Liko (a mountain S-bend over a river),
+  Tatlong Kanto (three signals: build a green wave), Dalawang Pampang (a signal on each bank of a
+  city river, one short bridge between them) and Grid ng Maynila (four signals).
 - **Endless:** demand grows every minute through the afternoon rush into the night, with passing
   rain. Pick any map. The run ends when congestion stays at 85% or more for 30 s.
 - **Challenges:** five scenarios: clear an existing gridlock, keep waits low, handle ambulances,
@@ -96,7 +111,8 @@ blocked, excessive waits, box-blocking entries, slow emergency response, people 
 the crosswalk for more than 45 s, and people who gave up and crossed on red. Safety carries the most weight:
 the base score is multiplied by the safety rating, and the safety rating adds a bonus of up to 400.
 
-Progress, best scores, stars, completed challenges and audio settings are saved in `localStorage`.
+Progress, best scores, stars, completed challenges and audio settings (sound-effect and music
+volume, music on/off) are saved in `localStorage`.
 Saves from before Pinoy Roads existed carry over: progress on the old career levels 11–16 moves to
 the matching Pinoy Roads levels.
 The game still works when storage is unavailable; progress then lasts only for the session.
@@ -143,8 +159,25 @@ All simulation code is DOM-free (`src/simulation`) and runs headless in the test
   vehicle and a person can never hold the same space. Reserved cells are released as the vehicle's body leaves them. Box
   blocking is never allowed into the short link road between two intersections, so a circular,
   unrecoverable deadlock cannot form.
-- **Signals** (`TrafficPhaseManager`). The state machine described in *How to play*. Only one
-  phase is ever green.
+- **Signals** (`TrafficPhaseManager`). The state machine described in *How to play*: one phase
+  per approach, plus a FLASH state. Only one phase is ever green. Under flashing yellow every
+  approach is a STOP line, and a driver may enter only when no driver on a crossing path stopped at
+  its line earlier. Arrival order is a strict order, so the waits never form a cycle.
+- **Vehicles** (`src/data/vehicles.js`). Cars (with taxis and ride-hailing sedans), SUVs, pickups
+  with a load in the back, motorcycles (some with a delivery box or a passenger), tricycles,
+  multicabs, jeepneys, modern e-jeepneys, vans, buses (city, provincial, P2P), box, flatbed and
+  garbage trucks, dump trucks, fuel and water tankers, ambulances and fire trucks. Looks vary per
+  vehicle without touching the simulation's random stream. Every level's demand is scaled by
+  `demandScale` (1.25).
+- **Bike lanes.** A road profile can include a narrow (2.2 m) `bike` lane at the curb (España,
+  Commonwealth, Avenida on Dalawang Pampang, the main street of Tatlong Kanto). Bicycles ride
+  only there and never change lanes, and nobody else may enter it. Lanes may differ in width;
+  offsets are cumulative.
+- **Off-screen spawning.** Every external road is extended until its lanes run past the largest
+  area the camera may show, and the camera can't zoom out or pan beyond that area. Vehicles
+  enter from beyond the screen edge and leave past it.
+- **Rivers** (`River`, `RiverRenderer`). A smooth centre line with a width. Roads cross it on
+  bridges that are ordinary road to the simulation; jaywalkers never cross on a bridge.
 - **Pedestrians** (`PedestrianManager`). Crowds gather at the crosswalk corners and cross on their
   walk light (hurrying when it starts to blink), reserving their line in the conflict grid. Tired of
   waiting, some cross on red once no vehicle is about to enter. Pasaway jaywalkers cross mid-block
@@ -166,12 +199,13 @@ src/
   main.js, styles.css
   game/        Game (shell), GameLoop, GameState, Camera, LevelManager
   simulation/  TrafficSimulator, TrafficPhaseManager, TrafficLightController, Vehicle, VehicleAI,
-               VehicleSpawner, LaneManager, RoadGeometry, LaneChange, IntersectionManager,
+               VehicleSpawner, LaneManager, RoadGeometry, River, LaneChange, IntersectionManager,
                CollisionAvoidance, GridlockDetector, PedestrianManager, Environment, ScoringSystem
-  rendering/   Renderer, RoadRenderer (+ roadShapes), VehicleRenderer, PedestrianRenderer,
-               TrafficLightRenderer, EffectsRenderer, WeatherRenderer
+  rendering/   Renderer, RoadRenderer (+ roadShapes), RiverRenderer, VehicleRenderer,
+               PedestrianRenderer, TrafficLightRenderer, EffectsRenderer, WeatherRenderer
   input/       InputManager
-  audio/       AudioManager (procedural Web Audio horns, sirens, whistle, engine rumble)
+  audio/       AudioManager (procedural Web Audio horns, sirens, whistle, engine rumble and diesel
+               chug; separate sound-effect and music buses), MusicPlayer (procedural lo-fi music)
   ui/          HUD, Menu, Settings, ResultsScreen
   data/        config, vehicles, levels, maps/ (generic training maps and Philippine roads)
   utils/       math (RNG, paths, Bézier, OBB), storage (validated save data)
@@ -212,13 +246,15 @@ On every simulated step the soak and integration tests assert:
 
 ## Known limitations
 
-- Two signal phases (N–S and E–W) with permissive left turns; there are no protected left-turn
-  arrows and no right turn on red.
+- One phase per approach; there is no way to pair compatible roads into one green.
+- Zooming out is limited to the area where roads still carry traffic.
 - Motorcycles don't lane-split.
 - Junctions are always square (four-way or T); only the roads between them bend.
 - People are drawn a little larger than life so they are visible at the default zoom.
-- Audio is synthesized with the Web Audio API (no recorded samples). It starts after the first
+- Audio, including the chill lo-fi background music (its mood follows the screen, rain, night and
+  gridlock), is synthesized with the Web Audio API (no recorded samples). It starts after the first
   click or key press because of browser autoplay rules.
+- Rivers are scenery: there is no flooding, and boats don't interact with traffic.
 - Level targets were tuned against a simple queue-balancing controller in headless runs, not through
   human playtesting.
 - The game is built for touch and mouse; there are no gamepad controls.

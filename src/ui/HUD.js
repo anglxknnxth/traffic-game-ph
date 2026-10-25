@@ -5,6 +5,7 @@ import { formatTime } from '../utils/math.js';
 import { ARM_LABEL } from '../data/config.js';
 import { MODE_LABEL } from '../game/GameState.js';
 import { CONGESTION } from '../simulation/GridlockDetector.js';
+import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
 
 export const ICONS = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
@@ -28,7 +29,7 @@ const LEVEL_TEXT = {
 
 const TUTORIAL_STEPS = [
   { title: 'Welcome, traffic controller!', body: 'This is a busy kanto in Metro Manila, seen from directly above. Cars arrive from all four roads and you control the traffic lights.' },
-  { title: 'Two signal groups', body: 'North–South and East–West take turns. Tap the <b>N–S</b> or <b>E–W</b> buttons below, tap a traffic light, or tap the yellow box in the middle to switch.' },
+  { title: 'One road at a time', body: 'Every approach has its own green: the opposite road stays red. Tap a road\'s button below, tap its traffic light, or tap the yellow box in the middle to go to the next road. The change takes 2 seconds. <b>⚠ Flash</b> (or Y) turns every light to flashing yellow: drivers stop, then go when it is clear.' },
   { title: 'Safe transitions', body: 'You are in full control: a change starts the moment you tap, with a short <b>yellow</b> and <b>all-red</b> before the next green. Tap the current green during yellow to cancel.' },
   { title: 'Watch the box', body: 'Drivers wait if their exit road is full. Impatient ones may squeeze in anyway and block the yellow box. A red outline means a vehicle is stuck inside.' },
   { title: 'Your goal', body: 'Move as many vehicles as you can and keep waiting times low. Your target is shown at the top. Keys: <b>1</b>/<b>2</b> switch phases, <b>Space</b> pauses, <b>F</b> changes speed.' },
@@ -65,7 +66,8 @@ export class HUD {
             <button data-speed="1">1x</button><button data-speed="2">2x</button><button data-speed="3">3x</button>
           </div>
           <button class="icon-btn" data-act="mute" title="Mute (M)">${ICONS.sound}</button>
-          <input class="vol" type="range" min="0" max="100" step="1" data-act="volume" aria-label="Volume" />
+          <input class="vol" type="range" min="0" max="100" step="1" data-act="volume" aria-label="Sound effects volume" />
+          <button class="icon-btn music-btn" data-act="music" title="Background music on/off">♫</button>
           <button class="icon-btn" data-act="zoomout" title="Zoom out (-)">${ICONS.zoomOut}</button>
           <button class="icon-btn" data-act="zoomin" title="Zoom in (+)">${ICONS.zoomIn}</button>
           <button class="icon-btn" data-act="metrics" title="Toggle metrics">${ICONS.stats}</button>
@@ -93,6 +95,7 @@ export class HUD {
       pause: root.querySelector('[data-act="pause"]'),
       mute: root.querySelector('[data-act="mute"]'),
       volume: root.querySelector('[data-act="volume"]'),
+      music: root.querySelector('[data-act="music"]'),
       bottom: root.querySelector('.hud-bottom'),
       top: root.querySelector('.hud-top'),
     };
@@ -141,7 +144,7 @@ export class HUD {
         ${multi ? `<div class="sig-title">Intersection ${id}</div>` : ''}
         <div class="sig-row">
           ${left}
-          <div class="phase"><b class="phase-label"></b><span class="phase-count"></span></div>
+          <div class="phase"><b class="phase-label"></b><span class="phase-count"></span><button class="flash-btn" data-flash="${id}" title="Flashing yellow: every road stops, then goes when clear (Y)">⚠ Flash</button></div>
           ${right}
         </div>
       </div>`;
@@ -152,6 +155,7 @@ export class HUD {
       label: p.querySelector('.phase-label'),
       count: p.querySelector('.phase-count'),
       btns: [...p.querySelectorAll('.sig-btn')],
+      flash: p.querySelector('.flash-btn'),
     }));
   }
 
@@ -161,6 +165,7 @@ export class HUD {
     this.el.mute.innerHTML = g.audio.muted ? ICONS.mute : ICONS.sound;
     this.el.mute.classList.toggle('active', g.audio.muted);
     this.el.volume.value = Math.round(g.audio.volume * 100);
+    this.el.music.classList.toggle('active', g.audio.musicOn);
     this.el.pause.innerHTML = g.state.paused ? ICONS.play : ICONS.pause;
     this.root.classList.toggle('metrics-hidden', !g.state.showMetrics);
   }
@@ -171,6 +176,11 @@ export class HUD {
     const sig = e.target.closest('.sig-btn');
     if (sig) {
       g.requestPhase(sig.dataset.int, sig.dataset.group, 'button');
+      return;
+    }
+    const flash = e.target.closest('[data-flash]');
+    if (flash) {
+      g.toggleFlash(flash.dataset.flash);
       return;
     }
     const sp = e.target.closest('[data-speed]');
@@ -196,6 +206,11 @@ export class HUD {
         break;
       case 'mute':
         g.toggleMute();
+        break;
+      case 'music':
+        g.setMusicOn(!g.audio.musicOn);
+        this.syncControls();
+        this.toast(g.audio.musicOn ? 'Music on' : 'Music off');
         break;
       case 'zoomin':
         g.camera.zoomAt(1.2);
@@ -270,8 +285,9 @@ export class HUD {
       const mgr = sim.lights.manager(p.id);
       const d = mgr.describe();
       p.label.textContent = d.label;
-      p.label.className = `phase-label ${d.state === 'GREEN' ? 'g' : d.state === 'YELLOW' ? 'y' : 'r'}`;
-      p.count.textContent = d.state === 'GREEN' ? `${d.elapsed.toFixed(0)}s` : `${d.countdown.toFixed(1)}s → ${mgr.labelOf(d.pending)}`;
+      p.label.className = `phase-label ${d.state === 'GREEN' ? 'g' : d.state === 'YELLOW' || d.state === 'FLASH' ? 'y' : 'r'}`;
+      p.count.textContent = d.state === 'GREEN' || d.state === 'FLASH' ? `${d.elapsed.toFixed(0)}s` : `${d.countdown.toFixed(1)}s → ${mgr.labelOf(d.pending)}`;
+      p.flash.classList.toggle('active', mgr.flashing || mgr.nextGroup === FLASH_GROUP);
       for (const b of p.btns) {
         const group = b.dataset.group;
         const sig = mgr.signalForGroup(group);

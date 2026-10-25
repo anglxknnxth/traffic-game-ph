@@ -49,6 +49,7 @@ export class IntersectionManager {
     this.owners = Array.from({ length: this.nx * this.ny }, () => []);
     this.cache = new Map();
     this.conflictCache = new Map();
+    this.crossCache = new Map();
     this.reservationCount = 0;
   }
 
@@ -212,6 +213,26 @@ export class IntersectionManager {
       }
     }
     this.conflictCache.set(conn, list);
+    return list;
+  }
+
+  /** Connectors from the other approaches whose paths overlap this one (all-way-stop order). */
+  crossConflicts(conn) {
+    let list = this.crossCache.get(conn);
+    if (list) return list;
+    list = [];
+    const mine = new Set(this.footprint(conn, VEHICLE_TYPES.car).cells);
+    for (const other of this.I.connectors) {
+      if (other.arm === conn.arm) continue;
+      const cells = this.footprint(other, VEHICLE_TYPES.car).cells;
+      for (let i = 0; i < cells.length; i++) {
+        if (mine.has(cells[i])) {
+          list.push(other);
+          break;
+        }
+      }
+    }
+    this.crossCache.set(conn, list);
     return list;
   }
 

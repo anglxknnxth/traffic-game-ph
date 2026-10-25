@@ -72,21 +72,26 @@ export class Camera {
     const fw = this.focus.maxX - this.focus.minX;
     const fh = this.focus.maxY - this.focus.minY;
     this.base = Math.min(this.viewW / fw, this.viewH / fh);
+    // Never zoom out past the bounds: the whole canvas (HUD areas included) must fit inside them,
+    // so the ends of the lanes, where vehicles appear and leave, stay off screen.
+    const bw = this.bounds.maxX - this.bounds.minX;
+    const bh = this.bounds.maxY - this.bounds.minY;
+    this.zoomFloor = Math.min(this.maxZoom, Math.max(this.minZoom, this.w / (this.base * bw), this.h / (this.base * bh)));
+    this.zoom = clamp(this.zoom, this.zoomFloor, this.maxZoom);
     this._clampPan();
     this.version++;
   }
 
+  /** Keep the full visible canvas inside the bounds. */
   _clampPan() {
-    const halfW = this.viewW / 2 / this.scale;
-    const halfH = this.viewH / 2 / this.scale;
+    const s = this.scale;
     const fcx = (this.focus.minX + this.focus.maxX) / 2;
     const fcy = (this.focus.minY + this.focus.maxY) / 2;
-    const maxPX = Math.max(0, (this.bounds.maxX - this.bounds.minX) / 2 - halfW);
-    const maxPY = Math.max(0, (this.bounds.maxY - this.bounds.minY) / 2 - halfH);
-    const bcx = (this.bounds.minX + this.bounds.maxX) / 2 - fcx;
-    const bcy = (this.bounds.minY + this.bounds.maxY) / 2 - fcy;
-    this.panX = clamp(this.panX, bcx - maxPX, bcx + maxPX);
-    this.panY = clamp(this.panY, bcy - maxPY, bcy + maxPY);
+    const fit = (center, lo, hi) => (lo > hi ? (lo + hi) / 2 : clamp(center, lo, hi));
+    const cx = fit(fcx + this.panX, this.bounds.minX + this.screenCX / s, this.bounds.maxX - (this.w - this.screenCX) / s);
+    const cy = fit(fcy + this.panY, this.bounds.minY + this.screenCY / s, this.bounds.maxY - (this.h - this.screenCY) / s);
+    this.panX = cx - fcx;
+    this.panY = cy - fcy;
   }
 
   apply(ctx) {
@@ -104,7 +109,7 @@ export class Camera {
 
   zoomAt(factor, px = this.screenCX, py = this.screenCY) {
     const before = this.screenToWorld(px, py);
-    this.zoom = clamp(this.zoom * factor, this.minZoom, this.maxZoom);
+    this.zoom = clamp(this.zoom * factor, this.zoomFloor ?? this.minZoom, this.maxZoom);
     this._recompute();
     const after = this.screenToWorld(px, py);
     this.panX += before.x - after.x;

@@ -48,7 +48,7 @@ export const commonwealth = {
   sceneSeed: 1975,
   theme: 'metro',
   roads: {
-    cw: { name: 'Commonwealth', lanes: 6, median: 3, types: ['general', 'general', 'general', 'general', 'general', 'moto'] },
+    cw: { name: 'Commonwealth', lanes: 7, median: 3, types: ['general', 'general', 'general', 'general', 'general', 'moto', 'bike'] },
     tandang: { name: 'Tandang Sora', lanes: 2, median: 0 },
     antonio: { name: 'Don Antonio', lanes: 2, median: 0 },
   },
@@ -132,7 +132,7 @@ export const espana = {
   sceneSeed: 1611,
   theme: 'old-manila',
   roads: {
-    espana: { name: 'España Blvd', lanes: 3, median: 3 },
+    espana: { name: 'España Blvd', lanes: 4, median: 3, types: ['general', 'general', 'general', 'bike'] },
     lacson: { name: 'Lacson Ave', lanes: 3, median: 1.6 },
   },
   nodes: [
@@ -196,6 +196,8 @@ export const poblacion = {
     { a: 'Y1', aArm: 'E', b: 'A', bArm: 'W' },
     { a: 'A', aArm: 'E', b: 'Y2', bArm: 'W' },
   ],
+  // The town river: the highway crosses it on a short bridge between the barangay road and the plaza.
+  river: { points: [[-30, -160], [-34, -80], [-40, 5], [-47, 70], [-38, 160]], width: 16, name: 'TULAY NG POBLACION', boats: 2 },
   armLength: 115,
   focus: { minX: -108, maxX: 108, minY: -55, maxY: 55 },
 };
@@ -238,6 +240,45 @@ export const likoliko = {
     },
   ],
   links: [{ a: 'A', aArm: 'E', b: 'B', bArm: 'W' }],
+  // A mountain river winds through the valley; the S-bend crosses it on a bridge.
+  river: { points: [[30, -170], [18, -90], [8, -35], [1, 3], [8, 45], [24, 90], [38, 170]], width: 18, name: 'TULAY NG LIKO-LIKO', boats: 1 },
   armLength: 120,
   focus: { minX: -100, maxX: 100, minY: -62, maxY: 68 },
+};
+
+export const tulay = {
+  id: 'tulay',
+  name: 'Dalawang Pampang',
+  region: 'Metro Manila',
+  blurb: 'A city river with a signal on each bank, joined by one short bridge. Riverside streets feed both ends.',
+  sceneSeed: 1947,
+  theme: 'old-manila',
+  roads: {
+    avenida: { name: 'Avenida', lanes: 3, median: 0, types: ['general', 'general', 'bike'] },
+    tulay: { name: 'Tulay Ave', lanes: 2, median: 0 },
+    pampang: { name: 'Pampang St', lanes: 1, median: 0 },
+    ilaya: { name: 'Ilaya St', lanes: 1, median: 0 },
+  },
+  nodes: [
+    {
+      id: 'A',
+      x: 0,
+      y: -40,
+      kind: 'signal',
+      arms: { N: 'avenida', S: 'tulay', E: 'pampang', W: 'pampang' },
+      shape: { N: [{ straight: 34 }, { curve: 25, radius: 70 }], E: [{ straight: 40 }, { curve: -12, radius: 160 }], W: [{ straight: 40 }, { curve: 10, radius: 180 }] },
+    },
+    {
+      id: 'B',
+      x: 0,
+      y: 40,
+      kind: 'signal',
+      arms: { N: 'tulay', S: 'avenida', E: 'ilaya', W: 'ilaya' },
+      shape: { S: [{ straight: 34 }, { curve: -30, radius: 60 }], E: [{ straight: 40 }, { curve: 10, radius: 180 }], W: [{ straight: 40 }, { curve: -12, radius: 160 }] },
+    },
+  ],
+  links: [{ a: 'A', aArm: 'S', b: 'B', bArm: 'N' }],
+  river: { points: [[-280, 8], [-150, -3], [-60, 3], [0, 0], [60, -4], [150, 4], [280, -6]], width: 22, name: 'TULAY NG PAMPANG', boats: 3 },
+  armLength: 115,
+  focus: { minX: -70, maxX: 70, minY: -92, maxY: 92 },
 };

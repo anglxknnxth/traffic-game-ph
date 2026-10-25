@@ -12,18 +12,23 @@
 // line and use the distance along it as their coordinate, so parallel lanes stay in step.
 
 import { Path, cubicBezierPoints } from '../utils/math.js';
-import { ARMS, DIRS, LANE_WIDTH, CROSSWALK_WIDTH, ARM_LENGTH, ARM_LABEL, GROUP_LABEL } from '../data/config.js';
+import { ARMS, DIRS, LANE_WIDTH, BIKE_LANE_WIDTH, CROSSWALK_WIDTH, ARM_LENGTH, ARM_LABEL, GROUP_LABEL } from '../data/config.js';
 import { getMap } from '../data/maps/index.js';
 import { Centerline, STRAIGHT_LEAD, LINK_LEAD, curveLimits } from './RoadGeometry.js';
+import { River } from './River.js';
 
 export const CROSSWALK_GAP = 0.8; // asphalt between the crossing road edge and the zebra
+const REACH_MARGIN = 20; // lanes run this far past the camera's limit (longer than any vehicle)
 export const MOVE_ORDER = ['straight', 'left', 'right', 'uturn'];
+/** Direction traffic from each approach travels into the junction (for phase labels). */
+const ARM_ARROW = { N: '↓', E: '←', S: '↑', W: '→' };
 
 /** Vehicle types allowed on dedicated lanes (null = everyone). */
 export const LANE_ALLOWED = {
   general: null,
   bus: new Set(['bus', 'ambulance', 'firetruck']),
   moto: new Set(['motorcycle']),
+  bike: new Set(['bicycle']),
 };
 
 /** Legacy helper: the map definition for a layout id ('single', 'double', ...). */
@@ -47,7 +52,18 @@ function normalizeProfile(map, ref) {
   const lanes = p.lanes ?? 2;
   const types = Array.from({ length: lanes }, (_, k) => p.types?.[k] || 'general');
   const median = p.median ?? 0;
-  return { key: typeof ref === 'string' ? ref : null, name: p.name || null, lanes, median, types, half: median / 2 + lanes * LANE_WIDTH };
+  // Bike lanes are narrower than traffic lanes; every lane's centre offset is cumulative.
+  const widths = types.map((t) => (t === 'bike' ? BIKE_LANE_WIDTH : LANE_WIDTH));
+  const offsets = [];
+  let edge = median / 2;
+  for (const w of widths) {
+    offsets.push(edge + w / 2);
+    edge += w;
+  }
+  // The curb lane for loading and right turns is the outermost lane that is not a bike lane.
+  let curb = lanes - 1;
+  while (curb > 0 && types[curb] === 'bike') curb--;
+  return { key: typeof ref === 'string' ? ref : null, name: p.name || null, lanes, median, types, widths, offsets, curb, half: edge };
 }
 
 export class Segment {
@@ -100,6 +116,7 @@ export class Network {
       }
       this._nodeGeometry(I);
     }
+    this.reach = this._reachRect();
     this._buildCenterlines(map);
     for (const I of this.intersections) {
       for (const arm of ARMS) if (I.arms[arm].type === 'external') this._buildExternalArm(I, arm);
@@ -113,6 +130,7 @@ export class Network {
       I.phases = I.kind === 'signal' ? this._phases(I) : [];
     }
     this.bounds = this._computeBounds();
+    this.river = map.river ? new River(map.river) : null;
   }
 
   // ------------------------------------------------------------------ geometry
@@ -127,7 +145,7 @@ export class Network {
       for (const arm of I.def.uturn || []) {
         const p = I.arms[arm].profile;
         const g = Math.max(0, p.types.indexOf('general'));
-        d = Math.max(d, p.median + LANE_WIDTH * (2 * g + 1));
+        d = Math.max(d, 2 * p.offsets[g]);
       }
       uturnHalf = Math.max(6, d / 4 + 2.6);
     }
@@ -166,7 +184,15 @@ export class Network {
         const A = I.arms[arm];
         if (A.type !== 'external') continue;
         // Drawn well past the end of the lanes so the road runs off screen.
-        A.center = Centerline.fromShape(I, DIRS[arm], I.def.shape?.[arm] || [], A.length + 130, A.stop + STRAIGHT_LEAD);
+        const build = () => Centerline.fromShape(I, DIRS[arm], I.def.shape?.[arm] || [], A.length + 130, A.stop + STRAIGHT_LEAD);
+        A.center = build();
+        // Lanes must run past the edge of anything the camera can show, so vehicles appear and
+        // leave beyond the screen edge.
+        const need = this._leaveReach(A.center) + REACH_MARGIN;
+        if (need > A.length) {
+          A.length = Math.ceil(need);
+          A.center = build();
+        }
         this._checkRadius(I, arm, A);
       }
     }
@@ -178,6 +204,37 @@ export class Network {
       B.arms[link.bArm].center = c.reversed();
       this._checkRadius(A, link.aArm, A.arms[link.aArm]);
     }
+  }
+
+  /**
+   * The largest area the camera may show: the focus rect widened for landscape screens (and, less,
+   * for portrait ones). External roads are extended to leave it.
+   */
+  _reachRect() {
+    const f = this.focusRect();
+    const fw = f.maxX - f.minX;
+    const fh = f.maxY - f.minY;
+    const cx = (f.minX + f.maxX) / 2;
+    const cy = (f.minY + f.maxY) / 2;
+    const hx = Math.max(fw / 2, (1.9 * fh) / 2) * 1.25 + 10;
+    const hy = Math.max(fh / 2, (1.2 * fw) / 2) * 1.25 + 10;
+    return { minX: cx - hx, maxX: cx + hx, minY: cy - hy, maxY: cy + hy };
+  }
+
+  /** Distance along a centre line at which it leaves the reach rect (its full length if never). */
+  _leaveReach(center) {
+    const R = this.reach;
+    const p = {};
+    for (let u = 0; u <= center.length; u += 2) {
+      center.point(u, 0, p);
+      if (p.x < R.minX || p.x > R.maxX || p.y < R.minY || p.y > R.maxY) return u;
+    }
+    return center.length;
+  }
+
+  /** Area the camera is kept inside (so lane ends stay off screen). */
+  viewLimit() {
+    return { ...this.reach };
   }
 
   _checkRadius(I, arm, A) {
@@ -225,8 +282,10 @@ export class Network {
       laneIndex: k,
       laneCount: profile.lanes,
       type: profile.types[k],
-      isCurb: k === profile.lanes - 1,
-      offset: profile.median / 2 + LANE_WIDTH * (k + 0.5),
+      isCurb: k === profile.curb,
+      isEdge: k === profile.lanes - 1,
+      width: profile.widths[k],
+      offset: profile.offsets[k],
       road: profile.name,
     };
   }
@@ -260,7 +319,7 @@ export class Network {
   _buildLink(A, aArm, B, bArm) {
     const p = A.arms[aArm].profile;
     const pb = B.arms[bArm].profile;
-    if (p.lanes !== pb.lanes || Math.abs(p.median - pb.median) > 1e-9) throw new Error(`Link ${A.id}${aArm}–${B.id}${bArm}: road profiles differ`);
+    if (p.lanes !== pb.lanes || Math.abs(p.median - pb.median) > 1e-9 || p.types.join() !== pb.types.join()) throw new Error(`Link ${A.id}${aArm}–${B.id}${bArm}: road profiles differ`);
     const c = A.arms[aArm].center; // runs from A to B
     const sa = A.arms[aArm].exitStop;
     const sb = c.length - B.arms[bArm].stop;
@@ -336,6 +395,12 @@ export class Network {
       if (R && lanes[i].isCurb) moves[i].push('right');
       if (!S && !(R && lanes[i].isCurb)) assign([i]);
     }
+    // Bike lanes run along the edge: straight on, and right turns from the edge.
+    for (const i of byType('bike')) {
+      if (S) moves[i].push('straight');
+      if (R && lanes[i].isEdge) moves[i].push('right');
+      if (!moves[i].length) assign([i]);
+    }
     if ((def.uturn || []).includes(X) && has('uturn') && general.length) moves[general[0]].push('uturn');
     return moves.map((ms) => MOVE_ORDER.filter((m) => ms.includes(m)));
   }
@@ -348,6 +413,8 @@ export class Network {
     let pool = out.filter((l) => l.type === lane.type);
     if (!pool.length) pool = out.filter((l) => l.type === 'general');
     if (!pool.length) pool = out;
+    // A bike lane with no bike lane ahead joins the outermost general lane.
+    if (lane.type === 'bike' && pool[0].type !== 'bike') return pool[pool.length - 1];
     const lanes = I.approachLanes[X];
     const peers = lanes.filter((l, i) => l.type === lane.type && laneMoves[i].includes(move));
     const j = Math.max(0, peers.indexOf(lane));
@@ -428,22 +495,23 @@ export class Network {
     return lane.connectors[move];
   }
 
-  /** Signal phases for a node: the map's own list, or one phase per road axis. */
+  /**
+   * Signal phases for a node: the map's own list, or one phase per approach. Each approach is
+   * controlled on its own (the opposite road stays red), with all of its movements released.
+   */
   _phases(I) {
     const present = (a) => I.arms[a].type !== 'none' && I.approachLanes[a]?.length;
     const label = (arms) => {
+      if (arms.length === 1) {
+        const name = I.arms[arms[0]].profile.name;
+        return name ? `${name} ${ARM_ARROW[arms[0]]}` : ARM_LABEL[arms[0]];
+      }
       const names = new Set(arms.map((a) => I.arms[a].profile.name));
       if (names.size === 1 && [...names][0]) return [...names][0];
-      if (arms.length === 1) return ARM_LABEL[arms[0]];
       return GROUP_LABEL[arms.join('')] || arms.join('–');
     };
     if (I.def.phases) return I.def.phases.map((p) => ({ ...p, label: p.label || label(p.arms) }));
-    const phases = [];
-    for (const axis of [['N', 'S'], ['E', 'W']]) {
-      const arms = axis.filter(present);
-      if (arms.length) phases.push({ id: arms.join(''), arms, label: label(arms) });
-    }
-    return phases;
+    return ARMS.filter(present).map((a) => ({ id: a, arms: [a], label: label([a]) }));
   }
 
   _computeBounds() {

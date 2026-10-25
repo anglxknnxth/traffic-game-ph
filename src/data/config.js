@@ -6,6 +6,7 @@ export const MAX_STEPS_PER_FRAME = 30;
 
 // Road geometry
 export const LANE_WIDTH = 3.5;
+export const BIKE_LANE_WIDTH = 2.2;
 export const LANES_PER_DIR = 2;
 export const ROAD_HALF = LANE_WIDTH * LANES_PER_DIR; // 7
 export const CROSSWALK_START = ROAD_HALF + 0.8;
@@ -26,8 +27,9 @@ export const PROBE_RANGE = STOP_DIST + 16;
 export const MAX_VEHICLE_RADIUS = 6.1;
 
 export const SIGNAL_TIMING = {
-  yellow: 1.5,
-  allRed: 1,
+  // The whole change (yellow + all-red) takes 2 s.
+  yellow: 1.2,
+  allRed: 0.8,
 };
 
 export const ARMS = ['N', 'E', 'S', 'W'];
@@ -150,4 +152,5 @@ export const NOTIFY_TEXT = {
   RESTORED: 'TRAFFIC FLOW RESTORED',
   EXIT_BLOCKED: 'EXIT ROAD BLOCKED',
   EXIT_CLEARED: 'EXIT ROAD CLEARED',
+  FLASH: 'FLASHING YELLOW · STOP & GO',
 };

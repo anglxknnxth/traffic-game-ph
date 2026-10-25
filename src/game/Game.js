@@ -11,6 +11,7 @@ import { HUD } from '../ui/HUD.js';
 import { Menu } from '../ui/Menu.js';
 import { loadSave, writeSave, clearSave } from '../utils/storage.js';
 import { CAREER_COUNT, PINOY_COUNT } from '../data/levels.js';
+import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
 
 export class Game {
   constructor(root) {
@@ -25,6 +26,13 @@ export class Game {
     this.audio = new AudioManager();
     this.audio.setVolume(this.save.settings.volume);
     this.audio.setMuted(this.save.settings.muted);
+    this.audio.setMusicVolume(this.save.settings.music);
+    this.audio.setMusicOn(this.save.settings.musicOn);
+    // Browsers only allow audio after a user gesture: the first tap or key anywhere starts it
+    // (so the menu music plays before a level is opened).
+    const unlock = () => this.audio.unlock();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
     this.levels = new LevelManager();
     this.hud = new HUD(root.querySelector('#hud'), this);
     this.menu = new Menu(root.querySelector('#overlay'), this);
@@ -67,8 +75,7 @@ export class Game {
   }
 
   applyNetwork(sim) {
-    const b = sim.network.bounds;
-    this.camera.setFocus(sim.network.focusRect(), { minX: b.minX + 20, maxX: b.maxX - 20, minY: b.minY + 20, maxY: b.maxY - 20 });
+    this.camera.setFocus(sim.network.focusRect(), sim.network.viewLimit());
     this.renderer.setNetwork(sim.network);
     this.resize();
   }
@@ -182,6 +189,33 @@ export class Game {
     this.hud.syncControls();
   }
 
+  setMusicVolume(v) {
+    this.audio.setMusicVolume(v);
+    if (v > 0 && !this.audio.musicOn) this.audio.setMusicOn(true);
+    this.save.settings.music = this.audio.musicVolume;
+    this.save.settings.musicOn = this.audio.musicOn;
+    writeSave(this.save);
+  }
+
+  setMusicOn(on) {
+    this.audio.setMusicOn(on);
+    this.save.settings.musicOn = this.audio.musicOn;
+    writeSave(this.save);
+  }
+
+  /** Music mood for the current screen and traffic. */
+  musicMood() {
+    const s = this.session;
+    if (!s) return 'menu';
+    if (s.ended || this.state.paused) return 'menu';
+    const sim = s.sim;
+    const level = sim.metrics.level;
+    if (level === 'GRIDLOCK' || sim.metrics.congestion > 0.75) return 'tense';
+    if (sim.env.rain > 0.3) return 'rain';
+    if (sim.env.darkness > 0.5) return 'night';
+    return 'day';
+  }
+
   setMuted(m) {
     this.audio.setMuted(m);
     this.save.settings.muted = m;
@@ -244,6 +278,31 @@ export class Game {
     }
   }
 
+  /** Flashing yellow on/off. Turning it off hands green to the busiest approach. */
+  toggleFlash(intersectionId) {
+    if (!this.session || this.session.ended || this.state.paused) return;
+    const sim = this.session.sim;
+    const m = sim.lights.manager(intersectionId);
+    if (!m) return;
+    const where = sim.lights.managers.size > 1 ? ` (${intersectionId})` : '';
+    if (m.flashing || m.nextGroup === FLASH_GROUP) {
+      const p = sim.metrics.perIntersection.find((x) => x.id === intersectionId);
+      let best = m.activeGroup;
+      let bestQ = -1;
+      for (const a of p?.approaches || []) {
+        const g = m.phaseFor(a.arm);
+        if (g && a.queue > bestQ) [best, bestQ] = [g, a.queue];
+      }
+      this.requestPhase(intersectionId, best);
+      return;
+    }
+    const res = sim.requestFlash(intersectionId);
+    if (res.status === 'accepted') {
+      this.audio.click();
+      this.hud.toast(`Flashing yellow${where}: stop and go in ${res.wait.toFixed(1)}s`, 'ok');
+    }
+  }
+
   // ------------------------------------------------------------------ loop callbacks
   update(dt) {
     const s = this.session;
@@ -275,6 +334,7 @@ export class Game {
     if (!sim) return;
     this.renderer.render(sim, { time: sim.time, debug: this.state.debug, hoveredHead: this.hoveredHead });
     const events = sim.drainEvents();
+    this.audio.updateMusic(this.musicMood());
     if (this.session && !this.session.ended) {
       const playing = !this.state.paused;
       for (const e of events) {
@@ -292,7 +352,9 @@ export class Game {
         const em = sim.vehicles.filter((v) => v.emergency);
         this.audio.updateSiren(em, sim.time, (v) => (this.camera.worldToScreen(v.x, v.y).x / this.camera.w) * 2 - 1);
         const moving = sim.metrics.vehicles ? sim.metrics.avgSpeed / 10 : 0;
-        this.audio.updateAmbient(Math.min(1, (sim.metrics.vehicles / 60) * (0.4 + moving)));
+        let heavy = 0;
+        for (const v of sim.vehicles) if (v.spec.length > 6) heavy++;
+        this.audio.updateAmbient(Math.min(1, (sim.metrics.vehicles / 50) * (0.45 + moving)), sim.vehicles.length ? heavy / sim.vehicles.length : 0);
       }
       this.hud.update(dtReal);
     }
@@ -392,6 +454,6 @@ function demoAutopilot(sim) {
     }
     let other = null;
     for (const g of m.groups) if (g !== m.activeGroup && (other === null || q[g] > q[other])) other = g;
-    if (other && m.timer > 9 && (q[other] > q[m.activeGroup] * 1.3 + 1 || m.timer > 32)) sim.requestPhase(id, other);
+    if (other && m.timer > 7 && (q[other] > q[m.activeGroup] * 1.3 + 1 || m.timer > 24)) sim.requestPhase(id, other);
   }
 }

@@ -18,7 +18,9 @@ export const DEFAULT_SAVE = Object.freeze({
   endlessBestByMap: {},
   tutorialDone: false,
   settings: {
-    volume: 0.7,
+    volume: 0.8,
+    music: 0.5,
+    musicOn: true,
     muted: false,
     speed: 1,
     debug: false,
@@ -85,6 +87,8 @@ export function validateSave(raw) {
   const s = raw.settings;
   if (s && typeof s === 'object') {
     if (isNum(s.volume)) d.settings.volume = Math.min(1, Math.max(0, s.volume));
+    if (isNum(s.music)) d.settings.music = Math.min(1, Math.max(0, s.music));
+    if (typeof s.musicOn === 'boolean') d.settings.musicOn = s.musicOn;
     if (typeof s.muted === 'boolean') d.settings.muted = s.muted;
     if ([1, 2, 3].includes(s.speed)) d.settings.speed = s.speed;
     if (typeof s.debug === 'boolean') d.settings.debug = s.debug;

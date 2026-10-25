@@ -8,11 +8,11 @@
 
 import { Rng, makeObb, setObb, obbOverlap } from '../utils/math.js';
 import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
-import { ARMS, DIRS, LANE_WIDTH, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
+import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
 import { rightOf, leftOf } from '../simulation/LaneManager.js';
+import { drawRiverStatic, drawRiverDynamic, drawBridgeShadows, drawBridgeRails, findBridges, bankPlants, drawBankPlants } from './RiverRenderer.js';
 
 const SW = SIDEWALK_WIDTH;
-const LW = LANE_WIDTH;
 
 const COLORS = {
   ground: '#52603f',
@@ -23,6 +23,7 @@ const COLORS = {
   yellow: '#f2c230',
   busTint: 'rgba(242,194,48,0.13)',
   motoTint: 'rgba(37,99,235,0.32)',
+  bikeTint: 'rgba(22,163,74,0.42)',
   median: '#a8a29e',
   medianGrass: '#4f7a3c',
 };
@@ -99,6 +100,28 @@ function hits(r, list, m) {
   return false;
 }
 
+/** Painted bicycle symbol on a bike lane (pointing along `angle`). */
+function drawBikeSymbol(ctx, x, y, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 0.12;
+  ctx.beginPath();
+  ctx.arc(-0.55, 0, 0.32, 0, Math.PI * 2);
+  ctx.moveTo(0.87, 0);
+  ctx.arc(0.55, 0, 0.32, 0, Math.PI * 2);
+  ctx.moveTo(-0.55, 0);
+  ctx.lineTo(-0.1, -0.35);
+  ctx.lineTo(0.35, -0.35);
+  ctx.lineTo(0.55, 0);
+  ctx.moveTo(-0.1, -0.35);
+  ctx.lineTo(0, 0);
+  ctx.lineTo(0.35, -0.35);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function armFrame(ctx, I, arm) {
   const o = DIRS[arm];
   ctx.translate(I.x, I.y);
@@ -126,7 +149,35 @@ export class RoadRenderer {
   constructor(network) {
     this.network = network;
     this.theme = THEMES[network.map.theme] || THEMES.default;
+    this.bridges = network.river ? findBridges(network.river, this._armBands()) : [];
     this.scenery = this._generateScenery();
+  }
+
+  /** Every drawn arm as { g, len, half } (for bridge detection). */
+  _armBands() {
+    const out = [];
+    for (const I of this.network.intersections) {
+      for (const arm of this._arms(I)) out.push({ g: this._g(I, arm), len: armLength(this.network, I, arm), half: I.arms[arm].half });
+    }
+    return out;
+  }
+
+  /** River water as oriented boxes, so buildings and trees stay on dry land. */
+  _waterBoxes() {
+    const r = this.network.river;
+    if (!r) return [];
+    const out = [];
+    const p = {};
+    for (let s = 0; s < r.length; s += 6) {
+      r.pointAt(Math.min(r.length, s + 3), 0, p);
+      out.push(box(p.x, p.y, 7.5, r.width + 8, p.angle));
+    }
+    return out;
+  }
+
+  /** Water ripples and boats, under traffic. */
+  drawWater(ctx, time) {
+    if (this.network.river) drawRiverDynamic(ctx, this.network.river, this.bridges, SW, time);
   }
 
   _arms(I) {
@@ -178,6 +229,9 @@ export class RoadRenderer {
     const T = this.theme;
     const rng = new Rng(net.map.sceneSeed ?? 1898);
     const corridors = this._corridors();
+    const water = this._waterBoxes();
+    const river = net.river;
+    const wet = (x, y, m = 2) => !!river && river.contains(x, y, m);
     const b = net.bounds;
     const area = { minX: b.minX - 30, maxX: b.maxX + 30, minY: b.minY - 30, maxY: b.maxY + 30 };
     const buildings = [];
@@ -191,7 +245,7 @@ export class RoadRenderer {
       for (const arm of this._arms(I)) {
         const A = I.arms[arm];
         const g = this._g(I, arm);
-        const len = Math.min(armLength(net, I, arm), 170);
+        const len = Math.min(armLength(net, I, arm), (A.length || 120) + 40);
         const start = I.kind === 'uturn' ? 0.5 : this._cross(I, arm) + SW + 1.2;
         for (const sgn of [-1, 1]) {
           let t = start;
@@ -201,7 +255,7 @@ export class RoadRenderer {
             const off = A.half + SW + 0.8 + depth / 2;
             const c = at(g, t + width / 2, sgn * off);
             const r = box(c.x, c.y, width, depth, c.angle);
-            if (!hits(r, corridors, 0.6) && !hits(r, buildings, 0.9)) {
+            if (!hits(r, corridors, 0.6) && !hits(r, buildings, 0.9) && !hits(r, water, 1)) {
               const nearCorner = t < 55;
               buildings.push({
                 ...r,
@@ -218,37 +272,41 @@ export class RoadRenderer {
           let st = (A.stop || 0) + 9 + rng.range(0, 6);
           while (st < len - 4) {
             const q = at(g, st, sgn * (A.half + SW - 1.0));
-            if (rng.chance(0.75)) trees.push({ x: q.x, y: q.y, r: rng.range(1.3, 1.9), shade: rng.range(0, 1) });
-            else posts.push({ x: q.x, y: q.y });
+            if (rng.chance(0.75)) {
+              if (!wet(q.x, q.y)) trees.push({ x: q.x, y: q.y, r: rng.range(1.3, 1.9), shade: rng.range(0, 1) });
+            } else posts.push({ x: q.x, y: q.y });
             st += rng.range(9, 15);
           }
         }
         // Waiting shed at the jeepney loading zone on external exits
         if (A.type === 'external') {
           const q = at(g, A.exitStop + LOADING_ZONE_S - 6, A.half + SW - 1.5);
-          sheds.push({ x: q.x, y: q.y, angle: q.angle, color: rng.pick(['#2563eb', '#16a34a', '#dc2626']) });
+          if (!wet(q.x, q.y, 3)) sheds.push({ x: q.x, y: q.y, angle: q.angle, color: rng.pick(['#2563eb', '#16a34a', '#dc2626']) });
         }
       }
     }
-    // Fill remaining blocks
-    for (let i = 0; i < T.fill; i++) {
+    // Fill remaining blocks (density stays the same on maps whose roads were extended)
+    const areaScale = Math.max(1, ((area.maxX - area.minX) * (area.maxY - area.minY)) / (320 * 300));
+    for (let i = 0; i < Math.round(T.fill * areaScale); i++) {
       const wx = rng.range(8, 20);
       const wy = rng.range(8, 20);
       const cx = rng.range(area.minX, area.maxX);
       const cy = rng.range(area.minY, area.maxY);
       const r = box(cx, cy, wx, wy, 0);
-      if (hits(r, corridors, 2) || hits(r, buildings, 1.4)) continue;
+      if (hits(r, corridors, 2) || hits(r, buildings, 1.4) || hits(r, water, 1.5)) continue;
       buildings.push({ ...r, color: rng.pick(T.roofs), ribbed: rng.chance(0.5), details: detail(), shop: null });
     }
     // Scattered trees in lots
-    for (let i = 0; i < T.trees; i++) {
+    for (let i = 0; i < Math.round(T.trees * areaScale); i++) {
       const x = rng.range(area.minX, area.maxX);
       const y = rng.range(area.minY, area.maxY);
       const r = box(x, y, 4, 4, 0);
-      if (hits(r, corridors, 0.5) || hits(r, buildings, 0.3)) continue;
+      if (hits(r, corridors, 0.5) || hits(r, buildings, 0.3) || wet(x, y, 3)) continue;
       trees.push({ x, y, r: rng.range(1.6, 2.6), shade: rng.range(0, 1) });
     }
-    return { buildings, trees, sheds, posts, area };
+    // Bamboo and nipa along the river banks (own RNG so maps without water are unchanged)
+    const plants = river ? bankPlants(river, new Rng((net.map.sceneSeed ?? 1898) + 31)).filter((t) => !hits(box(t.x, t.y, 3, 3, 0), corridors, 0.5)) : [];
+    return { buildings, trees, sheds, posts, area, bankPlants: plants };
   }
 
   // ------------------------------------------------------------------ static drawing
@@ -258,6 +316,11 @@ export class RoadRenderer {
     const R = CURB_RADIUS;
     ctx.fillStyle = this.theme.ground;
     ctx.fillRect(a.minX - 400, a.minY - 400, a.maxX - a.minX + 800, a.maxY - a.minY + 800);
+    if (net.river) {
+      drawRiverStatic(ctx, net.river);
+      drawBankPlants(ctx, this.scenery.bankPlants);
+      drawBridgeShadows(ctx, this.bridges, SW);
+    }
 
     const eachArm = (fn) => {
       for (const I of net.intersections) {
@@ -348,6 +411,7 @@ export class RoadRenderer {
     eachArm((I, arm, A, len, g) => this._drawMedian(ctx, I, A, len, g));
 
     for (const I of net.intersections) this._drawNodeMarkings(ctx, I);
+    if (net.river) drawBridgeRails(ctx, this.bridges, SW, net.river.name);
     this._drawScenery(ctx);
   }
 
@@ -451,16 +515,26 @@ export class RoadRenderer {
         strip(ctx, g, xs, len, 0.14, 0.27);
       }
       // Dedicated lane tints and legends
-      const laneStrip = (k, sign) => [sign * (m / 2 + LW * (k + 1)), sign * (m / 2 + LW * k)];
+      // Outer edge of lane k (lanes may differ in width: bike lanes are narrow)
+      const outer = (k) => p.offsets[k] + p.widths[k] / 2;
       for (const [list, sign] of [
         [lanes, -1],
         [exits, 1],
       ]) {
         for (const lane of list) {
           if (lane.type === 'general') continue;
-          const [ya, yb] = laneStrip(lane.laneIndex, sign);
-          ctx.fillStyle = lane.type === 'bus' ? COLORS.busTint : COLORS.motoTint;
-          strip(ctx, g, xs, len, Math.min(ya, yb), Math.min(ya, yb) + LW);
+          const k = lane.laneIndex;
+          const ya = sign * outer(k);
+          const yb = sign * (outer(k) - p.widths[k]);
+          ctx.fillStyle = lane.type === 'bus' ? COLORS.busTint : lane.type === 'bike' ? COLORS.bikeTint : COLORS.motoTint;
+          strip(ctx, g, xs, len, Math.min(ya, yb), Math.max(ya, yb));
+          if (lane.type === 'bike') {
+            for (let x = xs + 14; x < len - 6; x += 26) {
+              at(g, x, sign * lane.offset, q);
+              drawBikeSymbol(ctx, q.x, q.y, q.angle + (sign < 0 ? Math.PI : 0));
+            }
+            continue;
+          }
           const label = lane.type === 'bus' ? 'BUS LANE' : 'MOTORCYCLE LANE';
           for (let x = xs + 22; x < len - 10; x += 48) {
             at(g, x, sign * lane.offset, q);
@@ -488,10 +562,10 @@ export class RoadRenderer {
         }
       };
       for (let k = 0; k < p.lanes - 1; k++) {
-        const special = (t1, t2) => (t1 === 'bus' || t2 === 'bus' ? 'bus' : t1 === 'moto' || t2 === 'moto' ? 'moto' : null);
+        const special = (t1, t2) => (t1 === 'bus' || t2 === 'bus' ? 'bus' : [t1, t2].includes('moto') ? 'moto' : [t1, t2].includes('bike') ? 'bike' : null);
         const sp = special(p.types[k], p.types[k + 1]);
-        divider(-(m / 2 + LW * (k + 1)), true, sp);
-        divider(m / 2 + LW * (k + 1), false, sp);
+        divider(-outer(k), true, sp);
+        divider(outer(k), false, sp);
       }
 
       // ---- Markings near the junction (always on the straight lead)
@@ -501,7 +575,7 @@ export class RoadRenderer {
       if (I.kind === 'uturn') {
         ctx.fillStyle = 'rgba(240,240,236,0.5)';
         for (let k = 0; k < p.lanes - 1; k++) {
-          for (const y of [-(m / 2 + LW * (k + 1)), m / 2 + LW * (k + 1)]) for (let x = 0.5; x < A.stop; x += 3) ctx.fillRect(x, y - 0.05, 1.4, 0.1);
+          for (const y of [-outer(k), outer(k)]) for (let x = 0.5; x < A.stop; x += 3) ctx.fillRect(x, y - 0.05, 1.4, 0.1);
         }
       }
 
@@ -528,8 +602,8 @@ export class RoadRenderer {
           const isBus = lane.type === 'bus';
           if (!isJeep && !isBus) continue;
           const x0 = A.exitStop + LOADING_ZONE_S - 13;
-          const y0 = lane.offset - LW / 2 + 0.25;
-          const y1 = lane.offset + LW / 2 - 0.35;
+          const y0 = lane.offset - lane.width / 2 + 0.25;
+          const y1 = lane.offset + lane.width / 2 - 0.35;
           ctx.strokeStyle = 'rgba(242,194,48,0.85)';
           ctx.lineWidth = 0.14;
           ctx.setLineDash([0.8, 0.6]);
@@ -725,7 +799,8 @@ export class RoadRenderer {
         const sig = sim.lights.signal(I.id, arm);
         ctx.save();
         armFrame(ctx, I, arm);
-        ctx.fillStyle = sig === 'green' ? 'rgba(34,197,94,0.75)' : sig === 'yellow' ? 'rgba(250,204,21,0.85)' : 'rgba(239,68,68,0.75)';
+        ctx.fillStyle =
+          sig === 'green' ? 'rgba(34,197,94,0.75)' : sig === 'yellow' ? 'rgba(250,204,21,0.85)' : sig === 'flash' ? `rgba(250,204,21,${Math.floor(time * 2) % 2 ? 0.25 : 0.85})` : 'rgba(239,68,68,0.75)';
         ctx.fillRect(A.stop - 0.72, -A.half + 0.2, 0.5, A.half - A.median / 2 - 0.45);
         ctx.restore();
       }
@@ -740,7 +815,7 @@ export class RoadRenderer {
       const open = lane.gate.tokens >= 1;
       withFrame(ctx, g, x, lane.offset, () => {
         ctx.fillStyle = 'rgba(240,240,236,0.85)';
-        ctx.fillRect(0, -LW / 2 + 0.2, 0.4, LW - 0.4);
+        ctx.fillRect(0, -lane.width / 2 + 0.2, 0.4, lane.width - 0.4);
         ctx.fillStyle = open ? '#22c55e' : '#ef4444';
         ctx.beginPath();
         ctx.arc(1.2, 0, 0.45, 0, Math.PI * 2);

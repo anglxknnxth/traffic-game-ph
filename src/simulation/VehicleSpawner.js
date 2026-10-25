@@ -46,7 +46,8 @@ export class VehicleSpawner {
     const amp = this.level.demandWave || 0;
     const phase = this.wavePhase.get(key) || 0;
     const wave = 1 + amp * Math.sin((t / 55) * Math.PI * 2 + phase) * 0.8 + amp * 0.4 * Math.sin((t / 23) * Math.PI * 2 + phase * 1.7);
-    return Math.max(0, (perMin / 60) * ramp * Math.max(0.2, wave) * this.sim.env.demandFactor);
+    const scale = this.level.demandScale ?? 1;
+    return Math.max(0, (perMin / 60) * scale * ramp * Math.max(0.2, wave) * this.sim.env.demandFactor);
   }
 
   pendingCount() {
@@ -137,7 +138,7 @@ export class VehicleSpawner {
     if (!cands.length) cands = lanes.filter((l) => l.allows(type));
     const dedicated = cands.filter((l) => l.allowed);
     const general = cands.filter((l) => !l.allowed);
-    if (dedicated.length && (!general.length || rng.chance(0.85))) return dedicated.length > 1 ? rng.pick(dedicated) : dedicated[0];
+    if (dedicated.length && (!general.length || type === 'bicycle' || rng.chance(0.85))) return dedicated.length > 1 ? rng.pick(dedicated) : dedicated[0];
     if (general.length === 1) return general[0];
     if (HEAVY_TYPES.has(type)) {
       const curb = general[general.length - 1];
@@ -152,11 +153,16 @@ export class VehicleSpawner {
     const lanes = this.sim.network.approachLanesByKey(key);
     if (!lanes.length) return;
     const rng = this.rng;
-    const type = emergency ? (rng.chance(0.65) ? 'ambulance' : 'firetruck') : rng.weighted(this.level.mix);
+    let type = emergency ? (rng.chance(0.65) ? 'ambulance' : 'firetruck') : rng.weighted(this.level.mix);
+    // Bicycles only enter on roads with a bike lane; elsewhere the arrival is something else.
+    if (type === 'bicycle' && !lanes.some((l) => l.type === 'bike')) {
+      const { bicycle, ...rest } = this.level.mix;
+      type = rng.weighted(rest);
+    }
     const personality = emergency ? 'patient' : rng.weighted(this.level.personalities);
     const turns = this.level.turns || { left: 0.1, right: 0.1 };
     const avail = new Set();
-    for (const l of lanes) if (l.allows(type)) for (const m of Object.keys(l.connectors)) if (m !== 'uturn' && l.connectors[m].toLane.allows(type)) avail.add(m);
+    for (const l of lanes) if (l.allows(type) && (type !== 'bicycle' || l.type === 'bike')) for (const m of Object.keys(l.connectors)) if (m !== 'uturn' && l.connectors[m].toLane.allows(type)) avail.add(m);
     let move;
     if (emergency) move = avail.has('straight') ? 'straight' : [...avail][0];
     else {

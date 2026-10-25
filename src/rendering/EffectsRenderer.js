@@ -37,7 +37,7 @@ export class EffectsRenderer {
         ctx.restore();
       }
       if (v.hornFlash > 0) {
-        const maxF = v.spec.horn === 'bus' || v.spec.horn === 'truck' ? 0.9 : 0.55;
+        const maxF = v.spec.bigHorn ? 0.9 : 0.55;
         const p = 1 - v.hornFlash / maxF;
         ctx.save();
         ctx.translate(v.x, v.y);

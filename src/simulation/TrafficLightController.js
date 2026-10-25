@@ -13,9 +13,12 @@ export class TrafficLightController {
     this.heads = [];
     for (const I of network.intersections) {
       if (I.kind !== 'signal' || !I.phases.length) continue;
-      const ids = I.phases.map((p) => p.id);
-      const initial = ids.includes(initialGroups[I.id]) ? initialGroups[I.id] : ids[0];
-      const m = new TrafficPhaseManager({ phases: I.phases, initialGroup: initial, ...timing });
+      const m = new TrafficPhaseManager({ phases: I.phases, ...timing });
+      const initial = m.resolve(initialGroups[I.id]);
+      if (initial && initial !== m.activeGroup) {
+        m.activeGroup = initial;
+        m.history = [{ state: m.state, group: initial }];
+      }
       this.managers.set(I.id, m);
       for (const arm of ARMS) {
         if (!I.approachLanes[arm]) continue;
@@ -39,7 +42,7 @@ export class TrafficLightController {
     return this.managers.get(id);
   }
 
-  /** Signal for a movement: 'green' | 'yellow' | 'red'. Unsignalised nodes are always 'green'. */
+  /** Signal for a movement: 'green' | 'yellow' | 'red' | 'flash'. Unsignalised nodes are always 'green'. */
   signal(id, arm, move = 'straight') {
     const m = this.managers.get(id);
     return m ? m.signalForArm(arm, move) : 'green';
@@ -54,6 +57,13 @@ export class TrafficLightController {
     const m = this.managers.get(id);
     if (!m) return { status: 'rejected', reason: 'Unknown intersection', early: false, wait: 0 };
     return m.requestPhase(group);
+  }
+
+  /** Switch a node to flashing yellow (every approach becomes stop-and-go). */
+  requestFlash(id) {
+    const m = this.managers.get(id);
+    if (!m) return { status: 'rejected', reason: 'Unknown intersection', early: false, wait: 0 };
+    return m.requestFlash();
   }
 
   update(dt) {

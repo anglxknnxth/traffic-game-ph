@@ -60,17 +60,19 @@ export const double = {
   links: [{ a: 'A', aArm: 'E', b: 'B', bArm: 'W' }],
 };
 
-// The middle junction sits off the line of the other two, so both links are S-bends.
+// The middle junction sits off the line of the other two, so both links are S-bends. The main
+// street has a bike lane along each curb.
+const mainSt = { N: 'street', E: 'main', S: 'street', W: 'main' };
 export const corridor = {
   id: 'corridor',
   name: 'Tatlong Kanto',
   region: 'Training',
   sceneSeed: 3131,
-  roads: { street },
+  roads: { street, main: { lanes: 3, median: 0, types: ['general', 'general', 'bike'] } },
   nodes: [
-    { id: 'A', x: -90, y: 0, kind: 'signal', arms: four, shape: { W: [{ straight: 30 }, { curve: 25, radius: 60 }], N: [{ straight: 30 }, { curve: -25, radius: 55 }] } },
-    { id: 'B', x: 0, y: 14, kind: 'signal', arms: four, shape: { S: [{ straight: 30 }, { curve: 30, radius: 50 }, { straight: 20 }, { curve: -30, radius: 50 }] } },
-    { id: 'C', x: 90, y: 0, kind: 'signal', arms: four, shape: { E: [{ straight: 30 }, { curve: -25, radius: 60 }], N: [{ straight: 30 }, { curve: 30, radius: 50 }] } },
+    { id: 'A', x: -90, y: 0, kind: 'signal', arms: mainSt, shape: { W: [{ straight: 30 }, { curve: 25, radius: 60 }], N: [{ straight: 30 }, { curve: -25, radius: 55 }] } },
+    { id: 'B', x: 0, y: 14, kind: 'signal', arms: mainSt, shape: { S: [{ straight: 30 }, { curve: 30, radius: 50 }, { straight: 20 }, { curve: -30, radius: 50 }] } },
+    { id: 'C', x: 90, y: 0, kind: 'signal', arms: mainSt, shape: { E: [{ straight: 30 }, { curve: -25, radius: 60 }], N: [{ straight: 30 }, { curve: 30, radius: 50 }] } },
   ],
   links: [
     { a: 'A', aArm: 'E', b: 'B', bArm: 'W' },

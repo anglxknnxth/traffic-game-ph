@@ -111,6 +111,8 @@ export class LaneChanger {
     let best = null;
     for (const B of LaneChanger.neighbours(seg)) {
       if (!B.allows(v.type)) continue;
+      // Cyclists stay in their bike lane, and nobody else rides in one.
+      if ((v.type === 'bicycle') !== (B.type === 'bike')) continue;
       if (move && !B.connectors[move]) continue;
       if (this.sim.blockageOnLane(B, v.localS - v.hl - 2, v.localS + 45)) continue;
       // Do not drift into a dedicated lane you may use but did not pick (buses stay in the busway, motos in the moto lane, unless forced).

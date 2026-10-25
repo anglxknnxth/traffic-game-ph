@@ -19,19 +19,22 @@ const level = (over = {}) =>
   makeLevel({
     prewarm: 0,
     demandWave: 0,
-    demand: { N: 6, S: 6, E: 12, W: 12 },
+    demandScale: 1,
+    cornerStops: 0,
+    // Every road has its own green: East stays green, the other three stay red.
+    demand: { N: 4, S: 4, E: 12, W: 4 },
     mix: { car: 0.7, motorcycle: 0.2, jeepney: 0.1 },
     personalities: { patient: 0.5, impatient: 0.3, aggressive: 0.2 },
     turns: { left: 0.15, right: 0.15 },
-    initialGroups: { A: 'EW' },
+    initialGroups: { A: 'E' },
     ...over,
   });
 
 describe('Emergency vehicles ignore red lights', () => {
   it('cross against a red without collisions and with little delay', () => {
-    // The player never touches the lights: East–West stays green the whole time.
-    // Light North–South demand so the red queue never reaches the map edge (ambulances must be able to spawn).
-    const sim = new TrafficSimulator(level({ demand: { N: 3, S: 3, E: 12, W: 12 }, emergency: { times: [4, 22, 40, 58, 76, 94, 112, 130] } }), { seed: 5 });
+    // The player never touches the lights: East stays green the whole time.
+    // Light demand on the red roads so their queues never reach the map edge (ambulances must be able to spawn).
+    const sim = new TrafficSimulator(level({ demand: { N: 2.5, S: 2.5, E: 12, W: 2.5 }, emergency: { times: [4, 22, 40, 58, 76, 94, 112, 130] } }), { seed: 5 });
     const onRed = new Set();
     run(sim, 160, (s) => {
       for (const v of s.vehicles) {

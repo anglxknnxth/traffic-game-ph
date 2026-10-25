@@ -89,10 +89,10 @@ describe('Road network from maps', () => {
     expect(bus.connectors.straight.toLane.type).toBe('bus');
   });
 
-  it('Poblacion: the T-junction has two phases and the barangay roads are yield-controlled', () => {
+  it('Poblacion: each road at the T-junction has its own phase and the barangay roads are yield-controlled', () => {
     const net = new Network(MAPS.poblacion);
     const A = net.byId.get('A');
-    expect(A.phases.map((p) => p.id)).toEqual(['N', 'EW']);
+    expect(A.phases.map((p) => p.id)).toEqual(['N', 'E', 'W']);
     expect(net.byId.get('Y1').kind).toBe('yield');
     expect(A.approachLanes.N[0].moves).toEqual(['left', 'right']);
   });

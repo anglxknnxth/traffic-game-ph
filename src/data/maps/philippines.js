@@ -63,7 +63,8 @@ export const commonwealth = {
       noCrossing: ['E', 'W'],
       shape: {
         W: [{ straight: 34 }, { curve: -18, radius: 160 }],
-        N: [{ straight: 44 }, { curve: 35, radius: 45 }],
+        // Bends east, then straightens north again so it never meets Don Antonio as it runs off screen.
+        N: [{ straight: 44 }, { curve: 35, radius: 45 }, { straight: 15 }, { curve: -35, radius: 45 }],
         S: [{ straight: 44 }, { curve: -25, radius: 50 }, { straight: 20 }, { curve: 25, radius: 50 }],
       },
     },
@@ -76,7 +77,7 @@ export const commonwealth = {
       arms: { N: 'antonio', S: 'antonio', E: 'cw', W: 'cw' },
       noLeft: ['E', 'W'],
       noCrossing: ['E', 'W'],
-      shape: { E: [{ straight: 34 }, { curve: 22, radius: 150 }], N: [{ straight: 44 }, { curve: -40, radius: 40 }] },
+      shape: { E: [{ straight: 34 }, { curve: 22, radius: 150 }], N: [{ straight: 44 }, { curve: -40, radius: 40 }, { straight: 15 }, { curve: 40, radius: 40 }] },
     },
   ],
   links: [
@@ -166,7 +167,7 @@ export const poblacion = {
     brgy: { name: 'Brgy. Road', lanes: 1, median: 0 },
   },
   nodes: [
-    { id: 'A', x: 0, y: 0, kind: 'signal', arms: { N: 'rizal', E: 'highway', W: 'highway' }, shape: { N: [{ straight: 34 }, { curve: 20, radius: 50 }] } },
+    { id: 'A', x: 0, y: 0, kind: 'signal', arms: { N: 'rizal', E: 'highway', W: 'highway' }, shape: { N: [{ straight: 34 }, { curve: 20, radius: 50 }, { straight: 30 }, { curve: -20, radius: 50 }] } },
     {
       id: 'Y1',
       x: -80,
@@ -223,7 +224,7 @@ export const likoliko = {
       shape: {
         W: [{ straight: 30 }, { curve: -40, radius: 45 }, { straight: 20 }, { curve: 55, radius: 40 }],
         N: [{ straight: 34 }, { curve: 50, radius: 32 }, { straight: 15 }, { curve: -70, radius: 30 }],
-        S: [{ straight: 28 }, { curve: -35, radius: 50 }],
+        S: [{ straight: 28 }, { curve: -35, radius: 50 }, { straight: 30 }, { curve: 35, radius: 50 }],
       },
     },
     {

@@ -106,10 +106,15 @@ describe('Driving through curves', () => {
   it('vehicles slow down for tight bends and stay on their lane', () => {
     const lvl = makeLevel({ map: 'likoliko', prewarm: 0, demand: { E: 12, W: 12, N: 0, S: 0 }, mix: { car: 1 }, personalities: { aggressive: 1 }, turns: { left: 0, right: 0 } });
     const sim = new TrafficSimulator(lvl, { seed: 5 });
-    sim.requestPhase('A', 'EW');
     let inCurve = 0;
     let fastInCurve = 0;
     for (let i = 0; i < 90 / SIM_DT; i++) {
+      // Every road has its own green: alternate East and West at both signals.
+      if (i % Math.round(12 / SIM_DT) === 0) {
+        const arm = (i / Math.round(12 / SIM_DT)) % 2 ? 'W' : 'E';
+        sim.requestPhase('A', arm);
+        sim.requestPhase('B', arm);
+      }
       sim.step(SIM_DT);
       for (const v of sim.vehicles) {
         const c = v.segment.curves?.find((q) => v.localS >= q.s0 + 6 && v.localS <= q.s1);
@@ -120,6 +125,7 @@ describe('Driving through curves', () => {
     }
     expect(inCurve).toBeGreaterThan(100);
     expect(fastInCurve / inCurve).toBeLessThan(0.05);
-    expect(sim.stats.processed).toBeGreaterThan(20);
+    // Roads now run past the screen edge (about 350 m end to end), so fewer finish in 90 s.
+    expect(sim.stats.processed).toBeGreaterThan(10);
   });
 });

@@ -20,20 +20,25 @@ import { VehicleAI } from './VehicleAI.js';
 import { VehicleSpawner } from './VehicleSpawner.js';
 import { GridlockDetector, CONGESTION, rankOf } from './GridlockDetector.js';
 import { ScoringSystem } from './ScoringSystem.js';
+import { Environment } from './Environment.js';
+import { LaneChanger } from './LaneChange.js';
 
 const METRIC_INTERVAL = 0.25;
 const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's stop lines
+const EMERGENCY_CLAIM_DIST = 60; // an emergency vehicle this close to a stop line holds that junction
 
 export class TrafficSimulator {
   constructor(level, { seed = 1 } = {}) {
     this.level = level;
     this.seed = seed;
     this.rng = new Rng(seed);
+    this.env = new Environment(level, new Rng((seed ^ 0x5bd1e995) >>> 0));
     this.network = new Network(mapForLevel(level));
     this.lights = new TrafficLightController(this.network, { initialGroups: level.initialGroups || {} });
     this.imgr = new Map(this.network.intersections.map((I) => [I.id, new IntersectionManager(I)]));
     this.collision = new CollisionAvoidance();
     this.ai = new VehicleAI(this);
+    this.laneChanger = new LaneChanger(this);
     this.detectors = new Map(this.network.intersections.map((I) => [I.id, new GridlockDetector()]));
     this.scoring = new ScoringSystem();
     this.vehicles = [];
@@ -42,6 +47,7 @@ export class TrafficSimulator {
     this.events = [];
     this.hornIntensity = 1;
     this.priority = [];
+    this.emergencyClaims = [];
     this.notifyCooldown = new Map();
     this._metricTimer = 0;
     this.removedLog = [];
@@ -58,7 +64,7 @@ export class TrafficSimulator {
     for (const lane of this.network.exitLanes) {
       const o = ds.exits?.[lane.exitKey] || {};
       const gateAt = o.gateAt ?? ds.gateAt ?? null;
-      const stop = lane.startInt.arms[lane.startArm].stop;
+      const stop = lane.startInt.arms[lane.startArm].exitStop;
       lane.gateLocal = gateAt ? Math.min(lane.length - 0.5, Math.max(20, gateAt - stop)) : lane.length - 0.5;
       lane.gateVisible = !!gateAt;
       lane.gateRate = o.rate ?? ds.rate ?? 0.9;
@@ -118,6 +124,7 @@ export class TrafficSimulator {
   // ---------------------------------------------------------------- main step
   step(dt = SIM_DT) {
     this.time += dt;
+    this.env.update(dt, this.scheduleTime);
     this.lights.update(dt);
     this.updatePriority();
     this.updateBlockages();
@@ -125,6 +132,7 @@ export class TrafficSimulator {
     this.updateGates(dt);
 
     const vehicles = this.vehicles;
+    this.laneChanger.update();
     this.collision.rebuild(vehicles);
     for (let i = 0; i < vehicles.length; i++) this.ai.decide(vehicles[i]);
     for (let i = 0; i < vehicles.length; i++) this.move(vehicles[i], dt);
@@ -250,6 +258,7 @@ export class TrafficSimulator {
 
   _despawn(v) {
     this._removeFromSeg(v.segment, v);
+    if (v.lc) this.laneChanger.finish(v);
     for (const id of [...v.reservations.keys()]) this.imgr.get(id).releaseAll(v);
     for (const lane of this.network.lanes) lane.committed.delete(v);
     this.stats.processed++;
@@ -262,6 +271,10 @@ export class TrafficSimulator {
   }
 
   addVehicle(v, lane) {
+    // Per-simulation sequence number: decisions keyed on it stay deterministic even when several
+    // simulations run side by side (global vehicle ids interleave).
+    this._seq = (this._seq || 0) + 1;
+    v.seq = this._seq;
     this.vehicles.push(v);
     lane.vehicles.push(v);
     lane.vehicles.sort((a, b) => a.localS - b.localS);
@@ -289,10 +302,17 @@ export class TrafficSimulator {
     const list = seg.vehicles;
     let idx = v.segOrder;
     if (list[idx] !== v) idx = list.indexOf(v);
+    // Vehicles still sliding out of this lane (lane change in progress) remain leaders here.
+    let ghost = null;
+    if (seg.ghosts && seg.ghosts.size) {
+      for (const g of seg.ghosts) if (g !== v && g.localS > v.localS && (!ghost || g.localS < ghost.localS)) ghost = g;
+    }
     if (idx >= 0 && idx + 1 < list.length) {
       const o = list[idx + 1];
-      return { vehicle: o, gap: o.localS - o.hl - v.localS - v.hl };
+      const lead = ghost && ghost.localS < o.localS ? ghost : o;
+      return { vehicle: lead, gap: lead.localS - lead.hl - v.localS - v.hl };
     }
+    if (ghost) return { vehicle: ghost, gap: ghost.localS - ghost.hl - v.localS - v.hl };
     let dist = seg.length - v.localS;
     for (let i = v.segIdx + 1; i < E.length && dist < maxDist; i++) {
       const s2 = E[i].seg;
@@ -402,6 +422,26 @@ export class TrafficSimulator {
   }
 
   /** Attempt to reserve the intersection path for v. All safety checks live here. */
+  /** True when v is queued in front of an emergency vehicle on its lane into I (it clears the way). */
+  isEscort(v, I) {
+    if (v.emergency) return false;
+    for (const c of this.emergencyClaims) {
+      if (c.I === I && c.lane && c.lane === v.segment && v.localS > c.v.localS) return true;
+    }
+    return false;
+  }
+
+  /** The emergency claim v must give way to at I, or null. */
+  emergencyClaimFor(v, I) {
+    if (v.emergency) return null;
+    for (const c of this.emergencyClaims) {
+      if (c.I !== I) continue;
+      if (c.lane && c.lane === v.segment && v.localS > c.v.localS) continue; // escort: goes ahead
+      return c;
+    }
+    return null;
+  }
+
   tryEnter(v, conn, connStart, distToStop) {
     v.blockerId = null;
     if (!this.isLaneHead(v, v.nextConnEntry())) {
@@ -409,6 +449,13 @@ export class TrafficSimulator {
       return false;
     }
     const I = conn.intersection;
+    // Give way to an emergency vehicle about to cross, unless it is too late to stop comfortably.
+    const claim = this.emergencyClaimFor(v, I);
+    if (claim && (v.v * v.v) / (2 * v.spec.decel) < distToStop - 0.5) {
+      v.blockReason = 'emergency';
+      v.blockerId = claim.v.id;
+      return false;
+    }
     const mgr = this.imgr.get(I.id);
     const blocker = mgr.findBlocker(v, conn);
     if (blocker) {
@@ -462,6 +509,19 @@ export class TrafficSimulator {
   updatePriority() {
     for (const m of this.lights.managers.values()) m.priorityGroup = null;
     const list = [];
+    // Emergency vehicles close to a junction claim it: everyone else there gives way (see tryEnter).
+    const claims = [];
+    for (const v of this.vehicles) {
+      if (!v.emergency) continue;
+      const ce = v.nextConnEntry();
+      if (!ce) continue;
+      const dist = ce.start - v.front;
+      if (dist > EMERGENCY_CLAIM_DIST) continue;
+      const I = ce.seg.intersection;
+      const lane = v.segment.kind === 'lane' && v.segment.endInt === I ? v.segment : null;
+      claims.push({ I, v, lane, dist });
+    }
+    this.emergencyClaims = claims;
     for (const v of this.vehicles) {
       if (!v.emergency || v.emergencyDone) continue;
       const ce = v.nextConnEntry();
@@ -614,7 +674,7 @@ export class TrafficSimulator {
           const lead = lane.vehicles[lane.vehicles.length - 1];
           if (lead && !lead.reservations.has(I.id) && lane.length - lead.localS - lead.hl < 8) {
             anyHead = true;
-            if (lead.blockReason !== 'yield') allYield = false;
+            if (lead.blockReason !== 'yield' && lead.blockReason !== 'emergency') allYield = false;
             if (lead.blockReason === 'exit' && lead.greenWait >= 5) exitLanes++;
             if (lead.greenWait >= headWait) {
               headWait = lead.greenWait;
@@ -626,7 +686,8 @@ export class TrafficSimulator {
         // Minor arms of a yield junction wait for gaps by design; they never count as "green but stuck".
         const signal = I.kind === 'yield' && !I.major.has(arm) ? 'yield' : this.lights.signal(I.id, arm);
         // "Green but stuck": green long enough and nothing from this approach has crossed recently.
-        const stuckFor = signal === 'green' ? Math.min(mgr ? mgr.timer : this.time, this.time - lastCross) : 0;
+        // Without lights, quiet spells are normal: count how long the head has actually been stuck.
+        const stuckFor = signal !== 'green' ? 0 : mgr ? Math.min(mgr.timer, this.time - lastCross) : headWait;
         approaches.push({
           arm,
           signal,

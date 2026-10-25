@@ -3,7 +3,7 @@ import { TrafficSimulator } from '../src/simulation/TrafficSimulator.js';
 import { CollisionAvoidance } from '../src/simulation/CollisionAvoidance.js';
 import { AI_STATE } from '../src/simulation/Vehicle.js';
 import { LevelManager } from '../src/game/LevelManager.js';
-import { makeLevel, CAREER_LEVELS, CHALLENGES, ENDLESS_LEVEL } from '../src/data/levels.js';
+import { makeLevel, CAREER_LEVELS, PINOY_LEVELS, CHALLENGES, ENDLESS_LEVEL } from '../src/data/levels.js';
 import { SIM_DT } from '../src/data/config.js';
 import { Rng } from '../src/utils/math.js';
 
@@ -256,9 +256,9 @@ describe('Game systems', () => {
 
 describe('Soak: every level stays collision-free', () => {
   const lm = new LevelManager();
-  const all = [...CAREER_LEVELS, ENDLESS_LEVEL, ...CHALLENGES];
+  const all = [...CAREER_LEVELS, ...PINOY_LEVELS, ENDLESS_LEVEL, ...lm.endlessMaps().slice(1).map((m) => lm.endlessOn(m)), ...CHALLENGES];
   for (const lvl of all) {
-    it(`level ${lvl.id}`, () => {
+    it(`level ${lvl.id}${lvl.mode === 'endless' && lvl.map ? ` (${lvl.map})` : ''}`, () => {
       const sim = lm.createSim(lvl, 13);
       const rng = new Rng(21);
       let next = 6;

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GameLoop } from '../src/game/GameLoop.js';
 import { validateSave, DEFAULT_SAVE } from '../src/utils/storage.js';
 import { SIM_DT } from '../src/data/config.js';
-import { CAREER_COUNT } from '../src/data/levels.js';
+import { CAREER_COUNT, PINOY_COUNT, PINOY_LEVELS } from '../src/data/levels.js';
 
 describe('GameLoop', () => {
   let frames;
@@ -79,5 +79,25 @@ describe('Save data validation', () => {
     expect(s.settings.speed).toBe(1);
     expect(s.settings.showMetrics).toBe(false);
     expect(s.tutorialDone).toBe(false);
+  });
+
+  it('moves progress from old career levels 11–16 to Pinoy Roads', () => {
+    const s = validateSave({ unlockedLevel: 14, bestScores: { 3: 900, 11: 1500, 13: 2100 }, bestStars: { 3: 2, 11: 3, 13: 1 } });
+    expect(s.unlockedLevel).toBe(CAREER_COUNT);
+    expect(s.bestScores).toEqual({ 3: 900 });
+    expect(s.bestStars).toEqual({ 3: 2 });
+    expect(s.pinoyBest).toEqual({ poblacion: 1500, espana: 2100 });
+    expect(s.pinoyStars).toEqual({ poblacion: 3, espana: 1 });
+    // cleared España (3rd) unlocks the 4th
+    expect(s.pinoyUnlocked).toBe(4);
+  });
+
+  it('sanitises Pinoy Roads and per-map Endless fields', () => {
+    const s = validateSave({ pinoyUnlocked: 99, pinoyBest: { taft: 5, edsa: -1 }, pinoyStars: { taft: 9 }, endlessBestByMap: { edsa: 3000, x: 'y' } });
+    expect(s.pinoyUnlocked).toBe(PINOY_COUNT);
+    expect(s.pinoyBest).toEqual({ taft: 5 });
+    expect(s.pinoyStars).toEqual({ taft: 3 });
+    expect(s.endlessBestByMap).toEqual({ edsa: 3000 });
+    expect(PINOY_LEVELS.every((l) => l.mode === 'pinoy' && typeof l.id === 'string' && l.map)).toBe(true);
   });
 });

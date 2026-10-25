@@ -1,22 +1,55 @@
 // Level catalogue, simulation construction and objective / end-condition evaluation.
 
-import { CAREER_LEVELS, ENDLESS_LEVEL, CHALLENGES, DEMO_LEVEL } from '../data/levels.js';
+import { CAREER_LEVELS, PINOY_LEVELS, ENDLESS_LEVEL, CHALLENGES, DEMO_LEVEL, makeLevel } from '../data/levels.js';
+import { MAPS } from '../data/maps/index.js';
 import { TrafficSimulator } from '../simulation/TrafficSimulator.js';
 import { CONGESTION } from '../simulation/GridlockDetector.js';
 
 export class LevelManager {
   constructor() {
     this.career = CAREER_LEVELS;
+    this.pinoy = PINOY_LEVELS;
     this.challenges = CHALLENGES;
     this.endless = ENDLESS_LEVEL;
     this.demo = DEMO_LEVEL;
+    this._endlessByMap = new Map();
   }
 
   get(mode, id) {
     if (mode === 'career' || mode === 'tutorial') return this.career.find((l) => l.id === Number(id)) || this.career[0];
+    if (mode === 'pinoy') return this.pinoy.find((l) => l.id === id) || this.pinoy[0];
     if (mode === 'challenge') return this.challenges.find((l) => l.id === id) || this.challenges[0];
-    if (mode === 'endless') return this.endless;
+    if (mode === 'endless') return this.endlessOn(id);
     return this.demo;
+  }
+
+  /** Maps Endless can be played on: the default kanto plus every Pinoy Roads map. */
+  endlessMaps() {
+    return ['single', ...this.pinoy.map((l) => l.map)].filter((m, i, a) => MAPS[m] && a.indexOf(m) === i);
+  }
+
+  /** Endless on a given map (the default map when id is missing or unknown). */
+  endlessOn(mapId) {
+    if (!mapId || !MAPS[mapId] || mapId === 'single' || mapId === 'endless') return this.endless;
+    let lvl = this._endlessByMap.get(mapId);
+    if (!lvl) {
+      const { layout, ...rest } = this.endless;
+      // Traffic pattern from that map's Pinoy Roads level, starting lighter and then ramping up.
+      const src = this.pinoy.find((l) => l.map === mapId);
+      const demand = Object.fromEntries(Object.entries(src?.demand || rest.demand).map(([a, d]) => [a, Math.round(d * 0.7 * 10) / 10]));
+      lvl = makeLevel({
+        ...rest,
+        map: mapId,
+        demand,
+        mix: src?.mix || rest.mix,
+        turns: src?.turns || rest.turns,
+        initialGroups: src?.initialGroups || rest.initialGroups,
+        name: `Endless Rush · ${MAPS[mapId].name}`,
+        downstream: { ...rest.downstream, exits: {} },
+      });
+      this._endlessByMap.set(mapId, lvl);
+    }
+    return lvl;
   }
 
   /** Build a simulation for a level, including scenario warm-up (real simulated traffic). */

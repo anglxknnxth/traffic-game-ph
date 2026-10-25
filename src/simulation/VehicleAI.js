@@ -1,10 +1,14 @@
 // Per-vehicle decision making: car following (IDM), signal compliance, intersection entry requests,
-// creeping, loading stops and horn behaviour. Decisions only produce a desired acceleration; the
+// creeping, loading stops and horn behaviour. Weather scales braking, gaps and speed; every driver
+// has a reaction time (a start-up delay when the queue ahead moves, and a perception lag on the
+// leader's speed). Decisions only produce a desired acceleration; the
 // simulator applies hard limits and the collision gate afterwards.
 
 import { clamp } from '../utils/math.js';
 import { MIN_BUFFER } from '../data/config.js';
 import { AI_STATE } from './Vehicle.js';
+
+const SIREN_CROSS_SPEED = 6; // m/s: emergency vehicles slow to this before crossing against a red
 
 export function idm(v, vLead, gap, v0, a, b, s0, T) {
   const dv = v - vLead;
@@ -35,11 +39,13 @@ export class VehicleAI {
 
   decide(v) {
     const sim = this.sim;
+    const env = sim.env;
     const spec = v.spec;
     const P = v.p;
-    const v0 = spec.maxSpeed * P.speedFactor * v.speedVar;
+    const v0 = spec.maxSpeed * P.speedFactor * v.speedVar * env.speedFactor;
     const aMax = spec.accel * P.accelFactor;
-    const b = spec.decel;
+    const b = spec.decel * env.brakeFactor;
+    const T = P.headway * env.headwayFactor;
     let acc = aMax * (1 - Math.pow(v.v / v0, 4));
     let constraint = 'free';
     v.leaderId = null;
@@ -52,16 +58,45 @@ export class VehicleAI {
     const lead = sim.findLeader(v, Math.max(55, v.v * 5));
     if (lead) {
       v.leaderId = lead.vehicle.id;
-      let s0 = P.minGap;
+      let s0 = P.minGap * env.gapFactor;
       if (v.emergency) s0 = Math.max(s0, 2.0);
       if (P.creep && v.stoppedTime > 1.5 && lead.vehicle.v < 0.3 && lead.gap > P.creepGap + 0.15) {
         s0 = P.creepGap;
         v.creeping = true;
       }
-      const aL = idm(v.v, lead.vehicle.v, lead.gap, v0, aMax, b, s0, P.headway);
+      // Perception lag: the follower reacts to the leader's speed from a moment ago, unless the gap
+      // is already critical (then everyone brakes at once).
+      const critical = s0 + v.v * T * 0.6;
+      const vLead = lead.gap > critical ? lead.vehicle.speedAgo(v.reaction + env.reactionExtra) : lead.vehicle.v;
+      const aL = idm(v.v, vLead, lead.gap, v0, aMax, b, s0, T);
       if (aL < acc) {
         acc = aL;
         constraint = 'leader';
+      }
+    }
+    // Mid lane change: keep a safe gap to traffic in the lane being left as well.
+    if (v.lc && v.lc.fromLane && Math.abs(v.lateralOffset()) > 0.9) {
+      let best = null;
+      for (const o of v.lc.fromLane.vehicles) {
+        if (o === v || o.localS <= v.localS) continue;
+        if (!best || o.localS < best.localS) best = o;
+      }
+      if (best) {
+        const gap = best.localS - best.hl - v.localS - v.hl;
+        const aF = idm(v.v, best.v, gap, v0, aMax, b, P.minGap * env.gapFactor, T);
+        if (aF < acc) {
+          acc = aF;
+          constraint = 'leader';
+        }
+      }
+    }
+
+    // Curves: ease off to a comfortable cornering speed before and through a bend.
+    if (v.v > 3) {
+      const aC = this.curveAccel(v, aMax, b);
+      if (aC < acc) {
+        acc = aC;
+        constraint = 'curve';
       }
     }
 
@@ -74,12 +109,22 @@ export class VehicleAI {
       const sig = sim.lights.signal(I.id, conn.arm, conn.movement);
       v.signal = sig;
       let res = v.reservations.get(I.id);
+      // Sirens: emergency vehicles (and the cars queued in front of them, clearing the way) do not
+      // wait for green. They still need a free path through the box, and they slow down first.
+      const sirens = sig !== 'green' && I.kind === 'signal' && (v.emergency || sim.isEscort(v, I));
+      if (sirens && distToStop < 45 && v.v > SIREN_CROSS_SPEED) {
+        const aSlow = (SIREN_CROSS_SPEED * SIREN_CROSS_SPEED - v.v * v.v) / (2 * Math.max(1, distToStop - 1));
+        if (aSlow < acc) {
+          acc = Math.max(aSlow, -b);
+          constraint = 'sirens';
+        }
+      }
       if (!res && distToStop > -0.05) {
         const reqDist = Math.max(8, (v.v * v.v) / (2 * b) + 6);
         let want = false;
         let duringYellow = false;
         if (distToStop <= reqDist) {
-          if (sig === 'green') want = true;
+          if (sig === 'green' || sirens) want = true;
           else if (sig === 'yellow') {
             const stopNeed = (v.v * v.v) / (2 * b);
             const t = distToStop / Math.max(v.v, 0.1);
@@ -97,17 +142,17 @@ export class VehicleAI {
         }
         if (want && sim.tryEnter(v, conn, ce.start, distToStop)) {
           res = v.reservations.get(I.id);
-          if (res) res.yellowCommit = duringYellow;
+          if (res) res.yellowCommit = duringYellow || sirens;
         }
         if (!res) {
           const aS = idmStop(v.v, distToStop - P.stopMargin, v0, aMax, b);
           if (aS < acc) {
             acc = aS;
-            constraint = sig === 'green' ? 'waiting' : 'signal';
+            constraint = sig === 'green' || sirens ? 'waiting' : 'signal';
           }
-          if (sig !== 'green' && !v.blockReason) v.blockReason = 'signal';
+          if (sig !== 'green' && !sirens && !v.blockReason) v.blockReason = 'signal';
         }
-      } else if (res && distToStop > 0 && sig !== 'green' && !res.yellowCommit) {
+      } else if (res && distToStop > 0 && sig !== 'green' && !res.yellowCommit && !sirens) {
         // Granted earlier but the light changed before we reached the line: stop if we comfortably can.
         const decel = sig === 'yellow' ? b : spec.hardDecel * 0.7;
         const need = (v.v * v.v) / (2 * decel);
@@ -191,8 +236,43 @@ export class VehicleAI {
       }
     }
 
+    // Start-up reaction: once whatever held a stopped vehicle clears, it takes a moment to go.
+    if (v.v < 0.3 && acc > 0.05) {
+      if (v.reactTimer === null) v.reactTimer = v.reaction + env.reactionExtra;
+      if (v.reactTimer > 0) {
+        acc = Math.min(acc, 0);
+        constraint = 'reacting';
+      }
+    } else if (v.v >= 0.3 || acc <= 0.05) {
+      v.reactTimer = null;
+    }
+
     v.constraint = constraint;
     v.a = clamp(acc, -spec.hardDecel, aMax);
+  }
+
+  /** Acceleration that respects the cornering speed of curved lanes ahead (Infinity when none). */
+  curveAccel(v, aMax, b) {
+    const E = v.route.entries;
+    let best = Infinity;
+    let ahead = -v.localS - v.hl; // distance from the front to the start of the segment being scanned
+    for (let i = v.segIdx; i < E.length && ahead < 70; i++) {
+      const seg = E[i].seg;
+      if (seg.curves?.length) {
+        for (const c of seg.curves) {
+          const d0 = ahead + c.s0;
+          const d1 = ahead + c.s1;
+          if (d1 < -v.spec.length || d0 > 70) continue;
+          let a;
+          if (d0 <= 0) a = Math.max(-b, aMax * (1 - Math.pow(v.v / c.vmax, 4))); // in the bend
+          else if (v.v > c.vmax) a = Math.max(-b, (c.vmax * c.vmax - v.v * v.v) / (2 * d0));
+          else continue;
+          if (a < best) best = a;
+        }
+      }
+      ahead += seg.length;
+    }
+    return best;
   }
 
   /** Post-move bookkeeping: waiting time, state label, horns. */
@@ -209,6 +289,9 @@ export class VehicleAI {
     else v.greenWait = 0;
     v.avgSpeed += (v.v - v.avgSpeed) * Math.min(1, dt / 3);
     if (v.decisionTimer > 0) v.decisionTimer -= dt;
+    if (v.reactTimer > 0) v.reactTimer -= dt;
+    if (v.lcCooldown > 0) v.lcCooldown -= dt;
+    v.recordSpeed(dt);
     if (v.hornFlash > 0) v.hornFlash -= dt;
     v.hornCooldown -= dt;
     if (v.loading && v.loading.state === 'stopped') {
@@ -238,6 +321,7 @@ export class VehicleAI {
     const ce = v.nextConnEntry();
     if (ce && v.reservations.size && ce.start - v.front < 0.5) return AI_STATE.ENTERING_INTERSECTION;
     if (v.creeping) return AI_STATE.CREEPING_FORWARD;
+    if (v.constraint === 'reacting') return AI_STATE.REACTING;
     if (v.constraint === 'signal' && v.v < 0.5) return AI_STATE.STOPPED_AT_RED;
     if ((v.constraint === 'waiting' || v.constraint === 'keepclear') && v.v < 0.5) return AI_STATE.WAITING_FOR_SPACE;
     if (v.constraint === 'leader') return v.a < -1 ? AI_STATE.BRAKING : AI_STATE.FOLLOWING;

@@ -52,27 +52,45 @@ export class Rng {
   }
 }
 
-/** Polyline with arc-length parameterisation; extrapolates linearly past both ends. */
+/**
+ * Polyline parameterised by arc length; extrapolates linearly past both ends.
+ * Optional `params` (one per point, increasing) replace arc length as the coordinate. Curved
+ * lanes use the distance along their road's centre line, so parallel lanes share one
+ * longitudinal coordinate (a lane change keeps s, a blockage at s spans every lane).
+ */
 export class Path {
-  constructor(points) {
+  constructor(points, params = null) {
     const pts = [];
-    for (const p of points) {
+    const prm = [];
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
       const last = pts[pts.length - 1];
-      if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) pts.push({ x: p.x, y: p.y });
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) {
+        pts.push({ x: p.x, y: p.y });
+        if (params) prm.push(params[i]);
+      }
     }
     if (pts.length < 2) throw new Error('Path needs at least two distinct points');
     const n = pts.length;
     this.xs = new Float64Array(n);
     this.ys = new Float64Array(n);
     this.cum = new Float64Array(n);
+    this.ux = new Float64Array(n); // unit direction of segment i (i -> i+1)
+    this.uy = new Float64Array(n);
     let L = 0;
     for (let i = 0; i < n; i++) {
       this.xs[i] = pts[i].x;
       this.ys[i] = pts[i].y;
-      if (i > 0) L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-      this.cum[i] = L;
+      if (i > 0) {
+        const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        this.ux[i - 1] = (pts[i].x - pts[i - 1].x) / d;
+        this.uy[i - 1] = (pts[i].y - pts[i - 1].y) / d;
+        L += d;
+      }
+      this.cum[i] = params ? prm[i] - prm[0] : L;
     }
-    this.length = L;
+    if (params) for (let i = 1; i < n; i++) if (!(this.cum[i] > this.cum[i - 1])) throw new Error('Path params must increase');
+    this.length = this.cum[n - 1];
     this.n = n;
   }
 
@@ -91,14 +109,11 @@ export class Path {
       }
       i = lo;
     }
-    const segLen = cum[i + 1] - cum[i];
-    const dx = (xs[i + 1] - xs[i]) / segLen;
-    const dy = (ys[i + 1] - ys[i]) / segLen;
-    const t = s - cum[i];
-    out.x = xs[i] + dx * t;
-    out.y = ys[i] + dy * t;
-    out.dx = dx;
-    out.dy = dy;
+    const t = (s - cum[i]) / (cum[i + 1] - cum[i]);
+    out.x = xs[i] + (xs[i + 1] - xs[i]) * t;
+    out.y = ys[i] + (ys[i + 1] - ys[i]) * t;
+    out.dx = this.ux[i];
+    out.dy = this.uy[i];
     return out;
   }
 

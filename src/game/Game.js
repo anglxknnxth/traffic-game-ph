@@ -10,7 +10,7 @@ import { InputManager } from '../input/InputManager.js';
 import { HUD } from '../ui/HUD.js';
 import { Menu } from '../ui/Menu.js';
 import { loadSave, writeSave, clearSave } from '../utils/storage.js';
-import { CAREER_COUNT } from '../data/levels.js';
+import { CAREER_COUNT, PINOY_COUNT } from '../data/levels.js';
 
 export class Game {
   constructor(root) {
@@ -87,6 +87,7 @@ export class Game {
     this.session = {
       mode,
       id: level.id,
+      mapId: mode === 'endless' ? level.map || 'single' : null,
       level,
       sim,
       elapsed: 0,
@@ -116,7 +117,7 @@ export class Game {
 
   restart() {
     if (!this.session) return;
-    this.startSession(this.session.mode, this.session.id);
+    this.startSession(this.session.mode, this.session.mode === 'endless' ? this.session.mapId : this.session.id);
   }
 
   quitToMenu() {
@@ -323,10 +324,24 @@ export class Game {
         if (level.id < CAREER_COUNT) nextLevel = level.id + 1;
       }
       if (s.mode === 'tutorial') save.tutorialDone = true;
+    } else if (s.mode === 'pinoy') {
+      const idx = this.levels.pinoy.findIndex((l) => l.id === level.id);
+      best = save.pinoyBest[level.id] || 0;
+      if (success && score > best) {
+        save.pinoyBest[level.id] = score;
+        newBest = best > 0;
+      }
+      save.pinoyStars[level.id] = Math.max(save.pinoyStars[level.id] || 0, stars);
+      if (success) {
+        save.pinoyUnlocked = Math.min(PINOY_COUNT, Math.max(save.pinoyUnlocked, idx + 2));
+        nextLevel = this.levels.pinoy[idx + 1]?.id ?? null;
+      }
     } else if (s.mode === 'endless') {
-      best = save.endlessBest;
+      const map = s.mapId || 'single';
+      best = map === 'single' ? save.endlessBest : save.endlessBestByMap[map] || 0;
       if (score > best) {
-        save.endlessBest = score;
+        if (map === 'single') save.endlessBest = score;
+        else save.endlessBestByMap[map] = score;
         newBest = best > 0;
       }
       save.endlessBestTime = Math.max(save.endlessBestTime, s.elapsed);
@@ -350,6 +365,7 @@ export class Game {
       best,
       newBest,
       nextLevel,
+      nextMode: s.mode === 'tutorial' ? 'career' : s.mode,
       processed: sim.stats.processed,
       avgWait: sim.metrics.overallWait,
       elapsed: s.elapsed,

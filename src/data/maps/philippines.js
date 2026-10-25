@@ -1,5 +1,6 @@
-// Maps inspired by real Philippine roads. Geometry is simplified for play: every road is straight
-// and axis-aligned, and lane counts are trimmed so the junction fits on screen.
+// Maps inspired by real Philippine roads. Geometry is simplified for play: junctions are square and
+// lane counts are trimmed so the junction fits on screen, but roads bend away from the junctions
+// (shape ops, see RoadGeometry). Roads under a rail line stay straight.
 //
 // Road profile: lanes per direction, median width (m), lane types from the median to the curb
 // ('general' | 'bus' | 'moto'). Node kinds: 'signal' (player-controlled lights), 'uturn' (median
@@ -17,7 +18,15 @@ export const edsa = {
     aurora: { name: 'Aurora Blvd', lanes: 3, median: 1.2 },
   },
   nodes: [
-    { id: 'A', x: 0, y: 0, kind: 'signal', arms: { N: 'edsa', S: 'edsa', E: 'aurora', W: 'aurora' }, noLeft: ['N', 'S'] },
+    {
+      id: 'A',
+      x: 0,
+      y: 0,
+      kind: 'signal',
+      arms: { N: 'edsa', S: 'edsa', E: 'aurora', W: 'aurora' },
+      noLeft: ['N', 'S'],
+      shape: { E: [{ straight: 44 }, { curve: 22, radius: 120 }], W: [{ straight: 44 }, { curve: 16, radius: 140 }] },
+    },
     { id: 'U1', x: 0, y: -88, kind: 'uturn', arms: { N: 'edsa', S: 'edsa' }, uturn: ['S'], uturnRate: 0.3 },
     { id: 'U2', x: 0, y: 88, kind: 'uturn', arms: { N: 'edsa', S: 'edsa' }, uturn: ['N'], uturnRate: 0.3 },
   ],
@@ -43,9 +52,29 @@ export const commonwealth = {
     antonio: { name: 'Don Antonio', lanes: 2, median: 0 },
   },
   nodes: [
-    { id: 'A', x: -74, y: 0, kind: 'signal', arms: { N: 'tandang', S: 'tandang', E: 'cw', W: 'cw' }, noLeft: ['E', 'W'] },
+    {
+      id: 'A',
+      x: -74,
+      y: 0,
+      kind: 'signal',
+      arms: { N: 'tandang', S: 'tandang', E: 'cw', W: 'cw' },
+      noLeft: ['E', 'W'],
+      shape: {
+        W: [{ straight: 34 }, { curve: -18, radius: 160 }],
+        N: [{ straight: 44 }, { curve: 35, radius: 45 }],
+        S: [{ straight: 44 }, { curve: -25, radius: 50 }, { straight: 20 }, { curve: 25, radius: 50 }],
+      },
+    },
     { id: 'U1', x: 0, y: 0, kind: 'uturn', arms: { E: 'cw', W: 'cw' }, uturn: ['E', 'W'], uturnRate: 0.25 },
-    { id: 'B', x: 74, y: 0, kind: 'signal', arms: { N: 'antonio', S: 'antonio', E: 'cw', W: 'cw' }, noLeft: ['E', 'W'] },
+    {
+      id: 'B',
+      x: 74,
+      y: 0,
+      kind: 'signal',
+      arms: { N: 'antonio', S: 'antonio', E: 'cw', W: 'cw' },
+      noLeft: ['E', 'W'],
+      shape: { E: [{ straight: 34 }, { curve: 22, radius: 150 }], N: [{ straight: 44 }, { curve: -40, radius: 40 }] },
+    },
   ],
   links: [
     { a: 'A', aArm: 'E', b: 'U1', bArm: 'W' },
@@ -69,8 +98,22 @@ export const taft = {
     quirino: { name: 'Quirino Ave', lanes: 3, median: 1 },
   },
   nodes: [
-    { id: 'A', x: 0, y: -46, kind: 'signal', arms: { N: 'taft', S: 'taft', E: 'pedrogil', W: 'pedrogil' } },
-    { id: 'B', x: 0, y: 46, kind: 'signal', arms: { N: 'taft', S: 'taft', E: 'quirino', W: 'quirino' } },
+    {
+      id: 'A',
+      x: 0,
+      y: -46,
+      kind: 'signal',
+      arms: { N: 'taft', S: 'taft', E: 'pedrogil', W: 'pedrogil' },
+      shape: { W: [{ straight: 32 }, { curve: 35, radius: 40 }], E: [{ straight: 32 }, { curve: -30, radius: 50 }] },
+    },
+    {
+      id: 'B',
+      x: 0,
+      y: 46,
+      kind: 'signal',
+      arms: { N: 'taft', S: 'taft', E: 'quirino', W: 'quirino' },
+      shape: { W: [{ straight: 34 }, { curve: -25, radius: 60 }], E: [{ straight: 34 }, { curve: 30, radius: 55 }] },
+    },
   ],
   links: [{ a: 'A', aArm: 'S', b: 'B', bArm: 'N' }],
   armLength: 115,
@@ -89,7 +132,20 @@ export const espana = {
     espana: { name: 'España Blvd', lanes: 3, median: 3 },
     lacson: { name: 'Lacson Ave', lanes: 3, median: 1.6 },
   },
-  nodes: [{ id: 'A', x: 0, y: 0, kind: 'signal', arms: { N: 'lacson', S: 'lacson', E: 'espana', W: 'espana' } }],
+  nodes: [
+    {
+      id: 'A',
+      x: 0,
+      y: 0,
+      kind: 'signal',
+      arms: { N: 'lacson', S: 'lacson', E: 'espana', W: 'espana' },
+      shape: {
+        E: [{ straight: 32 }, { curve: 18, radius: 140 }],
+        W: [{ straight: 32 }, { curve: 18, radius: 140 }],
+        N: [{ straight: 34 }, { curve: -15, radius: 160 }],
+      },
+    },
+  ],
   links: [],
   armLength: 120,
 };
@@ -107,9 +163,31 @@ export const poblacion = {
     brgy: { name: 'Brgy. Road', lanes: 1, median: 0 },
   },
   nodes: [
-    { id: 'A', x: 0, y: 0, kind: 'signal', arms: { N: 'rizal', E: 'highway', W: 'highway' } },
-    { id: 'Y1', x: -74, y: 0, kind: 'yield', arms: { S: 'brgy', E: 'highway', W: 'highway' }, major: ['E', 'W'] },
-    { id: 'Y2', x: 74, y: 0, kind: 'yield', arms: { N: 'brgy', E: 'highway', W: 'highway' }, major: ['E', 'W'] },
+    { id: 'A', x: 0, y: 0, kind: 'signal', arms: { N: 'rizal', E: 'highway', W: 'highway' }, shape: { N: [{ straight: 34 }, { curve: 20, radius: 50 }] } },
+    {
+      id: 'Y1',
+      x: -80,
+      y: 10,
+      kind: 'yield',
+      arms: { S: 'brgy', E: 'highway', W: 'highway' },
+      major: ['E', 'W'],
+      shape: {
+        W: [{ straight: 26 }, { curve: -25, radius: 90 }],
+        S: [{ straight: 32 }, { curve: 40, radius: 30 }, { straight: 20 }, { curve: -50, radius: 28 }],
+      },
+    },
+    {
+      id: 'Y2',
+      x: 80,
+      y: -8,
+      kind: 'yield',
+      arms: { N: 'brgy', E: 'highway', W: 'highway' },
+      major: ['E', 'W'],
+      shape: {
+        E: [{ straight: 26 }, { curve: 20, radius: 100 }],
+        N: [{ straight: 32 }, { curve: -45, radius: 30 }, { straight: 18 }, { curve: 55, radius: 28 }],
+      },
+    },
   ],
   links: [
     { a: 'Y1', aArm: 'E', b: 'A', bArm: 'W' },
@@ -117,4 +195,46 @@ export const poblacion = {
   ],
   armLength: 115,
   focus: { minX: -108, maxX: 108, minY: -55, maxY: 55 },
+};
+
+export const likoliko = {
+  id: 'likoliko',
+  name: 'Liko-Liko',
+  region: 'Probinsya',
+  blurb: 'A winding mountain-town road: two signals on an S-bend, with sitio roads twisting off into the hills.',
+  sceneSeed: 2112,
+  theme: 'province',
+  roads: {
+    hwy: { name: 'Mountain Rd', lanes: 2, median: 0 },
+    sitio: { name: 'Sitio Rd', lanes: 1, median: 0 },
+  },
+  nodes: [
+    {
+      id: 'A',
+      x: -52,
+      y: -12,
+      kind: 'signal',
+      arms: { N: 'sitio', S: 'hwy', E: 'hwy', W: 'hwy' },
+      shape: {
+        W: [{ straight: 30 }, { curve: -40, radius: 45 }, { straight: 20 }, { curve: 55, radius: 40 }],
+        N: [{ straight: 34 }, { curve: 50, radius: 32 }, { straight: 15 }, { curve: -70, radius: 30 }],
+        S: [{ straight: 28 }, { curve: -35, radius: 50 }],
+      },
+    },
+    {
+      id: 'B',
+      x: 54,
+      y: 18,
+      kind: 'signal',
+      arms: { N: 'hwy', S: 'sitio', E: 'hwy', W: 'hwy' },
+      shape: {
+        E: [{ straight: 30 }, { curve: 45, radius: 45 }, { straight: 25 }, { curve: -60, radius: 40 }],
+        S: [{ straight: 34 }, { curve: -50, radius: 32 }, { straight: 15 }, { curve: 65, radius: 30 }],
+        N: [{ straight: 28 }, { curve: 30, radius: 55 }],
+      },
+    },
+  ],
+  links: [{ a: 'A', aArm: 'E', b: 'B', bArm: 'W' }],
+  armLength: 120,
+  focus: { minX: -100, maxX: 100, minY: -62, maxY: 68 },
 };

@@ -128,6 +128,11 @@ button {
   align-items: flex-end;
 }
 
+.hud-env b {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
 .hud-status {
   font-weight: 800;
   font-size: 14px;
@@ -903,6 +908,31 @@ button {
   color: #cbd5e1;
 }
 
+.map-pick {
+  margin-top: 6px;
+}
+
+.map-pick .chip {
+  cursor: pointer;
+  background: transparent;
+  font-size: 13px;
+  padding: 5px 12px;
+}
+
+.map-pick .chip:hover {
+  border-color: #94a3b8;
+}
+
+.map-pick .chip.active {
+  background: #1d4ed8;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+.btn.pinoy {
+  border-color: rgba(252, 209, 22, 0.55);
+}
+
 .tip {
   margin-top: 14px;
   background: rgba(250, 204, 21, 0.1);
@@ -1110,7 +1140,8 @@ summary {
     padding: 4px 8px;
     min-height: 42px;
   }
-  .hud-level {
+  .hud-level,
+  .hud-env .lbl {
     display: none;
   }
   .hud-status {

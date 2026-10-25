@@ -5,6 +5,12 @@
 import { VEHICLE_TYPES, HEAVY_TYPES, LOADING_TYPES } from '../data/vehicles.js';
 import { PERSONALITIES, LOADING_ZONE_S } from '../data/config.js';
 import { Route, Vehicle } from './Vehicle.js';
+import { Network } from './LaneManager.js';
+
+/** Buses and trucks rarely turn into single-lane streets: they cannot make the swing past waiting cars. */
+function narrowTurn(type, conn) {
+  return VEHICLE_TYPES[type].length > 8 && conn && conn.toLane.laneCount === 1 ? 0.12 : 1;
+}
 
 export class VehicleSpawner {
   constructor(sim) {
@@ -40,7 +46,7 @@ export class VehicleSpawner {
     const amp = this.level.demandWave || 0;
     const phase = this.wavePhase.get(key) || 0;
     const wave = 1 + amp * Math.sin((t / 55) * Math.PI * 2 + phase) * 0.8 + amp * 0.4 * Math.sin((t / 23) * Math.PI * 2 + phase * 1.7);
-    return Math.max(0, (perMin / 60) * ramp * Math.max(0.2, wave));
+    return Math.max(0, (perMin / 60) * ramp * Math.max(0.2, wave) * this.sim.env.demandFactor);
   }
 
   pendingCount() {
@@ -96,8 +102,8 @@ export class VehicleSpawner {
     const ok = (m) => c[m] && c[m].toLane.allows(type);
     const w = {};
     if (ok('straight')) w.straight = 1 - turns.left - turns.right;
-    if (ok('left')) w.left = turns.left * 2;
-    if (ok('right')) w.right = turns.right * 2;
+    if (ok('left')) w.left = turns.left * 2 * narrowTurn(type, c.left);
+    if (ok('right')) w.right = turns.right * 2 * narrowTurn(type, c.right);
     // Long vehicles cannot swing through a median U-turn slot.
     if (ok('uturn') && !usedUturn && VEHICLE_TYPES[type].length <= 7) w.uturn = lane.endInt.def.uturnRate ?? 0.15;
     const keys = Object.keys(w);
@@ -113,7 +119,7 @@ export class VehicleSpawner {
     let usedUturn = false;
     let guard = 0;
     while (lane.endInt && guard++ < 10) {
-      const conn = lane.connectors[move] || lane.connectors.straight || Object.values(lane.connectors)[0];
+      const conn = Network.connectorFor(lane, move, VEHICLE_TYPES[type]) || lane.connectors.straight || Object.values(lane.connectors)[0];
       if (!conn) break;
       if (conn.movement === 'uturn') usedUturn = true;
       segs.push(conn);
@@ -156,8 +162,9 @@ export class VehicleSpawner {
     else {
       const w = {};
       if (avail.has('straight')) w.straight = Math.max(0, 1 - turns.left - turns.right);
-      if (avail.has('left')) w.left = turns.left;
-      if (avail.has('right')) w.right = turns.right;
+      const sample = (m) => lanes.find((l) => l.connectors[m])?.connectors[m];
+      if (avail.has('left')) w.left = turns.left * narrowTurn(type, sample('left'));
+      if (avail.has('right')) w.right = turns.right * narrowTurn(type, sample('right'));
       const keys = Object.keys(w);
       if (keys.length && !keys.some((k) => w[k] > 0)) for (const k of keys) w[k] = 1;
       move = keys.length ? rng.weighted(w) : 'straight';
@@ -204,6 +211,8 @@ export class VehicleSpawner {
     const nb = sim.collision.neighbors(veh, 0);
     if (!sim.collision.isClear(veh.obb, nb)) return false;
     veh.hornCooldown = this.rng.range(1, 4);
+    const [r0, r1] = veh.p.reaction || [0.5, 0.8];
+    veh.reaction = item.emergency ? 0.3 : this.rng.range(r0, r1);
     veh.idealTravel = 0;
     if (!item.emergency && LOADING_TYPES.has(item.type) && this.rng.chance(this.level.loadingStops || 0)) {
       const exit = item.route.exitLane;

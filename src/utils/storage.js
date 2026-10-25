@@ -1,6 +1,6 @@
 // Validated localStorage persistence with an in-memory fallback.
 
-import { CAREER_COUNT } from '../data/levels.js';
+import { CAREER_COUNT, PINOY_COUNT, PINOY_LEVELS, LEGACY_CAREER_TO_PINOY } from '../data/levels.js';
 
 const KEY = 'tcp.save.v1';
 
@@ -12,6 +12,10 @@ export const DEFAULT_SAVE = Object.freeze({
   endlessBestTime: 0,
   challengesCompleted: [],
   challengeBest: {},
+  pinoyUnlocked: 1, // Pinoy Roads levels unlocked, in list order
+  pinoyBest: {},
+  pinoyStars: {},
+  endlessBestByMap: {},
   tutorialDone: false,
   settings: {
     volume: 0.7,
@@ -55,6 +59,23 @@ export function validateSave(raw) {
   d.bestScores = sanitizeScoreMap(raw.bestScores, 1e7);
   d.bestStars = sanitizeScoreMap(raw.bestStars, 3);
   d.challengeBest = sanitizeScoreMap(raw.challengeBest, 1e7);
+  d.pinoyBest = sanitizeScoreMap(raw.pinoyBest, 1e7);
+  d.pinoyStars = sanitizeScoreMap(raw.pinoyStars, 3);
+  d.endlessBestByMap = sanitizeScoreMap(raw.endlessBestByMap, 1e7);
+  if (isNum(raw.pinoyUnlocked)) d.pinoyUnlocked = Math.floor(raw.pinoyUnlocked);
+  // Career levels 11–16 became Pinoy Roads levels: carry their progress over.
+  for (const [old, id] of Object.entries(LEGACY_CAREER_TO_PINOY)) {
+    if (old in d.bestScores) d.pinoyBest[id] = Math.max(d.pinoyBest[id] || 0, d.bestScores[old]);
+    if (old in d.bestStars) d.pinoyStars[id] = Math.max(d.pinoyStars[id] || 0, d.bestStars[old]);
+    delete d.bestScores[old];
+    delete d.bestStars[old];
+  }
+  if (isNum(raw.unlockedLevel) && raw.unlockedLevel > CAREER_COUNT) d.pinoyUnlocked = Math.max(d.pinoyUnlocked, Math.floor(raw.unlockedLevel) - CAREER_COUNT);
+  for (const id of Object.keys(d.pinoyStars)) {
+    const i = PINOY_LEVELS.findIndex((l) => l.id === id);
+    if (i >= 0 && d.pinoyStars[id] > 0) d.pinoyUnlocked = Math.max(d.pinoyUnlocked, i + 2);
+  }
+  d.pinoyUnlocked = Math.min(PINOY_COUNT, Math.max(1, d.pinoyUnlocked));
   if (isNum(raw.endlessBest) && raw.endlessBest >= 0) d.endlessBest = Math.floor(raw.endlessBest);
   if (isNum(raw.endlessBestTime) && raw.endlessBestTime >= 0) d.endlessBestTime = raw.endlessBestTime;
   if (Array.isArray(raw.challengesCompleted)) {

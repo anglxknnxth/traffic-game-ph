@@ -45,6 +45,7 @@ export class HUD {
       <div class="hud-top">
         <div class="hud-block hud-level"><span class="hud-mode"></span><span class="hud-name"></span></div>
         <div class="hud-block hud-time"><span class="lbl">Time</span><b data-k="time">0:00</b></div>
+        <div class="hud-block hud-env" hidden><span class="lbl" data-k="clock"></span><b data-k="weather"></b></div>
         <div class="hud-block hud-status" data-k="status"></div>
         <div class="hud-block hud-score"><span class="lbl">Score</span><b data-k="score">0</b></div>
         <div class="hud-actions">
@@ -77,6 +78,9 @@ export class HUD {
       mode: root.querySelector('.hud-mode'),
       name: root.querySelector('.hud-name'),
       time: root.querySelector('[data-k="time"]'),
+      env: root.querySelector('.hud-env'),
+      clock: root.querySelector('[data-k="clock"]'),
+      weather: root.querySelector('[data-k="weather"]'),
       status: root.querySelector('[data-k="status"]'),
       score: root.querySelector('[data-k="score"]'),
       objectives: root.querySelector('.hud-objectives'),
@@ -250,6 +254,13 @@ export class HUD {
     const lvl = s.level;
     this.el.time.textContent = lvl.duration ? formatTime(Math.max(0, lvl.duration - s.elapsed)) : formatTime(s.elapsed);
     this.el.score.textContent = sim.scoring.total().toLocaleString();
+    // Clock and weather (levels with an environment only)
+    this.el.env.hidden = !lvl.env;
+    if (lvl.env) {
+      const icon = sim.env.weather === 'clear' ? (sim.env.darkness > 0.5 ? '🌙' : '☀️') : sim.env.weather === 'rain' ? '🌧️' : '⛈️';
+      this.el.clock.textContent = sim.env.clock();
+      this.el.weather.textContent = `${icon} ${sim.env.label()}`;
+    }
     const [txt, cls] = LEVEL_TEXT[m.level] || LEVEL_TEXT.NORMAL;
     this.el.status.textContent = txt;
     this.el.status.className = `hud-block hud-status ${cls}`;
@@ -307,7 +318,7 @@ export class HUD {
       const ok = mgr.signalForGroup(p.group) === 'green';
       this.el.emergency.hidden = false;
       this.el.emergency.className = `hud-emergency ${ok ? 'ok' : ''}`;
-      this.el.emergency.innerHTML = `<b>${p.label.toUpperCase()}</b> from the ${ARM_LABEL[p.arm]} ${ok ? 'has a green light' : `needs <b>${mgr.labelOf(p.group)}</b> green`}${multi ? ` at ${p.intersectionId}` : ''} · ${Math.max(0, p.dist).toFixed(0)} m`;
+      this.el.emergency.innerHTML = `<b>${p.label.toUpperCase()}</b> from the ${ARM_LABEL[p.arm]} ${ok ? 'has a green light' : `will run the red · give <b>${mgr.labelOf(p.group)}</b> green to clear the way`}${multi ? ` at ${p.intersectionId}` : ''} · ${Math.max(0, p.dist).toFixed(0)} m`;
     } else {
       this.el.emergency.hidden = true;
     }

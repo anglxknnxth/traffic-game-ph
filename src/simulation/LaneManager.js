@@ -8,10 +8,13 @@
 // Each arm uses a road profile: lanes per direction, median width and lane types. Lanes of one
 // direction are indexed from the median (0) to the curb (n-1). With two lanes and no median this
 // reproduces the classic layout: lane 0 straight + left, lane 1 straight + right.
+// Arms may curve away from the node (see RoadGeometry): lanes are offset curves of the arm's centre
+// line and use the distance along it as their coordinate, so parallel lanes stay in step.
 
 import { Path, cubicBezierPoints } from '../utils/math.js';
 import { ARMS, DIRS, LANE_WIDTH, CROSSWALK_WIDTH, ARM_LENGTH, ARM_LABEL, GROUP_LABEL } from '../data/config.js';
 import { getMap } from '../data/maps/index.js';
+import { Centerline, STRAIGHT_LEAD, LINK_LEAD, curveLimits } from './RoadGeometry.js';
 
 export const CROSSWALK_GAP = 0.8; // asphalt between the crossing road edge and the zebra
 export const MOVE_ORDER = ['straight', 'left', 'right', 'uturn'];
@@ -97,6 +100,7 @@ export class Network {
       }
       this._nodeGeometry(I);
     }
+    this._buildCenterlines(map);
     for (const I of this.intersections) {
       for (const arm of ARMS) if (I.arms[arm].type === 'external') this._buildExternalArm(I, arm);
     }
@@ -134,11 +138,15 @@ export class Network {
       A.median = A.profile.median;
       if (I.kind === 'uturn') {
         A.stop = uturnHalf;
+        A.exitStop = uturnHalf;
         A.cwStart = null;
       } else {
         const cross = arm === 'N' || arm === 'S' ? I.hy : I.hx;
         A.cwStart = cross + CROSSWALK_GAP;
-        A.stop = A.cwStart + CROSSWALK_WIDTH + CROSSWALK_GAP;
+        // Single-lane streets get a set-back stop line so trucks and buses can swing in past waiting cars.
+        const setback = I.def.setback?.[arm] ?? (A.profile.lanes === 1 ? 5 : 0);
+        A.exitStop = A.cwStart + CROSSWALK_WIDTH + CROSSWALK_GAP; // where exit lanes begin
+        A.stop = A.exitStop + setback; // approach stop line
       }
     }
     const stopOr = (a, fallback) => (I.arms[a].type === 'none' ? fallback : I.arms[a].stop);
@@ -151,21 +159,54 @@ export class Network {
     I.maxStop = Math.max(...ARMS.map((a) => stopOr(a, 0)));
   }
 
+  /** Centre line of every arm, oriented outward from its node (links get one shared line). */
+  _buildCenterlines(map) {
+    for (const I of this.intersections) {
+      for (const arm of ARMS) {
+        const A = I.arms[arm];
+        if (A.type !== 'external') continue;
+        // Drawn well past the end of the lanes so the road runs off screen.
+        A.center = Centerline.fromShape(I, DIRS[arm], I.def.shape?.[arm] || [], A.length + 130, A.stop + STRAIGHT_LEAD);
+        this._checkRadius(I, arm, A);
+      }
+    }
+    for (const link of map.links || []) {
+      const A = this.byId.get(link.a);
+      const B = this.byId.get(link.b);
+      const c = Centerline.link(A, DIRS[link.aArm], A.arms[link.aArm].stop + LINK_LEAD, B, DIRS[link.bArm], B.arms[link.bArm].stop + LINK_LEAD);
+      A.arms[link.aArm].center = c;
+      B.arms[link.bArm].center = c.reversed();
+      this._checkRadius(A, link.aArm, A.arms[link.aArm]);
+    }
+  }
+
+  _checkRadius(I, arm, A) {
+    if (A.center.minRadius < A.half + 3) throw new Error(`Map ${this.map.id}: ${I.id}${arm} bends too tightly (radius ${A.center.minRadius.toFixed(1)} m for a road ${(2 * A.half).toFixed(1)} m wide)`);
+  }
+
   /** True when (x, y) lies inside the node box (between the stop lines). */
   static inCore(I, x, y, pad = 0) {
     const c = I.core;
     return x > c.minX - pad && x < c.maxX + pad && y > c.minY - pad && y < c.maxY + pad;
   }
 
-  _makeLane(id, role, start, end, props) {
-    const lane = new Segment('lane', id, new Path([start, end]));
+  /** Lane along `center` from u0 to u1 at lateral offset d (reversed: travelling toward u0). */
+  _makeLane(id, role, center, u0, u1, d, reversed, props) {
+    const { points, params } = center.offset(u0, u1, d);
+    if (reversed) {
+      points.reverse();
+      params.reverse();
+      for (let i = 0; i < params.length; i++) params[i] = u1 - params[i];
+    }
+    const lane = new Segment('lane', id, new Path(points, params));
     Object.assign(lane, props);
     lane.role = role;
     lane.committed = new Set(); // vehicles holding a reservation into this lane
     lane.keepClear = new Map(); // vehicle -> max front localS while that reservation lasts
     lane.connectors = {};
-    lane.start = start;
-    lane.end = end;
+    lane.start = points[0];
+    lane.end = points[points.length - 1];
+    lane.curves = curveLimits(center, u0, u1, reversed);
     lane.allowed = LANE_ALLOWED[lane.type] || null;
     lane.allows = (type) => !lane.allowed || lane.allowed.has(type);
     this.lanes.push(lane);
@@ -187,33 +228,23 @@ export class Network {
   _buildExternalArm(I, arm) {
     const A = I.arms[arm];
     const p = A.profile;
-    const o = DIRS[arm];
-    const dIn = { x: -o.x, y: -o.y };
-    const rIn = rightOf(dIn);
-    const rOut = rightOf(o);
+    const c = A.center;
     const L = A.length;
     I.approachLanes[arm] = [];
     I.exitLanes[arm] = [];
     for (let k = 0; k < p.lanes; k++) {
       const lp = this._laneProps(p, k);
       const off = lp.offset;
-      const a = this._makeLane(
-        `${I.id}:${arm}:in${k}`,
-        'approach',
-        { x: I.x + o.x * L + rIn.x * off, y: I.y + o.y * L + rIn.y * off },
-        { x: I.x + o.x * A.stop + rIn.x * off, y: I.y + o.y * A.stop + rIn.y * off },
-        { ...lp, endInt: I, endArm: arm, startInt: null, startArm: null, spawn: true, demandKey: `${I.id}:${arm}`, arm },
-      );
+      // Approach lanes sit left of the outward direction (right of travel toward the node).
+      const a = this._makeLane(`${I.id}:${arm}:in${k}`, 'approach', c, A.stop, L, -off, true, {
+        ...lp, endInt: I, endArm: arm, startInt: null, startArm: null, spawn: true, demandKey: `${I.id}:${arm}`, arm,
+      });
       I.approachLanes[arm][k] = a;
       this.spawnLanes.push(a);
 
-      const e = this._makeLane(
-        `${I.id}:${arm}:out${k}`,
-        'exit',
-        { x: I.x + o.x * A.stop + rOut.x * off, y: I.y + o.y * A.stop + rOut.y * off },
-        { x: I.x + o.x * L + rOut.x * off, y: I.y + o.y * L + rOut.y * off },
-        { ...lp, endInt: null, endArm: null, startInt: I, startArm: arm, despawn: true, exitKey: `${I.id}:${arm}`, arm },
-      );
+      const e = this._makeLane(`${I.id}:${arm}:out${k}`, 'exit', c, A.exitStop, L, off, false, {
+        ...lp, endInt: null, endArm: null, startInt: I, startArm: arm, despawn: true, exitKey: `${I.id}:${arm}`, arm,
+      });
       e.gate = { tokens: 1, cap: 1.5 };
       I.exitLanes[arm][k] = e;
       this.exitLanes.push(e);
@@ -221,27 +252,27 @@ export class Network {
   }
 
   _buildLink(A, aArm, B, bArm) {
-    const e = DIRS[aArm];
-    const r = rightOf(e);
-    const ob = DIRS[bArm];
     const p = A.arms[aArm].profile;
     const pb = B.arms[bArm].profile;
     if (p.lanes !== pb.lanes || Math.abs(p.median - pb.median) > 1e-9) throw new Error(`Link ${A.id}${aArm}–${B.id}${bArm}: road profiles differ`);
-    if (Math.abs(e.x) > 0 ? Math.abs(A.y - B.y) > 1e-9 : Math.abs(A.x - B.x) > 1e-9) throw new Error(`Link ${A.id}${aArm}–${B.id}${bArm}: nodes not aligned`);
-    const sa = A.arms[aArm].stop;
-    const sb = B.arms[bArm].stop;
+    const c = A.arms[aArm].center; // runs from A to B
+    const sa = A.arms[aArm].exitStop;
+    const sb = c.length - B.arms[bArm].stop;
+    if (sb - sa < 5) throw new Error(`Link ${A.id}${aArm}–${B.id}${bArm}: nodes too close`);
     A.exitLanes[aArm] = A.exitLanes[aArm] || [];
     B.approachLanes[bArm] = B.approachLanes[bArm] || [];
     for (let k = 0; k < p.lanes; k++) {
       const lp = this._laneProps(p, k);
       const off = lp.offset;
-      const lane = this._makeLane(
-        `${A.id}${aArm}>${B.id}${bArm}:${k}`,
-        'link',
-        { x: A.x + e.x * sa + r.x * off, y: A.y + e.y * sa + r.y * off },
-        { x: B.x + ob.x * sb + r.x * off, y: B.y + ob.y * sb + r.y * off },
-        { ...lp, startInt: A, startArm: aArm, endInt: B, endArm: bArm, spawn: false, arm: bArm },
-      );
+      const lane = this._makeLane(`${A.id}${aArm}>${B.id}${bArm}:${k}`, 'link', c, sa, sb, off, false, {
+        ...lp,
+        startInt: A,
+        startArm: aArm,
+        endInt: B,
+        endArm: bArm,
+        spawn: false,
+        arm: bArm,
+      });
       A.exitLanes[aArm][k] = lane;
       B.approachLanes[bArm][k] = lane;
     }
@@ -336,6 +367,7 @@ export class Network {
           const p0 = lane.end;
           const p3 = toLane.start;
           let pts;
+          let widePts = null;
           if (m === 'straight') {
             const lateral = Math.abs((p3.x - p0.x) * -d.y + (p3.y - p0.y) * d.x);
             if (lateral < 1e-6) pts = [p0, p3];
@@ -350,10 +382,11 @@ export class Network {
             const q = Math.abs(d.x) < 1e-6 ? { x: p0.x, y: p3.y } : { x: p3.x, y: p0.y };
             const r1 = Math.hypot(q.x - p0.x, q.y - p0.y);
             const r2 = Math.hypot(q.x - p3.x, q.y - p3.y);
-            const kappa = 0.5523;
-            const p1 = { x: p0.x + d.x * r1 * kappa, y: p0.y + d.y * r1 * kappa };
-            const p2 = { x: p3.x - exitVec.x * r2 * kappa, y: p3.y - exitVec.y * r2 * kappa };
-            pts = cubicBezierPoints(p0, p1, p2, p3, 32);
+            const curve = (kappa) =>
+              cubicBezierPoints(p0, { x: p0.x + d.x * r1 * kappa, y: p0.y + d.y * r1 * kappa }, { x: p3.x - exitVec.x * r2 * kappa, y: p3.y - exitVec.y * r2 * kappa }, p3, 32);
+            pts = curve(0.5523);
+            // Long vehicles run deeper into the box before turning (a wider swing).
+            widePts = curve(0.82);
           }
           const conn = new Segment('connector', `${I.id}:${X}${k}>${Y}${kOut}`, new Path(pts));
           conn.intersection = I;
@@ -363,13 +396,30 @@ export class Network {
           conn.laneIndex = k;
           conn.fromLane = lane;
           conn.toLane = toLane;
-          I.connectors.push(conn);
-          this.connectors.push(conn);
-          this.segments.push(conn);
+          this._addConnector(I, conn);
           lane.connectors[m] = conn;
+          if (widePts) {
+            const wide = new Segment('connector', `${conn.id}w`, new Path(widePts));
+            Object.assign(wide, { intersection: I, arm: X, exitArm: Y, movement: m, laneIndex: k, fromLane: lane, toLane, wide: true });
+            this._addConnector(I, wide);
+            lane.connectorsWide = lane.connectorsWide || {};
+            lane.connectorsWide[m] = wide;
+          }
         }
       }
     }
+  }
+
+  _addConnector(I, conn) {
+    I.connectors.push(conn);
+    this.connectors.push(conn);
+    this.segments.push(conn);
+  }
+
+  /** Connector a vehicle of this size takes for `move` from `lane` (wide swing for buses and trucks). */
+  static connectorFor(lane, move, spec) {
+    if (spec && spec.length > 8 && lane.connectorsWide?.[move]) return lane.connectorsWide[move];
+    return lane.connectors[move];
   }
 
   /** Signal phases for a node: the map's own list, or one phase per road axis. */
@@ -396,11 +446,12 @@ export class Network {
     let maxX = -Infinity;
     let maxY = -Infinity;
     for (const l of this.lanes) {
-      for (const p of [l.start, l.end]) {
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
+      const { xs, ys } = l.path;
+      for (let i = 0; i < xs.length; i++) {
+        minX = Math.min(minX, xs[i]);
+        minY = Math.min(minY, ys[i]);
+        maxX = Math.max(maxX, xs[i]);
+        maxY = Math.max(maxY, ys[i]);
       }
     }
     return { minX, minY, maxX, maxY };

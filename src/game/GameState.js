@@ -22,4 +22,5 @@ export const MODE_LABEL = {
   tutorial: 'Tutorial',
   endless: 'Endless',
   challenge: 'Challenge',
+  pinoy: 'Pinoy Roads',
 };

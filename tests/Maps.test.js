@@ -99,7 +99,7 @@ describe('Road network from maps', () => {
 });
 
 describe('Philippine maps stay collision-free with mixed traffic', () => {
-  for (const id of ['edsa', 'commonwealth', 'taft', 'espana', 'poblacion', 'corridor', 'grid']) {
+  for (const id of ['edsa', 'commonwealth', 'taft', 'espana', 'poblacion', 'corridor', 'grid', 'likoliko', 'single']) {
     it(`${id}`, () => {
       const sim = new TrafficSimulator(mixed(id), { seed: 11 });
       let wrongLane = 0;
@@ -122,7 +122,7 @@ describe('Philippine maps stay collision-free with mixed traffic', () => {
     const Y1 = sim.network.byId.get('Y1');
     let minorEntries = 0;
     let unsafe = 0;
-    runMap(sim, 90, (s) => {
+    runMap(sim, 150, (s) => {
       for (const v of s.vehicles) {
         const res = v.reservations.get('Y1');
         if (!res || res.checked || Y1.major.has(res.conn.arm)) continue;

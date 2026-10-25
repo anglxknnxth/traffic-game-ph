@@ -5,6 +5,7 @@ import { RoadRenderer } from './RoadRenderer.js';
 import { drawVehicle } from './VehicleRenderer.js';
 import { TrafficLightRenderer } from './TrafficLightRenderer.js';
 import { EffectsRenderer } from './EffectsRenderer.js';
+import { WeatherRenderer } from './WeatherRenderer.js';
 
 export class Renderer {
   constructor(canvas, camera) {
@@ -13,6 +14,7 @@ export class Renderer {
     this.camera = camera;
     this.lights = new TrafficLightRenderer();
     this.effects = new EffectsRenderer();
+    this.weather = new WeatherRenderer();
     this.road = null;
     this.network = null;
     this.staticCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
@@ -54,6 +56,7 @@ export class Renderer {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     this._ensureStatic();
     ctx.drawImage(this.staticCanvas, 0, 0);
+    this.weather.drawWet(ctx, this.canvas, sim.env);
 
     cam.apply(ctx);
     this.road.drawDynamic(ctx, sim, time);
@@ -69,7 +72,12 @@ export class Renderer {
     for (const v of visible) drawVehicle(ctx, v, time);
     this.effects.drawOver(ctx, visible, time);
     this.road.drawOverlays(ctx, time);
-    this.lights.draw(ctx, sim, time, hoveredHead);
+    this.weather.drawAtmosphere(ctx, this.canvas, cam, sim, this.road.scenery.posts, visible, time);
+    // Signal heads stay readable at night: draw them over the darkness.
+    if (sim.env?.darkness > 0.02) {
+      cam.apply(ctx);
+      this.lights.draw(ctx, sim, time, hoveredHead);
+    }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 }

@@ -3,9 +3,11 @@
 // elevated structures drawn over traffic (MRT/LRT guideways, footbridges).
 //
 // Everything is driven by the network geometry: each arm has its own road half-width, median,
-// stop line and lane types, so wide avenues, T-junctions and U-turn slots draw correctly.
+// stop line and lane types, so wide avenues, T-junctions and U-turn slots draw correctly. Roads are
+// drawn as bands along each arm's centre line, so bends and S-curves follow the lanes exactly.
 
-import { Rng } from '../utils/math.js';
+import { Rng, makeObb, setObb, obbOverlap } from '../utils/math.js';
+import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
 import { ARMS, DIRS, LANE_WIDTH, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
 import { rightOf, leftOf } from '../simulation/LaneManager.js';
 
@@ -76,11 +78,25 @@ const sideArms = (arm) => {
 /** Length to draw along an arm: to the map edge for external roads, halfway for links. */
 export function armLength(network, I, arm) {
   const A = I.arms[arm];
-  if (A.type === 'link') {
-    const B = network.byId.get(A.other);
-    return Math.hypot(B.x - I.x, B.y - I.y) / 2 + 0.05;
-  }
+  if (A.type === 'link') return A.center.length / 2 + 0.05;
   return (A.length || 120) + 120;
+}
+
+/** Oriented box (centre, size along/across, angle) with a cached AABB for quick rejection. */
+function box(cx, cy, w, h, angle) {
+  const c = Math.cos(angle);
+  const sn = Math.sin(angle);
+  const ex = Math.abs(c) * (w / 2) + Math.abs(sn) * (h / 2);
+  const ey = Math.abs(sn) * (w / 2) + Math.abs(c) * (h / 2);
+  return { cx, cy, w, h, angle, obb: setObb(makeObb(), cx, cy, c, sn, w / 2, h / 2), minX: cx - ex, maxX: cx + ex, minY: cy - ey, maxY: cy + ey };
+}
+
+function hits(r, list, m) {
+  for (const q of list) {
+    if (r.minX > q.maxX + m || r.maxX < q.minX - m || r.minY > q.maxY + m || r.maxY < q.minY - m) continue;
+    if (obbOverlap(r.obb, q.obb, m)) return true;
+  }
+  return false;
 }
 
 function armFrame(ctx, I, arm) {
@@ -126,31 +142,35 @@ export class RoadRenderer {
     return I.kind !== 'uturn' && adjacent && I.arms[adjacent].type !== 'none';
   }
 
+  /** Centre line of an arm, oriented outward from I. */
+  _g(I, arm) {
+    return I.arms[arm].center;
+  }
+
   // ------------------------------------------------------------------ scenery generation
+  /** Road + sidewalk footprint as oriented boxes (short chunks along bends). */
   _corridors() {
-    const rects = [];
+    const boxes = [];
     for (const I of this.network.intersections) {
       let wx = 0;
       let wy = 0;
       for (const arm of this._arms(I)) {
         const A = I.arms[arm];
+        const g = this._g(I, arm);
         const len = armLength(this.network, I, arm);
         const w = A.half + SW;
-        const o = DIRS[arm];
-        const x1 = I.x + o.x * len;
-        const y1 = I.y + o.y * len;
-        rects.push({
-          minX: Math.min(I.x, x1) - (o.x === 0 ? w : 0),
-          maxX: Math.max(I.x, x1) + (o.x === 0 ? w : 0),
-          minY: Math.min(I.y, y1) - (o.y === 0 ? w : 0),
-          maxY: Math.max(I.y, y1) + (o.y === 0 ? w : 0),
-        });
-        if (o.x === 0) wx = Math.max(wx, w);
+        const step = g.isStraight(0, len) ? len : 5;
+        for (let x = 0; x < len; x += step) {
+          const x1 = Math.min(len, x + step);
+          const c = at(g, (x + x1) / 2, 0);
+          boxes.push(box(c.x, c.y, x1 - x + 1, 2 * w, c.angle));
+        }
+        if (DIRS[arm].x === 0) wx = Math.max(wx, w);
         else wy = Math.max(wy, w);
       }
-      rects.push({ minX: I.x - wx, maxX: I.x + wx, minY: I.y - wy, maxY: I.y + wy });
+      boxes.push(box(I.x, I.y, 2 * wx, 2 * wy, 0));
     }
-    return rects;
+    return boxes;
   }
 
   _generateScenery() {
@@ -164,16 +184,14 @@ export class RoadRenderer {
     const trees = [];
     const sheds = [];
     const posts = [];
-    const overlaps = (r, list, m) => list.some((q) => r.minX < q.maxX + m && r.maxX > q.minX - m && r.minY < q.maxY + m && r.maxY > q.minY - m);
     const detail = () => Array.from({ length: rng.int(0, 3) }, () => ({ u: rng.range(0.2, 0.8), v: rng.range(0.2, 0.8), kind: rng.chance(0.5) ? 'tank' : 'ac' }));
 
     // Frontage buildings along every arm (both sides), shops near intersections.
     for (const I of net.intersections) {
       for (const arm of this._arms(I)) {
         const A = I.arms[arm];
+        const g = this._g(I, arm);
         const len = Math.min(armLength(net, I, arm), 170);
-        const o = DIRS[arm];
-        const side = { x: -o.y, y: o.x };
         const start = I.kind === 'uturn' ? 0.5 : this._cross(I, arm) + SW + 1.2;
         for (const sgn of [-1, 1]) {
           let t = start;
@@ -181,12 +199,9 @@ export class RoadRenderer {
             const width = rng.range(7, 15);
             const depth = rng.range(9, 17);
             const off = A.half + SW + 0.8 + depth / 2;
-            const cx = I.x + o.x * (t + width / 2) + side.x * sgn * off;
-            const cy = I.y + o.y * (t + width / 2) + side.y * sgn * off;
-            const wx = o.x !== 0 ? width : depth;
-            const wy = o.x !== 0 ? depth : width;
-            const r = { minX: cx - wx / 2, maxX: cx + wx / 2, minY: cy - wy / 2, maxY: cy + wy / 2 };
-            if (!overlaps(r, corridors, 0.6) && !overlaps(r, buildings, 0.9)) {
+            const c = at(g, t + width / 2, sgn * off);
+            const r = box(c.x, c.y, width, depth, c.angle);
+            if (!hits(r, corridors, 0.6) && !hits(r, buildings, 0.9)) {
               const nearCorner = t < 55;
               buildings.push({
                 ...r,
@@ -194,27 +209,24 @@ export class RoadRenderer {
                 ribbed: rng.chance(0.55),
                 details: detail(),
                 shop: nearCorner && rng.chance(T.shopChance) ? { name: rng.pick(T.shops), awning: rng.pick(AWNING) } : null,
-                face: { x: -side.x * sgn, y: -side.y * sgn },
+                face: { x: 0, y: -sgn }, // toward the road, in the building's own frame
               });
             }
             t += width + rng.range(T.gap[0], T.gap[1]);
           }
           // Trees and lamp posts on the sidewalk
-          let s = (A.stop || 0) + 9 + rng.range(0, 6);
-          while (s < len - 4) {
-            const off = A.half + SW - 1.0;
-            const x = I.x + o.x * s + side.x * sgn * off;
-            const y = I.y + o.y * s + side.y * sgn * off;
-            if (rng.chance(0.75)) trees.push({ x, y, r: rng.range(1.3, 1.9), shade: rng.range(0, 1) });
-            else posts.push({ x, y });
-            s += rng.range(9, 15);
+          let st = (A.stop || 0) + 9 + rng.range(0, 6);
+          while (st < len - 4) {
+            const q = at(g, st, sgn * (A.half + SW - 1.0));
+            if (rng.chance(0.75)) trees.push({ x: q.x, y: q.y, r: rng.range(1.3, 1.9), shade: rng.range(0, 1) });
+            else posts.push({ x: q.x, y: q.y });
+            st += rng.range(9, 15);
           }
         }
         // Waiting shed at the jeepney loading zone on external exits
         if (A.type === 'external') {
-          const s = A.stop + LOADING_ZONE_S - 6;
-          const off = A.half + SW - 1.5;
-          sheds.push({ x: I.x + o.x * s + side.x * off, y: I.y + o.y * s + side.y * off, horiz: o.y === 0, color: rng.pick(['#2563eb', '#16a34a', '#dc2626']) });
+          const q = at(g, A.exitStop + LOADING_ZONE_S - 6, A.half + SW - 1.5);
+          sheds.push({ x: q.x, y: q.y, angle: q.angle, color: rng.pick(['#2563eb', '#16a34a', '#dc2626']) });
         }
       }
     }
@@ -224,16 +236,16 @@ export class RoadRenderer {
       const wy = rng.range(8, 20);
       const cx = rng.range(area.minX, area.maxX);
       const cy = rng.range(area.minY, area.maxY);
-      const r = { minX: cx - wx / 2, maxX: cx + wx / 2, minY: cy - wy / 2, maxY: cy + wy / 2 };
-      if (overlaps(r, corridors, 2) || overlaps(r, buildings, 1.4)) continue;
+      const r = box(cx, cy, wx, wy, 0);
+      if (hits(r, corridors, 2) || hits(r, buildings, 1.4)) continue;
       buildings.push({ ...r, color: rng.pick(T.roofs), ribbed: rng.chance(0.5), details: detail(), shop: null });
     }
     // Scattered trees in lots
     for (let i = 0; i < T.trees; i++) {
       const x = rng.range(area.minX, area.maxX);
       const y = rng.range(area.minY, area.maxY);
-      const r = { minX: x - 2, maxX: x + 2, minY: y - 2, maxY: y + 2 };
-      if (overlaps(r, corridors, 0.5) || overlaps(r, buildings, 0.3)) continue;
+      const r = box(x, y, 4, 4, 0);
+      if (hits(r, corridors, 0.5) || hits(r, buildings, 0.3)) continue;
       trees.push({ x, y, r: rng.range(1.6, 2.6), shade: rng.range(0, 1) });
     }
     return { buildings, trees, sheds, posts, area };
@@ -249,35 +261,34 @@ export class RoadRenderer {
 
     const eachArm = (fn) => {
       for (const I of net.intersections) {
-        for (const arm of this._arms(I)) {
-          ctx.save();
-          armFrame(ctx, I, arm);
-          fn(I, arm, I.arms[arm], armLength(net, I, arm));
-          ctx.restore();
-        }
+        for (const arm of this._arms(I)) fn(I, arm, I.arms[arm], armLength(net, I, arm), this._g(I, arm));
       }
     };
+    const p1 = {};
+    const p2 = {};
 
     // Sidewalks
     ctx.fillStyle = COLORS.sidewalk;
-    eachArm((I, arm, A, len) => ctx.fillRect(0, -(A.half + SW), len, 2 * (A.half + SW)));
+    eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -(A.half + SW), A.half + SW));
     // Sidewalk paving joints
     ctx.strokeStyle = 'rgba(0,0,0,0.07)';
     ctx.lineWidth = 0.08;
-    eachArm((I, arm, A, len) => {
+    eachArm((I, arm, A, len, g) => {
       const h = A.half;
       ctx.beginPath();
       for (let x = this._cross(I, arm) + SW; x < len; x += 2) {
-        ctx.moveTo(x, h + 0.3);
-        ctx.lineTo(x, h + SW);
-        ctx.moveTo(x, -h - 0.3);
-        ctx.lineTo(x, -h - SW);
+        for (const sgn of [1, -1]) {
+          at(g, x, sgn * (h + 0.3), p1);
+          at(g, x, sgn * (h + SW), p2);
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+        }
       }
       ctx.stroke();
     });
     // Asphalt
     ctx.fillStyle = COLORS.asphalt;
-    eachArm((I, arm, A, len) => ctx.fillRect(0, -A.half, len, 2 * A.half));
+    eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -A.half, A.half));
     // Rounded curbs where two roads meet
     for (const I of net.intersections) {
       if (I.kind === 'uturn') continue;
@@ -304,15 +315,13 @@ export class RoadRenderer {
     // Curb edge lines
     ctx.strokeStyle = COLORS.curb;
     ctx.lineWidth = 0.25;
-    eachArm((I, arm, A, len) => {
+    eachArm((I, arm, A, len, g) => {
       const sides = sideArms(arm);
       const cross = this._cross(I, arm);
       const from = (adj) => (this._hasCorner(I, adj) ? cross + R : 0);
       ctx.beginPath();
-      ctx.moveTo(from(sides.pos), A.half + 0.12);
-      ctx.lineTo(len, A.half + 0.12);
-      ctx.moveTo(from(sides.neg), -A.half - 0.12);
-      ctx.lineTo(len, -A.half - 0.12);
+      addLine(ctx, g, from(sides.pos), len, A.half + 0.12);
+      addLine(ctx, g, from(sides.neg), len, -A.half - 0.12);
       ctx.stroke();
     });
     // Asphalt texture patches
@@ -323,16 +332,20 @@ export class RoadRenderer {
         const arm = rng.pick(ARMS);
         const A = I.arms[arm];
         if (A.type === 'none') continue;
-        ctx.save();
-        armFrame(ctx, I, arm);
-        ctx.beginPath();
-        ctx.ellipse(rng.range(A.stop, 90), rng.range(-A.half + 1, A.half - 1), rng.range(0.6, 2.2), rng.range(0.3, 1.0), rng.range(0, 3), 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        const x = Math.min(rng.range(A.stop, 90), armLength(net, I, arm) - 2);
+        const y = rng.range(-A.half + 1, A.half - 1);
+        const rx = rng.range(0.6, 2.2);
+        const ry = rng.range(0.3, 1.0);
+        const rot = rng.range(0, 3);
+        withFrame(ctx, this._g(I, arm), x, y, () => {
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rx, ry, rot, 0, Math.PI * 2);
+          ctx.fill();
+        });
       }
     }
     // Medians
-    eachArm((I, arm, A, len) => this._drawMedian(ctx, I, A, len));
+    eachArm((I, arm, A, len, g) => this._drawMedian(ctx, I, A, len, g));
 
     for (const I of net.intersections) this._drawNodeMarkings(ctx, I);
     this._drawScenery(ctx);
@@ -343,7 +356,7 @@ export class RoadRenderer {
     return A.cwStart + CROSSWALK_WIDTH + 0.4;
   }
 
-  _drawMedian(ctx, I, A, len) {
+  _drawMedian(ctx, I, A, len, g) {
     const m = A.median;
     if (m < 0.3) return;
     const x0 = this._medianStart(I, A);
@@ -352,29 +365,38 @@ export class RoadRenderer {
     if (style === 'barrier') {
       // Jersey barrier: a narrow concrete wall on the centre line.
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(x0, -0.25, len - x0, 0.7);
+      strip(ctx, g, x0, len, -0.25, 0.45);
       ctx.fillStyle = '#c4c0b8';
-      ctx.fillRect(x0, -0.35, len - x0, 0.7);
+      strip(ctx, g, x0, len, -0.35, 0.35);
       ctx.fillStyle = '#e7e3da';
-      ctx.fillRect(x0, -0.08, len - x0, 0.16);
+      strip(ctx, g, x0, len, -0.08, 0.08);
       return;
     }
     const h = m / 2 - 0.15;
     ctx.fillStyle = style === 'grass' ? COLORS.medianGrass : COLORS.median;
-    ctx.fillRect(x0, -h, len - x0, 2 * h);
+    strip(ctx, g, x0, len, -h, h);
     ctx.strokeStyle = COLORS.yellow;
     ctx.lineWidth = 0.2;
-    ctx.strokeRect(x0, -h, len - x0, 2 * h);
+    ctx.beginPath();
+    addLine(ctx, g, x0, len, -h);
+    addLine(ctx, g, x0, len, h);
+    const e0 = at(g, x0, -h);
+    const e1 = at(g, x0, h);
+    ctx.moveTo(e0.x, e0.y);
+    ctx.lineTo(e1.x, e1.y);
+    ctx.stroke();
     if (style === 'grass') {
       for (let x = x0 + 4; x < len - 2; x += 9) {
-        ctx.fillStyle = 'rgba(0,0,0,0.2)';
-        ctx.beginPath();
-        ctx.arc(x + 0.3, 0.35, Math.min(1.4, h), 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#3f7a35';
-        ctx.beginPath();
-        ctx.arc(x, 0, Math.min(1.4, h), 0, Math.PI * 2);
-        ctx.fill();
+        withFrame(ctx, g, x, 0, () => {
+          ctx.fillStyle = 'rgba(0,0,0,0.2)';
+          ctx.beginPath();
+          ctx.arc(0.3, 0.35, Math.min(1.4, h), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#3f7a35';
+          ctx.beginPath();
+          ctx.arc(0, 0, Math.min(1.4, h), 0, Math.PI * 2);
+          ctx.fill();
+        });
       }
     }
   }
@@ -409,8 +431,10 @@ export class RoadRenderer {
     }
     if (I.kind === 'uturn') worldText(ctx, 'U-TURN SLOT', I.x, I.y, 1.3, 'rgba(242,194,48,0.9)', Math.abs(DIRS[this._arms(I)[0]].x) > 0 ? 0 : Math.PI / 2);
 
+    const q = {};
     for (const arm of this._arms(I)) {
       const A = I.arms[arm];
+      const g = this._g(I, arm);
       const len = armLength(net, I, arm);
       const m = A.median;
       const h = A.half;
@@ -418,14 +442,13 @@ export class RoadRenderer {
       const xs = A.stop + 0.6;
       const lanes = I.approachLanes[arm] || [];
       const exits = I.exitLanes[arm] || [];
-      ctx.save();
-      armFrame(ctx, I, arm);
 
+      // ---- Markings that run the length of the arm (they follow its bends)
       // Centre: double yellow on undivided roads
       if (m < 0.3) {
         ctx.fillStyle = COLORS.yellow;
-        ctx.fillRect(xs, -0.27, len - xs, 0.13);
-        ctx.fillRect(xs, 0.14, len - xs, 0.13);
+        strip(ctx, g, xs, len, -0.27, -0.14);
+        strip(ctx, g, xs, len, 0.14, 0.27);
       }
       // Dedicated lane tints and legends
       const laneStrip = (k, sign) => [sign * (m / 2 + LW * (k + 1)), sign * (m / 2 + LW * k)];
@@ -437,28 +460,31 @@ export class RoadRenderer {
           if (lane.type === 'general') continue;
           const [ya, yb] = laneStrip(lane.laneIndex, sign);
           ctx.fillStyle = lane.type === 'bus' ? COLORS.busTint : COLORS.motoTint;
-          ctx.fillRect(xs, Math.min(ya, yb), len - xs, LW);
+          strip(ctx, g, xs, len, Math.min(ya, yb), Math.min(ya, yb) + LW);
           const label = lane.type === 'bus' ? 'BUS LANE' : 'MOTORCYCLE LANE';
-          for (let x = xs + 22; x < len - 10; x += 48) worldText(ctx, label, x, sign * lane.offset, lane.type === 'bus' ? 1.25 : 0.95, lane.type === 'bus' ? 'rgba(242,194,48,0.85)' : 'rgba(255,255,255,0.8)');
+          for (let x = xs + 22; x < len - 10; x += 48) {
+            at(g, x, sign * lane.offset, q);
+            worldText(ctx, label, q.x, q.y, lane.type === 'bus' ? 1.25 : 0.95, lane.type === 'bus' ? 'rgba(242,194,48,0.85)' : 'rgba(255,255,255,0.8)', q.angle);
+          }
         }
       }
       // Edge lines
       ctx.fillStyle = COLORS.white;
-      ctx.fillRect(xs, -h + 0.25, len - xs, 0.12);
-      ctx.fillRect(xs, h - 0.37, len - xs, 0.12);
+      strip(ctx, g, xs, len, -h + 0.25, -h + 0.37);
+      strip(ctx, g, xs, len, h - 0.37, h - 0.25);
       // Lane dividers. Approach: solid near the stop line, dashed further out. Exit: dashed.
       // Lines next to a dedicated lane are solid (yellow for the busway).
       const divider = (y, approach, special) => {
         ctx.fillStyle = special === 'bus' ? COLORS.yellow : COLORS.white;
         if (special) {
-          ctx.fillRect(xs - 0.15, y - 0.07, len - xs, 0.14);
+          strip(ctx, g, xs - 0.15, len, y - 0.07, y + 0.07);
           return;
         }
         if (approach) {
-          ctx.fillRect(A.stop + 0.45, y - 0.06, 18, 0.12);
-          for (let x = A.stop + 22; x < len; x += 7) ctx.fillRect(x, y - 0.06, 3, 0.12);
+          strip(ctx, g, A.stop + 0.45, A.stop + 18.45, y - 0.06, y + 0.06);
+          dashes(ctx, g, A.stop + 22, len, y, 3, 7, 0.12);
         } else {
-          for (let x = A.stop + 1.5; x < len; x += 7) ctx.fillRect(x, y - 0.06, 3, 0.12);
+          dashes(ctx, g, A.exitStop + 1.5, len, y, 3, 7, 0.12);
         }
       };
       for (let k = 0; k < p.lanes - 1; k++) {
@@ -467,6 +493,10 @@ export class RoadRenderer {
         divider(-(m / 2 + LW * (k + 1)), true, sp);
         divider(m / 2 + LW * (k + 1), false, sp);
       }
+
+      // ---- Markings near the junction (always on the straight lead)
+      ctx.save();
+      armFrame(ctx, I, arm);
       // Through-lane guides across a U-turn slot
       if (I.kind === 'uturn') {
         ctx.fillStyle = 'rgba(240,240,236,0.5)';
@@ -489,22 +519,35 @@ export class RoadRenderer {
       }
       // Lane arrows (pointing toward the intersection = local -x)
       for (const lane of lanes) if (lane.moves?.length) this._arrow(ctx, A.stop + 8, -lane.offset, lane.moves);
-      // Jeepney loading zone on the curb exit lane, bus stop on the busway
+      ctx.restore();
+
+      // Jeepney loading zone on the curb exit lane, bus stop on the busway (may sit on a bend)
       if (A.type === 'external') {
         for (const lane of exits) {
           const isJeep = lane.isCurb && lane.type === 'general';
           const isBus = lane.type === 'bus';
           if (!isJeep && !isBus) continue;
-          const x0 = A.stop + LOADING_ZONE_S - 13;
+          const x0 = A.exitStop + LOADING_ZONE_S - 13;
+          const y0 = lane.offset - LW / 2 + 0.25;
+          const y1 = lane.offset + LW / 2 - 0.35;
           ctx.strokeStyle = 'rgba(242,194,48,0.85)';
           ctx.lineWidth = 0.14;
           ctx.setLineDash([0.8, 0.6]);
-          ctx.strokeRect(x0, lane.offset - LW / 2 + 0.25, 13.3, LW - 0.6);
+          ctx.beginPath();
+          addLine(ctx, g, x0, x0 + 13.3, y0);
+          addLine(ctx, g, x0, x0 + 13.3, y1);
+          for (const x of [x0, x0 + 13.3]) {
+            at(g, x, y0, q);
+            ctx.moveTo(q.x, q.y);
+            at(g, x, y1, q);
+            ctx.lineTo(q.x, q.y);
+          }
+          ctx.stroke();
           ctx.setLineDash([]);
-          worldText(ctx, isBus ? 'BUS STOP' : 'JEEP STOP', x0 + 6.6, lane.offset, 1.1, 'rgba(242,194,48,0.9)', 0);
+          at(g, x0 + 6.6, lane.offset, q);
+          worldText(ctx, isBus ? 'BUS STOP' : 'JEEP STOP', q.x, q.y, 1.1, 'rgba(242,194,48,0.9)', q.angle);
         }
       }
-      ctx.restore();
     }
   }
 
@@ -547,26 +590,37 @@ export class RoadRenderer {
   _drawScenery(ctx) {
     const { buildings, trees, sheds, posts } = this.scenery;
     for (const b of buildings) {
-      const w = b.maxX - b.minX;
-      const h = b.maxY - b.minY;
+      const w = b.w;
+      const h = b.h;
+      const minX = -w / 2;
+      const minY = -h / 2;
+      const maxX = w / 2;
+      const maxY = h / 2;
+      ctx.save();
+      ctx.translate(b.cx + 0.5, b.cy + 0.7);
+      ctx.rotate(b.angle);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(b.minX + 0.5, b.minY + 0.7, w, h);
+      ctx.fillRect(minX, minY, w, h);
+      ctx.restore();
+      ctx.save();
+      ctx.translate(b.cx, b.cy);
+      ctx.rotate(b.angle);
       ctx.fillStyle = b.color;
-      ctx.fillRect(b.minX, b.minY, w, h);
+      ctx.fillRect(minX, minY, w, h);
       if (b.ribbed) {
         ctx.strokeStyle = 'rgba(0,0,0,0.13)';
         ctx.lineWidth = 0.12;
         ctx.beginPath();
-        if (w > h) for (let x = b.minX + 0.6; x < b.maxX; x += 0.6) { ctx.moveTo(x, b.minY); ctx.lineTo(x, b.maxY); }
-        else for (let y = b.minY + 0.6; y < b.maxY; y += 0.6) { ctx.moveTo(b.minX, y); ctx.lineTo(b.maxX, y); }
+        if (w > h) for (let x = minX + 0.6; x < maxX; x += 0.6) { ctx.moveTo(x, minY); ctx.lineTo(x, maxY); }
+        else for (let y = minY + 0.6; y < maxY; y += 0.6) { ctx.moveTo(minX, y); ctx.lineTo(maxX, y); }
         ctx.stroke();
       }
       ctx.strokeStyle = 'rgba(0,0,0,0.3)';
       ctx.lineWidth = 0.2;
-      ctx.strokeRect(b.minX, b.minY, w, h);
+      ctx.strokeRect(minX, minY, w, h);
       for (const d of b.details) {
-        const x = b.minX + d.u * w;
-        const y = b.minY + d.v * h;
+        const x = minX + d.u * w;
+        const y = minY + d.v * h;
         if (d.kind === 'tank') {
           ctx.fillStyle = '#2b6cb0';
           ctx.beginPath();
@@ -589,10 +643,10 @@ export class RoadRenderer {
         const [c1, c2] = b.shop.awning;
         const depth = 1.4;
         let ax, ay, aw, ah;
-        if (f.x > 0) [ax, ay, aw, ah] = [b.maxX, b.minY + 0.6, depth, h - 1.2];
-        else if (f.x < 0) [ax, ay, aw, ah] = [b.minX - depth, b.minY + 0.6, depth, h - 1.2];
-        else if (f.y > 0) [ax, ay, aw, ah] = [b.minX + 0.6, b.maxY, w - 1.2, depth];
-        else [ax, ay, aw, ah] = [b.minX + 0.6, b.minY - depth, w - 1.2, depth];
+        if (f.x > 0) [ax, ay, aw, ah] = [maxX, minY + 0.6, depth, h - 1.2];
+        else if (f.x < 0) [ax, ay, aw, ah] = [minX - depth, minY + 0.6, depth, h - 1.2];
+        else if (f.y > 0) [ax, ay, aw, ah] = [minX + 0.6, maxY, w - 1.2, depth];
+        else [ax, ay, aw, ah] = [minX + 0.6, minY - depth, w - 1.2, depth];
         const horiz = aw > ah;
         const n = Math.max(2, Math.floor((horiz ? aw : ah) / 0.8));
         for (let i = 0; i < n; i++) {
@@ -601,8 +655,8 @@ export class RoadRenderer {
           else ctx.fillRect(ax, ay + (ah * i) / n, aw, ah / n + 0.01);
         }
         // Sign on the roof edge
-        const sx = f.x !== 0 ? (f.x > 0 ? b.maxX - 1.3 : b.minX + 1.3) : (b.minX + b.maxX) / 2;
-        const sy = f.y !== 0 ? (f.y > 0 ? b.maxY - 1.3 : b.minY + 1.3) : (b.minY + b.maxY) / 2;
+        const sx = f.x !== 0 ? (f.x > 0 ? maxX - 1.3 : minX + 1.3) : 0;
+        const sy = f.y !== 0 ? (f.y > 0 ? maxY - 1.3 : minY + 1.3) : 0;
         const ang = f.x !== 0 ? -Math.PI / 2 : 0;
         ctx.save();
         ctx.translate(sx, sy);
@@ -616,17 +670,21 @@ export class RoadRenderer {
         worldText(ctx, b.shop.name, 0, 0.02, 1.0, '#1f2937');
         ctx.restore();
       }
+      ctx.restore();
     }
-    for (const s of sheds) {
-      const w = s.horiz ? 4.5 : 1.8;
-      const h = s.horiz ? 1.8 : 4.5;
+    for (const sh of sheds) {
+      const w = 4.5;
+      const h = 1.8;
+      ctx.save();
+      ctx.translate(sh.x, sh.y);
+      ctx.rotate(sh.angle);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(s.x - w / 2 + 0.3, s.y - h / 2 + 0.4, w, h);
-      ctx.fillStyle = s.color;
-      ctx.fillRect(s.x - w / 2, s.y - h / 2, w, h);
+      ctx.fillRect(-w / 2 + 0.3, -h / 2 + 0.4, w, h);
+      ctx.fillStyle = sh.color;
+      ctx.fillRect(-w / 2, -h / 2, w, h);
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
-      if (s.horiz) ctx.fillRect(s.x - w / 2, s.y - 0.1, w, 0.2);
-      else ctx.fillRect(s.x - 0.1, s.y - h / 2, 0.2, h);
+      ctx.fillRect(-w / 2, -0.1, w, 0.2);
+      ctx.restore();
     }
     for (const p of posts) {
       ctx.fillStyle = '#4b5563';
@@ -676,67 +734,60 @@ export class RoadRenderer {
     for (const lane of net.exitLanes) {
       if (!lane.gateVisible) continue;
       const I = lane.startInt;
-      const arm = lane.startArm;
-      const A = I.arms[arm];
-      ctx.save();
-      armFrame(ctx, I, arm);
-      const x = A.stop + lane.gateLocal + 0.3;
-      const y = lane.offset;
+      const A = I.arms[lane.startArm];
+      const g = this._g(I, lane.startArm);
+      const x = A.exitStop + lane.gateLocal + 0.3;
       const open = lane.gate.tokens >= 1;
-      ctx.fillStyle = 'rgba(240,240,236,0.85)';
-      ctx.fillRect(x, y - LW / 2 + 0.2, 0.4, LW - 0.4);
-      ctx.fillStyle = open ? '#22c55e' : '#ef4444';
-      ctx.beginPath();
-      ctx.arc(x + 1.2, y, 0.45, 0, Math.PI * 2);
-      ctx.fill();
-      if (lane.isCurb) worldText(ctx, 'NEXT JUNCTION', x + 3.5, A.half + 1.6, 1.2, 'rgba(255,255,255,0.85)', Math.PI / 2);
-      ctx.restore();
+      withFrame(ctx, g, x, lane.offset, () => {
+        ctx.fillStyle = 'rgba(240,240,236,0.85)';
+        ctx.fillRect(0, -LW / 2 + 0.2, 0.4, LW - 0.4);
+        ctx.fillStyle = open ? '#22c55e' : '#ef4444';
+        ctx.beginPath();
+        ctx.arc(1.2, 0, 0.45, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      if (lane.isCurb) {
+        const q = at(g, x + 3.5, A.half + 1.6);
+        worldText(ctx, 'NEXT JUNCTION', q.x, q.y, 1.2, 'rgba(255,255,255,0.85)', q.angle + Math.PI / 2);
+      }
     }
     // Blockages: cones + barrier + label
     for (const b of sim.blockages) {
-      if (!b.active) continue;
+      if (!b.active || b.kind === 'ped') continue;
       for (const lane of b.laneObjs) {
         const A = lane.startInt.arms[lane.startArm];
-        ctx.save();
-        armFrame(ctx, lane.startInt, lane.startArm);
-        const x = A.stop + b.s;
-        const y = lane.offset;
-        // stalled vehicle silhouette beyond the cones
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.fillRect(x + 1.6, y - 1.1, 7, 2.3);
-        ctx.fillStyle = '#6b7280';
-        ctx.fillRect(x + 1.4, y - 1.2, 7, 2.4);
-        ctx.fillStyle = '#9ca3af';
-        ctx.fillRect(x + 6.4, y - 1.0, 1.6, 2.0);
-        const blink = Math.floor(time * 3) % 2 === 0;
-        ctx.fillStyle = blink ? '#fbbf24' : '#92400e';
-        ctx.fillRect(x + 1.4, y - 1.2, 0.4, 0.4);
-        ctx.fillRect(x + 1.4, y + 0.8, 0.4, 0.4);
-        for (let k = -1; k <= 1; k++) {
-          ctx.fillStyle = '#f97316';
-          ctx.beginPath();
-          ctx.arc(x + 0.3, y + k * 1.1, 0.42, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = '#fff';
-          ctx.beginPath();
-          ctx.arc(x + 0.3, y + k * 1.1, 0.18, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.restore();
+        withFrame(ctx, this._g(lane.startInt, lane.startArm), A.exitStop + b.s, lane.offset, () => {
+          // stalled vehicle silhouette beyond the cones
+          ctx.fillStyle = 'rgba(0,0,0,0.3)';
+          ctx.fillRect(1.6, -1.1, 7, 2.3);
+          ctx.fillStyle = '#6b7280';
+          ctx.fillRect(1.4, -1.2, 7, 2.4);
+          ctx.fillStyle = '#9ca3af';
+          ctx.fillRect(6.4, -1.0, 1.6, 2.0);
+          const blink = Math.floor(time * 3) % 2 === 0;
+          ctx.fillStyle = blink ? '#fbbf24' : '#92400e';
+          ctx.fillRect(1.4, -1.2, 0.4, 0.4);
+          ctx.fillRect(1.4, 0.8, 0.4, 0.4);
+          for (let k = -1; k <= 1; k++) {
+            ctx.fillStyle = '#f97316';
+            ctx.beginPath();
+            ctx.arc(0.3, k * 1.1, 0.42, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(0.3, k * 1.1, 0.18, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
       }
       const lane = b.laneObjs[b.laneObjs.length - 1];
       if (lane) {
-        const I = lane.startInt;
-        const A = I.arms[lane.startArm];
-        const o = DIRS[lane.startArm];
-        const side = { x: -o.y, y: o.x };
-        const d = A.stop + b.s + 5;
-        const px = I.x + o.x * d + side.x * (A.half + 2.6);
-        const py = I.y + o.y * d + side.y * (A.half + 2.6);
+        const A = lane.startInt.arms[lane.startArm];
+        const q = at(this._g(lane.startInt, lane.startArm), A.exitStop + b.s + 5, A.half + 2.6);
         ctx.fillStyle = 'rgba(17,24,39,0.82)';
         const tw = (b.label || 'BLOCKED').length * 0.78 + 1.6;
-        ctx.fillRect(px - tw / 2, py - 0.9, tw, 1.8);
-        worldText(ctx, b.label || 'BLOCKED', px, py, 1.15, '#fbbf24');
+        ctx.fillRect(q.x - tw / 2, q.y - 0.9, tw, 1.8);
+        worldText(ctx, b.label || 'BLOCKED', q.x, q.y, 1.15, '#fbbf24');
       }
     }
   }

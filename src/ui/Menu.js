@@ -3,7 +3,7 @@
 import { settingsMarkup, bindSettings } from './Settings.js';
 import { resultsMarkup } from './ResultsScreen.js';
 import { formatTime } from '../utils/math.js';
-import { mapForLevel } from '../data/maps/index.js';
+import { mapForLevel, getMap } from '../data/maps/index.js';
 
 // Dev server only: every career level is playable. Production builds keep normal progression.
 const DEV_UNLOCK_ALL = import.meta.env.DEV;
@@ -67,6 +67,7 @@ export class Menu {
         <div class="menu-grid">
           <button class="btn primary big" data-nav="play" data-mode="career" data-id="${cont}">▶ Start Game <small>Level ${cont}</small></button>
           <button class="btn" data-nav="levels">Career Mode</button>
+          <button class="btn pinoy" data-nav="pinoy">🇵🇭 Pinoy Roads</button>
           <button class="btn" data-nav="brief" data-mode="endless">Endless Mode</button>
           <button class="btn" data-nav="challenges">Challenge Mode</button>
           <button class="btn" data-nav="levels">Level Selection</button>
@@ -98,6 +99,29 @@ export class Menu {
     this._show('levels', `<div class="panel wide"><h2>Career · Select level</h2><div class="cards">${cards}</div><div class="actions"><button class="btn" data-nav="menu">Back</button></div></div>`, 'dim');
   }
 
+  showPinoy() {
+    const save = this.game.save;
+    const cards = this.game.levels.pinoy
+      .map((l, i) => {
+        const locked = !DEV_UNLOCK_ALL && i + 1 > save.pinoyUnlocked;
+        const stars = save.pinoyStars[l.id] || 0;
+        const best = save.pinoyBest[l.id];
+        const map = getMap(l.map);
+        return `<button class="card ${locked ? 'locked' : ''}" ${locked ? 'disabled' : `data-nav="brief" data-mode="pinoy" data-id="${l.id}"`}>
+          <span class="num">${i + 1}</span>
+          <span class="card-title">${l.name}</span>
+          <span class="card-sub">📍 ${map.name}${map.region && map.region !== 'Training' ? ` · ${map.region}` : ''}</span>
+          <span class="card-foot">${locked ? '🔒 Locked' : `<span class="stars-sm">${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}</span>${best ? ` · ${best.toLocaleString()}` : ''}`}</span>
+        </button>`;
+      })
+      .join('');
+    this._show(
+      'pinoy',
+      `<div class="panel wide"><h2>🇵🇭 Pinoy Roads</h2><p class="muted">Real-world inspired roads: EDSA, Commonwealth, Taft, España and the town plaza. Clear one to unlock the next.</p><div class="cards">${cards}</div><div class="actions"><button class="btn" data-nav="menu">Back</button></div></div>`,
+      'dim',
+    );
+  }
+
   showChallenges() {
     const save = this.game.save;
     const cards = this.game.levels.challenges
@@ -117,6 +141,7 @@ export class Menu {
 
   showBriefing(mode, id) {
     const lvl = this.game.levels.get(mode, id);
+    const pinoyIdx = mode === 'pinoy' ? this.game.levels.pinoy.indexOf(lvl) : -1;
     const objectives = (lvl.objectives || []).map((o) => `<li>${objectiveText(o)}</li>`).join('');
     const extra = [];
     if (lvl.duration) extra.push(`Duration ${formatTime(lvl.duration)}`);
@@ -128,7 +153,26 @@ export class Menu {
     if (map.nodes.some((n) => n.kind === 'yield')) extra.push('Yield junctions');
     if (lvl.emergency) extra.push('Emergency vehicles');
     if (lvl.blockages?.length) extra.push('Blocked exits');
-    const label = mode === 'career' ? `Level ${lvl.id}` : mode === 'challenge' ? `Challenge ${String(lvl.id).toUpperCase()}` : 'Endless';
+    if (lvl.env) {
+      const wx = (lvl.env.weather || []).map((w) => w.type);
+      if (wx.includes('heavyRain') || wx.includes('rain')) extra.push('🌧️ Rain');
+      else if (lvl.env.random) extra.push('🌦️ Changing weather');
+      const h = lvl.env.hour ?? 9;
+      const end = h + ((lvl.env.rate || 0) * (lvl.duration || 600)) / 60;
+      if (h >= 17.5 || h < 5.5) extra.push('🌙 Night');
+      else if (end > 17.5) extra.push('🌆 Dusk to night');
+    }
+    const label =
+      mode === 'career' ? `Level ${lvl.id}` : mode === 'challenge' ? `Challenge ${String(lvl.id).toUpperCase()}` : mode === 'pinoy' ? `Pinoy Roads · ${pinoyIdx + 1}` : 'Endless';
+    // Endless can be played on any map
+    const mapPick =
+      mode === 'endless'
+        ? `<h4>Map</h4><div class="chips map-pick">${this.game.levels
+            .endlessMaps()
+            .map((m) => `<button class="chip ${m === (lvl.map || 'single') ? 'active' : ''}" data-nav="brief" data-mode="endless" data-id="${m}">${getMap(m).name}</button>`)
+            .join('')}</div>`
+        : '';
+    const blurb = map.blurb ? `<p class="muted">📍 <b>${map.name}</b> — ${map.blurb}</p>` : '';
     this._show(
       'brief',
       `
@@ -137,13 +181,15 @@ export class Menu {
         <h2>${lvl.name}</h2>
         <p class="sub">${lvl.subtitle}</p>
         <p>${lvl.description}</p>
+        ${blurb}
+        ${mapPick}
         ${objectives ? `<h4>Objectives</h4><ul class="obj-list">${objectives}</ul>` : ''}
         ${lvl.mode === 'endless' ? '<p class="muted">The run ends when congestion stays critical for 30 seconds. Score as much as you can.</p>' : ''}
         <div class="chips">${extra.map((x) => `<span class="chip">${x}</span>`).join('')}</div>
         <div class="tip"><b>Tip:</b> ${lvl.tip}</div>
         <div class="actions">
-          <button class="btn" data-nav="${mode === 'challenge' ? 'challenges' : mode === 'career' ? 'levels' : 'menu'}">Back</button>
-          <button class="btn primary" data-nav="play" data-mode="${mode}" data-id="${lvl.id}">Start ▸</button>
+          <button class="btn" data-nav="${mode === 'challenge' ? 'challenges' : mode === 'career' ? 'levels' : mode === 'pinoy' ? 'pinoy' : 'menu'}">Back</button>
+          <button class="btn primary" data-nav="play" data-mode="${mode}" data-id="${mode === 'endless' ? lvl.map || 'single' : lvl.id}">Start ▸</button>
         </div>
       </div>`,
       'dim',
@@ -189,6 +235,17 @@ export class Menu {
     const ch = this.game.levels.challenges
       .map((c) => `<tr><td>${c.id.toUpperCase()}. ${c.name}</td><td>${save.challengesCompleted.includes(c.id) ? '✔' : ''}</td><td>${save.challengeBest[c.id] ? save.challengeBest[c.id].toLocaleString() : '—'}</td></tr>`)
       .join('');
+    const pinoy = this.game.levels.pinoy
+      .map((l, i) => {
+        const stars = save.pinoyStars[l.id] || 0;
+        const best = save.pinoyBest[l.id];
+        return `<tr><td>${i + 1}. ${l.name}</td><td>${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}</td><td>${best ? best.toLocaleString() : '—'}</td></tr>`;
+      })
+      .join('');
+    const endless = Object.entries(save.endlessBestByMap)
+      .filter(([m]) => this.game.levels.endlessMaps().includes(m))
+      .map(([m, v]) => `<tr><td>${getMap(m).name}</td><td></td><td>${v.toLocaleString()}</td></tr>`)
+      .join('');
     this._show(
       'scores',
       `
@@ -196,7 +253,8 @@ export class Menu {
         <h2>High Scores</h2>
         <table class="scores"><thead><tr><th>Career</th><th>Stars</th><th>Best</th></tr></thead><tbody>${rows}</tbody></table>
         <table class="scores"><thead><tr><th>Challenges</th><th>Done</th><th>Best</th></tr></thead><tbody>${ch}</tbody></table>
-        <table class="scores"><tbody><tr><td>Endless Rush</td><td>${save.endlessBestTime ? formatTime(save.endlessBestTime) : ''}</td><td>${save.endlessBest ? save.endlessBest.toLocaleString() : '—'}</td></tr></tbody></table>
+        <table class="scores"><thead><tr><th>Pinoy Roads</th><th>Stars</th><th>Best</th></tr></thead><tbody>${pinoy}</tbody></table>
+        <table class="scores"><thead><tr><th>Endless Rush</th><th></th><th>Best</th></tr></thead><tbody><tr><td>Kanto</td><td>${save.endlessBestTime ? formatTime(save.endlessBestTime) : ''}</td><td>${save.endlessBest ? save.endlessBest.toLocaleString() : '—'}</td></tr>${endless}</tbody></table>
         <div class="actions"><button class="btn" data-nav="menu">Back</button></div>
       </div>`,
       'dim',
@@ -226,6 +284,9 @@ export class Menu {
       case 'challenges':
         this.showChallenges();
         break;
+      case 'pinoy':
+        this.showPinoy();
+        break;
       case 'scores':
         this.showScores();
         break;
@@ -252,7 +313,7 @@ export class Menu {
         g.quitToMenu();
         break;
       case 'next':
-        if (this.lastResult?.nextLevel) this.showBriefing('career', this.lastResult.nextLevel);
+        if (this.lastResult?.nextLevel) this.showBriefing(this.lastResult.nextMode || 'career', this.lastResult.nextLevel);
         break;
       case 'back':
         if (this.prev === 'pause') this.showPause();

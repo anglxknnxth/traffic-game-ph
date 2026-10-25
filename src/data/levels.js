@@ -223,11 +223,16 @@ export const CAREER_LEVELS = [
     fail: { congestion: 0.96, time: 55 },
     stars: [1800, 2200],
   }),
+];
 
-  // ---------------------------------------------------------------- Philippine roads
+export const CAREER_COUNT = CAREER_LEVELS.length;
+
+// Pinoy Roads: one level per map inspired by real Philippine roads. Ids are the map ids, so save
+// data and deep links (?play=pinoy:taft) stay stable when levels are reordered.
+export const PINOY_LEVELS = [
   level({
-    id: 11,
-    mode: 'career',
+    id: 'poblacion',
+    mode: 'pinoy',
     map: 'poblacion',
     name: 'Sa Poblacion',
     subtitle: 'National highway through the town proper',
@@ -247,8 +252,8 @@ export const CAREER_LEVELS = [
     stars: [1300, 1600],
   }),
   level({
-    id: 12,
-    mode: 'career',
+    id: 'taft',
+    mode: 'pinoy',
     map: 'taft',
     name: 'Taft sa Umaga',
     subtitle: 'Two signals under the LRT-1',
@@ -261,6 +266,7 @@ export const CAREER_LEVELS = [
     personalities: { patient: 0.4, impatient: 0.42, aggressive: 0.18 },
     loadingStops: 0.6,
     downstream: { rate: 0.5, variability: 0.3, exits: { 'B:S': { rate: 0.12, gateAt: 70 } } },
+    env: { hour: 7, rate: 0.3 },
     objectives: [
       { type: 'processed', target: 95 },
       { type: 'avgWait', target: 42 },
@@ -269,12 +275,12 @@ export const CAREER_LEVELS = [
     stars: [1800, 2200],
   }),
   level({
-    id: 13,
-    mode: 'career',
+    id: 'espana',
+    mode: 'pinoy',
     map: 'espana',
     name: 'España Boulevard',
     subtitle: 'University belt at dismissal time',
-    description: 'Wide España meets Lacson. Jeepneys crowd the curb lanes and drivers squeeze into the box when the boulevard backs up.',
+    description: 'Wide España meets Lacson. Jeepneys crowd the curb lanes and drivers squeeze into the box when the boulevard backs up. Rain is coming: wet roads mean longer gaps and slower starts.',
     tip: 'Three lanes discharge fast, but one blocked box stops all twelve lanes. End a green early when its exit is filling up.',
     duration: 200,
     demand: { N: 11, S: 11, E: 14, W: 14 },
@@ -283,6 +289,7 @@ export const CAREER_LEVELS = [
     turns: { left: 0.15, right: 0.18 },
     loadingStops: 0.55,
     downstream: { rate: 0.55, variability: 0.35, exits: { 'A:W': { rate: 0.12, gateAt: 80 } } },
+    env: { hour: 16, rate: 0.3, weather: [{ t: 0, type: 'clear' }, { t: 50, type: 'rain' }, { t: 120, type: 'heavyRain' }] },
     objectives: [
       { type: 'processed', target: 110 },
       { type: 'maxGridlockTime', target: 40 },
@@ -291,8 +298,8 @@ export const CAREER_LEVELS = [
     stars: [2000, 2450],
   }),
   level({
-    id: 14,
-    mode: 'career',
+    id: 'commonwealth',
+    mode: 'pinoy',
     map: 'commonwealth',
     name: 'Commonwealth Rush',
     subtitle: 'Wide avenue, blue motorcycle lane, U-turn slot',
@@ -313,8 +320,8 @@ export const CAREER_LEVELS = [
     stars: [2300, 2800],
   }),
   level({
-    id: 15,
-    mode: 'career',
+    id: 'edsa',
+    mode: 'pinoy',
     map: 'edsa',
     name: 'EDSA Carousel',
     subtitle: 'Busway, MRT-3 and U-turn slots',
@@ -328,6 +335,7 @@ export const CAREER_LEVELS = [
     turns: { left: 0.12, right: 0.16 },
     loadingStops: 0.5,
     emergency: { times: [90, 170] },
+    env: { hour: 17.8, rate: 0.4 },
     objectives: [
       { type: 'processed', target: 140 },
       { type: 'emergency', target: 40 },
@@ -336,8 +344,54 @@ export const CAREER_LEVELS = [
     stars: [2400, 2900],
   }),
   level({
-    id: 16,
-    mode: 'career',
+    id: 'likoliko',
+    mode: 'pinoy',
+    map: 'likoliko',
+    name: 'Liko-Liko',
+    subtitle: 'Two signals on a mountain S-bend',
+    description: 'A winding provincial road. Trucks and buses crawl through the bends, the sitio roads are single-lane, and the S-bend between the two signals holds only a few vehicles.',
+    tip: 'Traffic slows in the curves, so platoons take longer to reach the next signal. Give the bend time to drain before sending more into it.',
+    duration: 210,
+    initialGroups: { A: 'EW', B: 'EW' },
+    demand: { E: 10, W: 10, N: 5, S: 5 },
+    mix: { car: 0.3, motorcycle: 0.25, jeepney: 0.15, tricycle: 0.1, truck: 0.1, bus: 0.1 },
+    personalities: { patient: 0.4, impatient: 0.3, aggressive: 0.1, cautious: 0.2 },
+    turns: { left: 0.16, right: 0.16 },
+    loadingStops: 0.4,
+    env: { hour: 14, rate: 0.3, weather: [{ t: 0, type: 'clear' }, { t: 90, type: 'rain' }] },
+    objectives: [
+      { type: 'processed', target: 85 },
+      { type: 'avgWait', target: 45 },
+    ],
+    fail: { congestion: 0.95, time: 60 },
+    stars: [1700, 2100],
+  }),
+  level({
+    id: 'corridor',
+    mode: 'pinoy',
+    map: 'corridor',
+    name: 'Tatlong Kanto',
+    subtitle: 'Three signals in a row: build a green wave',
+    description: 'A busy street with three junctions close together. The East–West stream has to get through all three, while every side street wants its turn.',
+    tip: 'Turn the next signal green a few seconds after the one before it, so a platoon flows through all three without stopping.',
+    duration: 220,
+    initialGroups: { A: 'EW', B: 'EW', C: 'EW' },
+    demand: { E: 14, W: 14, N: 5, S: 5 },
+    mix: { car: 0.38, motorcycle: 0.24, jeepney: 0.2, tricycle: 0.08, van: 0.06, bus: 0.04 },
+    personalities: { patient: 0.35, impatient: 0.35, aggressive: 0.15, cautious: 0.15 },
+    turns: { left: 0.12, right: 0.14 },
+    loadingStops: 0.35,
+    env: { hour: 11, rate: 0.2 },
+    objectives: [
+      { type: 'processed', target: 120 },
+      { type: 'avgWait', target: 45 },
+    ],
+    fail: { congestion: 0.95, time: 60 },
+    stars: [2200, 2700],
+  }),
+  level({
+    id: 'grid',
+    mode: 'pinoy',
     map: 'grid',
     name: 'Grid ng Maynila',
     subtitle: 'Four signals, one tangled block',
@@ -358,7 +412,10 @@ export const CAREER_LEVELS = [
   }),
 ];
 
-export const CAREER_COUNT = CAREER_LEVELS.length;
+export const PINOY_COUNT = PINOY_LEVELS.length;
+
+/** Pinoy Roads level ids that used to be career levels 11–16 (save data migration). */
+export const LEGACY_CAREER_TO_PINOY = { 11: 'poblacion', 12: 'taft', 13: 'espana', 14: 'commonwealth', 15: 'edsa', 16: 'grid' };
 
 export const ENDLESS_LEVEL = level({
   id: 'endless',
@@ -375,6 +432,8 @@ export const ENDLESS_LEVEL = level({
   loadingStops: 0.45,
   downstream: { rate: 0.5, variability: 0.4, exits: { 'A:W': { rate: 0.09, gateAt: 80 } } },
   emergency: { interval: [70, 120] },
+  // Afternoon into the evening rush and nightfall, with passing rain showers.
+  env: { hour: 15.5, rate: 0.5, random: true, rushHour: true },
   objectives: [],
   fail: { congestion: 0.85, time: 30 },
 });

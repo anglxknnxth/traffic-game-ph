@@ -79,6 +79,8 @@ export class HUD {
         </div>
       </div>
       <div class="hud-toast"></div>
+      <div class="hud-feed" hidden></div>
+      <div class="hud-ticker"><span class="tk-tag">TRAFFIC UPDATE</span><div class="tk-wrap"><span class="tk-text"></span></div></div>
       <div class="hud-coach" hidden></div>
     `;
     this.el = {
@@ -104,6 +106,8 @@ export class HUD {
       bottom: root.querySelector('.hud-bottom'),
       top: root.querySelector('.hud-top'),
       autoAll: root.querySelector('[data-act="autoall"]'),
+      feed: root.querySelector('.hud-feed'),
+      ticker: root.querySelector('.tk-text'),
       monitor: root.querySelector('.hud-monitor'),
       monBtn: root.querySelector('[data-act="monitor"]'),
       heatBtn: root.querySelector('[data-act="heat"]'),
@@ -361,9 +365,12 @@ export class HUD {
     for (const n of this.el.notify.children) {
       if (n.textContent === e.text && !n.classList.contains('fade')) return;
     }
+    // Notices arrive over the radio, MMDA dispatch style.
     const div = document.createElement('div');
-    div.className = `note ${e.severity || 'info'}`;
-    div.textContent = e.text;
+    div.className = `note radio ${e.severity || 'info'}`;
+    div.innerHTML = `<i class="radio-ico">📻</i><span class="radio-from">BASE</span><span class="radio-txt"></span>`;
+    div.querySelector('.radio-txt').textContent = e.text;
+    this.game.audio.radio?.();
     this.el.notify.prepend(div);
     this.notes.push(div);
     while (this.el.notify.children.length > 3) this.el.notify.lastChild.remove();
@@ -380,6 +387,7 @@ export class HUD {
     const sim = s.sim;
     const m = sim.metrics;
     const lvl = s.level;
+    this._street(sim);
     this.monitor.sample(sim, Math.max(0, sim.time - this._simT));
     this._simT = sim.time;
     if (this.game.state.showMonitor) this.monitor.render(sim);
@@ -466,6 +474,84 @@ export class HUD {
     } else {
       this.el.emergency.hidden = true;
     }
+  }
+
+  // ------------------------------------------------------------------ street talk
+  /**
+   * News ticker along the bottom and a commuter "feed" post now and then, both written from what
+   * is happening on the roads right now.
+   */
+  _street(sim) {
+    const now = sim.time;
+    if (this._tickT === undefined || now - this._tickT > 20 || this._tickSim !== sim) {
+      this._tickT = now;
+      this._tickSim = sim;
+      this.el.ticker.textContent = this._news(sim).join('   •   ');
+      this.el.ticker.style.animation = 'none';
+      void this.el.ticker.offsetWidth;
+      this.el.ticker.style.animation = '';
+    }
+    if (this._feedT === undefined || now - this._feedT > 14 || this._feedSim !== sim) {
+      this._feedT = now;
+      this._feedSim = sim;
+      const post = this._post(sim);
+      const f = this.el.feed;
+      f.hidden = !post;
+      if (post) {
+        f.innerHTML = `<div class="fd-head"><b>${post.user}</b><span>· ngayon lang</span></div><div class="fd-body"></div><div class="fd-mood">Commuter mood ${post.mood}</div>`;
+        f.querySelector('.fd-body').textContent = post.text;
+        f.classList.remove('show');
+        void f.offsetWidth;
+        f.classList.add('show');
+      }
+    }
+  }
+
+  /** Roads ranked by queue: [{ name, queue, wait }]. */
+  _roads(sim) {
+    const out = [];
+    for (const p of sim.metrics.perIntersection || []) {
+      const I = sim.network.byId.get(p.id);
+      if (I.kind === 'uturn' || I.kind === 'toll') continue;
+      for (const a of p.approaches) out.push({ name: sim.network.roadName(I, a.arm) || 'the main road', queue: a.queue, wait: a.headWait });
+    }
+    return out.sort((a, b) => b.queue - a.queue);
+  }
+
+  _news(sim) {
+    const roads = this._roads(sim);
+    const items = [];
+    const worst = roads[0];
+    const best = roads.filter((r) => r.queue <= 2).pop();
+    if (worst && worst.queue > 8) items.push(`MABIGAT ang daloy sa ${worst.name.toUpperCase()} (${worst.queue} sasakyan sa pila)`);
+    else if (worst) items.push(`MALUWAG pa sa ${worst.name.toUpperCase()}`);
+    if (best && best !== worst) items.push(`Maluwag sa ${best.name}`);
+    const env = sim.env;
+    if (env.rain > 0.5) items.push('Malakas na ulan: mag-ingat, madulas ang kalsada');
+    else if (env.rain > 0.1) items.push('Umuulan sa Metro: bagalan ang takbo');
+    if (env.darkness > 0.5) items.push('Gabi na: buksan ang headlights');
+    if (sim.priority.length) items.push(`EMERGENCY: ${sim.priority[0].label} papunta sa ${sim.priority[0].intersectionId}, tumabi muna`);
+    const blk = sim.blockages.find((b) => b.active && b.kind !== 'ped' && b.kind !== 'laneEnd');
+    if (blk) items.push(`${blk.label || 'Sagabal'} sa ${sim.exitName(blk.exit)}`);
+    items.push(`${sim.stats.processed} sasakyan na ang nakadaan`);
+    items.push(sim.env.clock());
+    return items;
+  }
+
+  _post(sim) {
+    const roads = this._roads(sim);
+    if (!roads.length) return null;
+    const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    const users = ['@commuter_juan', '@titamaria', '@jeepney.driver', '@student_ust', '@grabkuya', '@callcenter.ate', '@riderph', '@lolo_ben'];
+    const avg = sim.metrics.avgWait;
+    const mood = avg < 15 ? '😊' : avg < 30 ? '😐' : avg < 50 ? '😤' : '🤬';
+    const r = roads[0];
+    let text;
+    if (sim.metrics.level === 'GRIDLOCK') text = pick([`GRIDLOCK na naman! Di na gumagalaw dito 😭`, `Sino nag-block ng box?! Wala nang makadaan 🙄`]);
+    else if (r.queue > 10) text = pick([`Grabe ${Math.max(5, Math.round(r.wait / 60) + 5)} mins na ako dito sa ${r.name} 😤`, `Ang haba ng pila sa ${r.name}, lalakarin ko na lang 🚶`, `${r.name} parking lot na naman 🙃`]);
+    else if (avg < 15) text = pick([`Ang luwag ngayon sa ${r.name}! 👏 Galing ng nag-aayos ng ilaw`, `Wow, green wave! Walang hinto 🚀`, `Ang bilis ng biyahe today, salamat MMDA 🙏`]);
+    else text = pick([`Usad-pagong sa ${r.name} pero okay lang 🐢`, `Sana mabilis yung green sa ${r.name} 🙏`, `Traffic as usual, sounds trip muna 🎧`]);
+    return { user: pick(users), text, mood };
   }
 
   // ------------------------------------------------------------------ tutorial coach

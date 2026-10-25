@@ -1,0 +1,13 @@
+Photo textures used on the Metro Manila map.
+
+All from ambientCG (https://ambientcg.com), released under the Creative Commons CC0 1.0 Universal
+licence (public domain). Only the colour maps are used, scaled down to 512 x 512.
+
+asphalt.jpg       Asphalt031          https://ambientcg.com/view?id=Asphalt031
+asphalt-worn.jpg  Asphalt033          https://ambientcg.com/view?id=Asphalt033
+sidewalk.jpg      PavingStones138     https://ambientcg.com/view?id=PavingStones138
+grass.jpg         Grass004            https://ambientcg.com/view?id=Grass004
+dirt.jpg          Ground037           https://ambientcg.com/view?id=Ground037
+yero.jpg          CorrugatedSteel005  https://ambientcg.com/view?id=CorrugatedSteel005
+tiles.jpg         RoofingTiles013A    https://ambientcg.com/view?id=RoofingTiles013A
+concrete.jpg      Concrete034         https://ambientcg.com/view?id=Concrete034

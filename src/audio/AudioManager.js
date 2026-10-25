@@ -174,6 +174,16 @@ export class AudioManager {
     this._tone(now + 0.22, [2950, 3080], 0.3, 'square', pan, 0.06, 6500);
   }
 
+  /** Walkie-talkie bleep before a dispatch message. */
+  radio() {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - (this.lastRadio || 0) < 1.5) return;
+    this.lastRadio = now;
+    this._tone(now, [1320], 0.06, 'square', 0, 0.035, 3000);
+    this._tone(now + 0.08, [990], 0.07, 'square', 0, 0.035, 3000);
+  }
+
   click() {
     if (!this.ready) return;
     this._tone(this.ctx.currentTime, [880], 0.05, 'triangle', 0, 0.08, 4000);

@@ -13,7 +13,7 @@
   --radius: 14px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-  font-family: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Overpass', system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   color: var(--text);
 }
 
@@ -1660,4 +1660,127 @@ summary {
 }
 .watch-btn.active {
   background: #7c3aed;
+}
+
+/* ------------------------------------------------------------------ MMDA operator look */
+.note.radio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+.note.radio .radio-ico {
+  font-style: normal;
+}
+.note.radio .radio-from {
+  font-size: 10px;
+  font-weight: 900;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+}
+.hud-ticker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  background: rgba(2, 6, 23, 0.86);
+  border-top: 1px solid rgba(250, 204, 21, 0.35);
+  font-size: 12px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.hud-ticker .tk-tag {
+  flex: none;
+  padding: 0 10px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  background: #dc2626;
+  color: #fff;
+  font-weight: 900;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+.hud-ticker .tk-wrap {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.hud-ticker .tk-text {
+  display: inline-block;
+  padding-left: 100%;
+  color: #fde68a;
+  animation: ticker 28s linear infinite;
+}
+@keyframes ticker {
+  to {
+    transform: translateX(-100%);
+  }
+}
+#hud .hud-bottom {
+  bottom: calc(26px + var(--safe-bottom));
+}
+.hud-feed {
+  position: absolute;
+  right: 8px;
+  bottom: calc(96px + var(--safe-bottom));
+  width: 240px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-size: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  opacity: 0;
+}
+.hud-feed.show {
+  animation: feedIn 13s ease forwards;
+}
+@keyframes feedIn {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  5%,
+  85% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.fd-head {
+  display: flex;
+  gap: 4px;
+  font-size: 11px;
+  color: #475569;
+}
+.fd-head b {
+  color: #1d4ed8;
+}
+.fd-body {
+  margin: 3px 0;
+  font-weight: 600;
+}
+.fd-mood {
+  font-size: 10.5px;
+  color: #64748b;
+}
+.hud-monitor {
+  background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px);
+}
+#hud.watch .hud-feed {
+  display: none;
+}
+@media (max-width: 720px) {
+  .hud-feed {
+    display: none;
+  }
 }

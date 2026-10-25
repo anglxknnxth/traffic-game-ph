@@ -142,9 +142,16 @@ export class VehicleSpawner {
     const general = cands.filter((l) => !l.allowed);
     if (dedicated.length && (!general.length || type === 'bicycle' || rng.chance(0.85))) return dedicated.length > 1 ? rng.pick(dedicated) : dedicated[0];
     if (general.length === 1) return general[0];
+    // Going straight: keep out of the curb lane where you can, so drivers turning right (even on
+    // red) are not stuck behind you.
+    const curbLane = general[general.length - 1];
+    if (move === 'straight' && curbLane.connectors.right && !HEAVY_TYPES.has(type) && rng.chance(0.95)) {
+      const others = general.slice(0, -1);
+      return others.length > 1 ? rng.pick(others) : others[0];
+    }
     if (HEAVY_TYPES.has(type)) {
       const curb = general[general.length - 1];
-      if (rng.chance(0.8)) return curb;
+      if (rng.chance(move === 'straight' && curb.connectors.right ? 0.5 : 0.8)) return curb;
       const others = general.slice(0, -1);
       return others.length > 1 ? rng.pick(others) : others[0];
     }

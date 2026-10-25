@@ -2,7 +2,9 @@
 //   wet road  — a cool tint over the road layer while it rains (drawn under traffic)
 //   night     — a darkness light map with holes for street lamps, headlights, brake lights and
 //               signal heads, plus a soft additive glow (drawn over everything)
-//   rain      — screen-space streaks and splash rings (drawn last)
+//   rain      — screen-space streaks and splash rings (drawn last), plus signal colours smeared
+//               on the wet road and puddles that catch the light
+// At night the headlights throw a beam ahead, tail lights glow and windows light up.
 
 import { Rng } from '../utils/math.js';
 
@@ -27,15 +29,34 @@ export class WeatherRenderer {
   }
 
   /** Night light map and rain. Call last, with the camera transform applied. */
-  drawAtmosphere(ctx, canvas, camera, sim, lamps, vehicles, time) {
+  drawAtmosphere(ctx, canvas, camera, sim, lamps, vehicles, time, buildings = []) {
     const env = sim.env;
     if (!env) return;
     const dark = env.darkness;
-    if (dark > 0.02 && this.light) this._night(ctx, canvas, camera, sim, lamps, vehicles, dark);
+    if (env.rain > 0.05) this._wetReflections(ctx, sim, env.rain, dark, time);
+    if (dark > 0.02 && this.light) this._night(ctx, canvas, camera, sim, lamps, vehicles, dark, buildings);
     if (env.rain > 0.02) this._rain(ctx, canvas, camera, env.rain, time);
   }
 
-  _night(ctx, canvas, camera, sim, lamps, vehicles, dark) {
+  /** Wet asphalt mirrors the signal lamps: long soft streaks of colour toward the viewer. */
+  _wetReflections(ctx, sim, rain, dark, time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const a = (0.1 + 0.25 * dark) * rain;
+    for (const h of sim.lights.heads) {
+      const m = sim.lights.manager(h.intersectionId);
+      const sig = m.signalForGroup(h.group);
+      const rgb = sig === 'green' ? '48,209,88' : sig === 'yellow' || sig === 'flash' ? '255,214,10' : '255,59,48';
+      const g = ctx.createLinearGradient(h.x, h.y, h.x, h.y + 7);
+      g.addColorStop(0, `rgba(${rgb},${a})`);
+      g.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(h.x - 0.5, h.y, 1, 7);
+    }
+    ctx.restore();
+  }
+
+  _night(ctx, canvas, camera, sim, lamps, vehicles, dark, buildings) {
     const lc = this.light;
     if (lc.width !== canvas.width || lc.height !== canvas.height) {
       lc.width = canvas.width;
@@ -62,11 +83,28 @@ export class WeatherRenderer {
     };
     for (const p of lamps) hole(p.x, p.y, 10, 0.8);
     for (const h of sim.lights.heads) hole(h.x, h.y, 3.2, 0.7);
+    // Headlight beam: a wedge that widens ahead of the vehicle
+    const beam = (v, reach, spread, a) => {
+      const c = Math.cos(v.angle);
+      const s = Math.sin(v.angle);
+      const x0 = v.x + c * v.hl;
+      const y0 = v.y + s * v.hl;
+      const g = l.createRadialGradient(x0, y0, 0, x0, y0, reach);
+      g.addColorStop(0, `rgba(0,0,0,${a})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      l.fillStyle = g;
+      l.beginPath();
+      l.moveTo(x0 - s * v.hw, y0 + c * v.hw);
+      l.lineTo(x0 + c * reach - s * spread, y0 + s * reach + c * spread);
+      l.lineTo(x0 + c * reach + s * spread, y0 + s * reach - c * spread);
+      l.lineTo(x0 + s * v.hw, y0 - c * v.hw);
+      l.closePath();
+      l.fill();
+    };
     for (const v of vehicles) {
       const c = Math.cos(v.angle);
       const s = Math.sin(v.angle);
-      // headlight beam: a pool ahead of the vehicle plus the lamps themselves
-      hole(v.x + c * (v.hl + 4.5), v.y + s * (v.hl + 4.5), 5.5, 0.75);
+      beam(v, 13, 4.2, 0.8);
       hole(v.x + c * v.hl, v.y + s * v.hl, 1.8, 0.9);
       if (v.a < -0.6 || v.v < 0.15) hole(v.x - c * v.hl, v.y - s * v.hl, 1.6, 0.6);
       if (v.emergency) hole(v.x, v.y, 7, 0.6);
@@ -91,6 +129,24 @@ export class WeatherRenderer {
       ctx.fill();
     };
     for (const p of lamps) glow(p.x, p.y, 8, '255,196,120', 0.16 * dark);
+    // Lit windows: a few warm squares on most roofs (fixed per building)
+    const vr = camera.visibleRect(4);
+    for (const b of buildings) {
+      if (b.cx < vr.minX || b.cx > vr.maxX || b.cy < vr.minY || b.cy > vr.maxY) continue;
+      const seed = Math.abs(Math.sin(b.cx * 12.9898 + b.cy * 78.233)) * 43758.5453;
+      if (seed % 1 < 0.25) continue; // nobody home
+      const n = 1 + Math.floor((seed * 7) % 4);
+      ctx.save();
+      ctx.translate(b.cx, b.cy);
+      ctx.rotate(b.angle);
+      ctx.fillStyle = `rgba(255,214,140,${0.55 * dark})`;
+      for (let k = 0; k < n; k++) {
+        const u = (((seed * (k + 3)) % 1) - 0.5) * (b.w - 2);
+        const w = (((seed * (k + 5)) % 1) - 0.5) * (b.h - 2);
+        ctx.fillRect(u - 0.6, w - 0.45, 1.2, 0.9);
+      }
+      ctx.restore();
+    }
     for (const v of vehicles) {
       const c = Math.cos(v.angle);
       const s = Math.sin(v.angle);

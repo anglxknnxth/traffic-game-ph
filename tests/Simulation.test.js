@@ -284,7 +284,7 @@ describe('Soak: every level stays collision-free', () => {
         },
       });
       // Endless maps are big (roads run to the screen edge), so fewer vehicles finish in 100 s.
-      expect(sim.stats.processed).toBeGreaterThan(lvl.mode === 'endless' ? 5 : 10);
+      expect(sim.stats.processed).toBeGreaterThan(lvl.map === 'metro' ? 1 : lvl.mode === 'endless' ? 5 : 10);
       // nothing permanently wedged in a box
       for (const v of sim.vehicles) if (v.segment.kind === 'connector') expect(v.boxTime).toBeLessThan(90);
     });

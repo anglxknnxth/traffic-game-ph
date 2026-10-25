@@ -175,7 +175,13 @@ export class LaneChanger {
         followerLoss = Math.max(0, before - after);
       }
       const accNew = this._accWith(v, lead);
-      const gain = accNew - accCur - (P.politeness ?? 0.4) * followerLoss + (forced ? 2 : 0);
+      // Through traffic keeps the right-turn (curb) lane free near the junction.
+      let keepRight = 0;
+      if (move === 'straight' && ce && ce.start - v.front < 150 && seg.connectors.right && !v.loading) {
+        if (seg.isCurb && !B.isCurb) keepRight = 1.0;
+        else if (B.isCurb && B.connectors.right) keepRight = -1.0;
+      }
+      const gain = accNew - accCur - (P.politeness ?? 0.4) * followerLoss + (forced ? 2 : 0) + keepRight;
       if (gain > threshold && (!best || gain > best.gain)) best = { lane: B, gain, L, forced };
     }
     return best;

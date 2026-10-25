@@ -108,11 +108,12 @@ export function drawPedSignals(ctx, sim, time) {
       ctx.fillRect(-0.35, -0.35, 0.7, 0.7);
       ctx.fillStyle = on;
       if (state === 'walk') {
-        // little walking figure
+        // little walking figure, legs stepping
+        const step = Math.floor(time * 3) % 2 ? 0.05 : -0.05;
         ellipse(ctx, 0, -0.17, 0.08, 0.08);
         ctx.fillRect(-0.05, -0.1, 0.1, 0.2);
-        ctx.fillRect(-0.15, 0.08, 0.1, 0.16);
-        ctx.fillRect(0.05, 0.08, 0.1, 0.16);
+        ctx.fillRect(-0.15 + step, 0.08, 0.1, 0.16);
+        ctx.fillRect(0.05 - step, 0.08, 0.1, 0.16);
       } else {
         // raised hand
         ctx.fillRect(-0.16, -0.12, 0.32, 0.3);

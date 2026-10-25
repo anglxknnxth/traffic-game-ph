@@ -198,6 +198,7 @@ export class Renderer {
     this.effects.drawUnder(ctx, ground, time);
     for (const v of ground) drawVehicle(ctx, v, time);
     this.effects.drawOver(ctx, ground, time);
+    this.effects.drawSmoke(ctx, visible, time);
     if (interactive) this.effects.drawStuck(ctx, sim, ground, time);
     if (sim.network.layered) this.road.drawTrenchShade(ctx);
     if (this.road.hasElevated) {
@@ -214,7 +215,7 @@ export class Renderer {
     this.road.drawOverlays(ctx, time);
     this.lights.draw(ctx, sim, time, hoveredHead);
     if (sim.growth) this._drawFog(ctx, sim.growth.focusRect(), time);
-    this.weather.drawAtmosphere(ctx, this.canvas, cam, sim, this.road.scenery.posts, visible, time);
+    this.weather.drawAtmosphere(ctx, this.canvas, cam, sim, this.road.scenery.posts, visible, time, this.road.scenery.buildings);
     // Signal heads stay readable at night: draw them over the darkness.
     if (sim.env?.darkness > 0.02) {
       cam.apply(ctx);

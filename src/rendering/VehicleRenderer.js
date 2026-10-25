@@ -135,7 +135,9 @@ function drawTricycle(ctx, L, W, color, helmet) {
   ctx.fillRect(-hl * 0.6, hw * 0.35, L * 0.5, 0.12);
 }
 
-function drawJeepney(ctx, L, W, color, accent) {
+const ROUTES = ['QUIAPO', 'CUBAO', 'BACLARAN', 'DIVISORIA', 'LAWTON', 'MOA', 'NOVALICHES', 'FAIRVIEW', 'PASAY', 'STA. MESA', 'ESPAÑA', 'MONUMENTO', 'ALABANG', 'PROJECT 4'];
+
+function drawJeepney(ctx, L, W, color, accent, vh = 0) {
   const hl = L / 2;
   const hw = W / 2;
   ctx.fillStyle = shade(color, -0.1);
@@ -177,6 +179,23 @@ function drawJeepney(ctx, L, W, color, accent) {
   // rear step
   ctx.fillStyle = '#9ca3af';
   ctx.fillRect(-hl - 0.15, -hw * 0.5, 0.18, W * 0.5);
+  // route board on the roof
+  const route = ROUTES[vh % ROUTES.length];
+  ctx.fillStyle = 'rgba(254,250,224,0.95)';
+  ctx.fillRect(-hl + 0.6, -0.32, L * 0.5, 0.64);
+  ctx.save();
+  ctx.translate(-hl + 0.6 + L * 0.25, 0);
+  // Keep the board readable whichever way the jeepney is heading
+  const t = ctx.getTransform();
+  if (Math.cos(Math.atan2(t.b, t.a)) < -0.1) ctx.rotate(Math.PI);
+  const k = Math.min(0.03, (L * 0.48) / Math.max(1, route.length * 13));
+  ctx.scale(k, k);
+  ctx.font = '900 20px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#991b1b';
+  ctx.fillText(route, 0, 1);
+  ctx.restore();
 }
 
 function drawBus(ctx, L, W, color) {
@@ -599,7 +618,7 @@ export function drawVehicle(ctx, v, time) {
       drawTricycle(ctx, L, W, v.color, HELMETS[(v.id + 2) % HELMETS.length]);
       break;
     case 'jeepney':
-      drawJeepney(ctx, L, W, v.color, JEEP_ACCENTS[v.id % JEEP_ACCENTS.length]);
+      drawJeepney(ctx, L, W, v.color, JEEP_ACCENTS[v.id % JEEP_ACCENTS.length], vh);
       break;
     case 'bus':
       drawBus(ctx, L, W, v.color);

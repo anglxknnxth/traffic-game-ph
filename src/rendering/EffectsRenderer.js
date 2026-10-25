@@ -6,7 +6,42 @@
 import { worldText } from './RoadRenderer.js';
 import { AI_STATE } from '../simulation/Vehicle.js';
 
+const SMOKY = new Set(['jeepney', 'truck', 'bus', 'dumptruck', 'tanker', 'tricycle']);
+
 export class EffectsRenderer {
+  constructor() {
+    this.puffs = [];
+    this.lastTime = 0;
+  }
+
+  /** Old diesels puff black smoke when they pull away. */
+  drawSmoke(ctx, vehicles, time) {
+    const dt = Math.max(0, Math.min(0.1, time - this.lastTime));
+    this.lastTime = time;
+    for (const v of vehicles) {
+      if (!SMOKY.has(v.type) || v.a < 0.7 || v.v > 7) continue;
+      v._puff = (v._puff || 0) - dt;
+      if (v._puff > 0) continue;
+      v._puff = 0.18 + ((v.id * 37) % 10) / 40;
+      const c = Math.cos(v.angle);
+      const s = Math.sin(v.angle);
+      this.puffs.push({ x: v.x - c * (v.hl + 0.3) + s * 0.4, y: v.y - s * (v.hl + 0.3) - c * 0.4, t: 0, dark: v.type === 'jeepney' || v.type === 'dumptruck' });
+    }
+    if (this.puffs.length > 300) this.puffs.splice(0, this.puffs.length - 300);
+    const keep = [];
+    for (const p of this.puffs) {
+      p.t += dt;
+      if (p.t > 1.6) continue;
+      keep.push(p);
+      const k = p.t / 1.6;
+      ctx.fillStyle = p.dark ? `rgba(40,40,40,${0.35 * (1 - k)})` : `rgba(120,120,120,${0.25 * (1 - k)})`;
+      ctx.beginPath();
+      ctx.arc(p.x + k * 0.8, p.y - k * 0.6, 0.35 + k * 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    this.puffs = keep;
+  }
+
   drawUnder(ctx, vehicles, time) {
     for (const v of vehicles) {
       if (v.stoppedTime > 12 && !v.emergency) {

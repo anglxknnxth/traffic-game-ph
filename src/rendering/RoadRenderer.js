@@ -13,6 +13,7 @@ import { Rng, makeObb, setObb, obbOverlap } from '../utils/math.js';
 import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
 import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
 import { rightOf, leftOf, SLOT_KINDS } from '../simulation/LaneManager.js';
+import { TextureBank } from './TextureBank.js';
 import { drawRiverStatic, drawRiverDynamic, drawBridgeShadows, drawBridgeRails, findBridges, bankPlants, drawBankPlants } from './RiverRenderer.js';
 
 const SW = SIDEWALK_WIDTH;
@@ -154,6 +155,10 @@ export class RoadRenderer {
     this.theme = THEMES[network.map.theme] || THEMES.default;
     this.bridges = network.river ? findBridges(network.river, this._armBands()) : [];
     this.scenery = this._generateScenery();
+    // Surface textures (procedural; photo textures on maps that have a set). The static layer is
+    // re-rendered when photos finish loading (version is part of the renderer's cache key).
+    this.version = 0;
+    this.tex = new TextureBank(network.map.textures || null, () => this.version++);
   }
 
   /** Every drawn arm as { g, len, half } (for bridge detection). */
@@ -283,6 +288,7 @@ export class RoadRenderer {
                 color: rng.pick(T.roofs),
                 ribbed: rng.chance(0.55),
                 details: detail(),
+                tiled: false,
                 shop: nearCorner && rng.chance(T.shopChance) ? { name: rng.pick(T.shops), awning: rng.pick(AWNING) } : null,
                 face: { x: 0, y: -sgn }, // toward the road, in the building's own frame
               });
@@ -327,7 +333,17 @@ export class RoadRenderer {
     }
     // Bamboo and nipa along the river banks (own RNG so maps without water are unchanged)
     const plants = river ? bankPlants(river, new Rng((net.map.sceneSeed ?? 1898) + 31)).filter((t) => !hits(box(t.x, t.y, 3, 3, 0), corridors, 0.5)) : [];
-    return { buildings, trees, sheds, posts, area, bankPlants: plants };
+    for (const b of buildings) if (!b.ribbed && /^#(a3|b4|8b|9c|6f5)/.test(b.color)) b.tiled = true;
+    // Bare patches of soil in the empty lots (own RNG so the rest of the scene is unchanged)
+    const lr = new Rng((net.map.sceneSeed ?? 1898) + 77);
+    const lots = [];
+    for (let i = 0; i < Math.round(30 * areaScale); i++) {
+      const x = lr.range(area.minX, area.maxX);
+      const y = lr.range(area.minY, area.maxY);
+      if (hits(box(x, y, 10, 10, 0), corridors, 1) || wet(x, y, 4)) continue;
+      lots.push({ x, y, rx: lr.range(5, 14), ry: lr.range(3, 9), angle: lr.range(0, Math.PI) });
+    }
+    return { buildings, trees, sheds, posts, area, bankPlants: plants, lots };
   }
 
   // ------------------------------------------------------------------ static drawing
@@ -337,6 +353,31 @@ export class RoadRenderer {
     const R = CURB_RADIUS;
     ctx.fillStyle = this.theme.ground;
     ctx.fillRect(a.minX - 400, a.minY - 400, a.maxX - a.minX + 800, a.maxY - a.minY + 800);
+    // Grass and bare soil, tinted toward the map's own ground colour
+    const grass = this.tex.pattern(ctx, 'grass');
+    if (grass) {
+      ctx.globalAlpha = this.tex.isPhoto('grass') ? 0.7 : 0.85;
+      ctx.fillStyle = grass;
+      ctx.fillRect(a.minX - 400, a.minY - 400, a.maxX - a.minX + 800, a.maxY - a.minY + 800);
+      const dirt = this.tex.pattern(ctx, 'dirt');
+      if (dirt) {
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = dirt;
+        for (const lot of this.scenery.lots || []) {
+          ctx.save();
+          ctx.translate(lot.x, lot.y);
+          ctx.rotate(lot.angle);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, lot.rx, lot.ry, 0, 0, Math.PI * 2);
+          ctx.restore();
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = this.theme.ground;
+      ctx.fillRect(a.minX - 400, a.minY - 400, a.maxX - a.minX + 800, a.maxY - a.minY + 800);
+      ctx.globalAlpha = 1;
+    }
     if (net.river) {
       drawRiverStatic(ctx, net.river);
       drawBankPlants(ctx, this.scenery.bankPlants);
@@ -358,7 +399,7 @@ export class RoadRenderer {
     this._drawElevatedShadows(ctx);
 
     // Sidewalks
-    ctx.fillStyle = COLORS.sidewalk;
+    ctx.fillStyle = this.tex.pattern(ctx, 'sidewalk') || COLORS.sidewalk;
     eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -(A.half + SW), A.half + SW), true);
     // Sidewalk paving joints
     ctx.strokeStyle = 'rgba(0,0,0,0.07)';
@@ -385,8 +426,9 @@ export class RoadRenderer {
         strip(ctx, this._g(I, arm), this._cross(I, arm) + 2, armLength(net, I, arm), -(A.half + 0.7), A.half + 0.7);
       }
     }
-    // Asphalt
-    ctx.fillStyle = COLORS.asphalt;
+    // Asphalt (older, patched roads in the old city and the provinces)
+    const asphalt = this.tex.pattern(ctx, this._asphaltName()) || COLORS.asphalt;
+    ctx.fillStyle = asphalt;
     eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -A.half, A.half));
     // Rounded curbs where two roads meet
     for (const I of net.intersections) {
@@ -396,9 +438,9 @@ export class RoadRenderer {
           if (I.arms[sx > 0 ? 'E' : 'W'].type === 'none' || I.arms[sy > 0 ? 'S' : 'N'].type === 'none') continue;
           const cx = I.x + sx * (I.hx + R);
           const cy = I.y + sy * (I.hy + R);
-          ctx.fillStyle = COLORS.asphalt;
+          ctx.fillStyle = asphalt;
           ctx.fillRect(Math.min(I.x, cx), Math.min(I.y, cy), Math.abs(cx - I.x), Math.abs(cy - I.y));
-          ctx.fillStyle = COLORS.sidewalk;
+          ctx.fillStyle = this.tex.pattern(ctx, 'sidewalk') || COLORS.sidewalk;
           ctx.beginPath();
           ctx.arc(cx, cy, R, 0, Math.PI * 2);
           ctx.fill();
@@ -451,7 +493,143 @@ export class RoadRenderer {
     this._drawTunnels(ctx);
     this._drawLaneDrops(ctx);
     if (net.river) drawBridgeRails(ctx, this.bridges, SW, net.river.name);
+    this._drawRoadWear(ctx);
     this._drawScenery(ctx);
+    this._drawStreetFurniture(ctx);
+  }
+
+  /** Manholes and tyre-darkened asphalt where traffic stops (fixed per map). */
+  _drawRoadWear(ctx) {
+    const rng = new Rng((this.network.map.sceneSeed ?? 1) + 5);
+    for (const I of this.network.intersections) {
+      if (this._elevated(I)) continue;
+      for (const arm of this._arms(I)) {
+        const A = I.arms[arm];
+        const g = this._g(I, arm);
+        const len = armLength(this.network, I, arm);
+        // Tyre-darkened strip in each approach lane before the stop line
+        if (I.kind === 'signal' || (I.kind === 'yield' && !I.major.has(arm))) {
+          for (const lane of I.approachLanes[arm] || []) {
+            if (lane.type === 'tunnel' && I.def.underpass) continue;
+            ctx.fillStyle = 'rgba(10,10,12,0.13)';
+            for (const dy of [-0.65, 0.65]) strip(ctx, g, A.stop + 0.6, A.stop + 14, -lane.offset + dy - 0.28, -lane.offset + dy + 0.28);
+          }
+        }
+        // Manholes in the lanes
+        for (let k = 0; k < 3; k++) {
+          const u = rng.range(A.stop + 20, Math.min(len - 5, A.stop + 140));
+          const lane = rng.pick([...(I.approachLanes[arm] || []), ...(I.exitLanes[arm] || [])]);
+          if (!lane || u >= len) continue;
+          const q = at(g, u, (lane.role === 'exit' || (lane.startInt === I && lane.role === 'link') ? 1 : -1) * lane.offset + rng.range(-0.6, 0.6));
+          ctx.fillStyle = '#2b2d31';
+          ctx.beginPath();
+          ctx.arc(q.x, q.y, 0.42, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(150,150,150,0.45)';
+          ctx.lineWidth = 0.06;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  /**
+   * Street furniture: blue MMDA street-name signs at the corners, "BAWAL MAGBABA/MAGSAKAY DITO"
+   * signs, and the tangle of overhead wires strung between the posts.
+   */
+  _drawStreetFurniture(ctx) {
+    const net = this.network;
+    const p = {};
+    for (const I of net.intersections) {
+      if (I.kind !== 'signal' && I.kind !== 'yield') continue;
+      if (this._elevated(I)) continue;
+      this._arms(I).forEach((arm, idx) => {
+        const A = I.arms[arm];
+        if (this._ramp(I, arm)) return;
+        const g = this._g(I, arm);
+        const name = net.roadName(I, arm);
+        if (name) {
+          // Sign on the right of the traffic coming in, facing it
+          at(g, A.cwStart + CROSSWALK_WIDTH + 13, -(A.half + SW * 0.55), p);
+          const w = Math.min(7, name.length * 0.62 + 1.2);
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle + Math.PI / 2);
+          ctx.fillStyle = 'rgba(0,0,0,0.3)';
+          ctx.fillRect(-w / 2 + 0.25, -0.55 + 0.3, w, 1.3);
+          ctx.fillStyle = '#1d4ed8';
+          ctx.fillRect(-w / 2, -0.65, w, 1.3);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 0.08;
+          ctx.strokeRect(-w / 2 + 0.12, -0.53, w - 0.24, 1.06);
+          ctx.restore();
+          worldText(ctx, name.toUpperCase(), p.x, p.y, 0.72, '#ffffff', p.angle + Math.PI / 2, 'center', 800);
+        }
+        if (I.kind === 'signal' && idx % 2 === 0 && A.type === 'external') {
+          // "No loading or unloading" by the corner on the exit side
+          at(g, A.exitStop + 10, A.half + SW * 0.6, p);
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle);
+          ctx.fillStyle = 'rgba(0,0,0,0.3)';
+          ctx.fillRect(-2.9 + 0.25, -0.6 + 0.3, 5.8, 1.2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(-2.9, -0.6, 5.8, 1.2);
+          ctx.strokeStyle = '#dc2626';
+          ctx.lineWidth = 0.16;
+          ctx.strokeRect(-2.9, -0.6, 5.8, 1.2);
+          ctx.restore();
+          worldText(ctx, 'BAWAL MAGBABA DITO', p.x, p.y, 0.62, '#b91c1c', p.angle, 'center', 900);
+        }
+      });
+    }
+    // Overhead wires: sagging bundles between neighbouring posts, now and then across the road
+    const posts = this.scenery.posts;
+    if (!posts.length) return;
+    ctx.save();
+    ctx.lineCap = 'round';
+    const rng = new Rng((net.map.sceneSeed ?? 1) + 9);
+    for (let i = 0; i < posts.length; i++) {
+      const a = posts[i];
+      let best = null;
+      let bestD = 26;
+      for (let j = 0; j < posts.length; j++) {
+        if (j === i) continue;
+        const b = posts[j];
+        const d = Math.hypot(b.x - a.x, b.y - a.y);
+        if (d > 6 && d < bestD && (b.x > a.x || (b.x === a.x && b.y > a.y))) {
+          best = b;
+          bestD = d;
+        }
+      }
+      if (!best) continue;
+      const n = rng.int(2, 4);
+      for (let k = 0; k < n; k++) {
+        const sag = rng.range(0.6, 1.8);
+        const mx = (a.x + best.x) / 2 + rng.range(-0.4, 0.4);
+        const my = (a.y + best.y) / 2 + sag;
+        ctx.strokeStyle = k === 0 ? 'rgba(15,15,18,0.55)' : 'rgba(25,25,30,0.38)';
+        ctx.lineWidth = k === 0 ? 0.09 : 0.06;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y + k * 0.08);
+        ctx.quadraticCurveTo(mx, my, best.x, best.y + k * 0.08);
+        ctx.stroke();
+      }
+      // A transformer or a tangle on some posts
+      if (rng.chance(0.25)) {
+        ctx.fillStyle = '#4b5563';
+        ctx.fillRect(a.x - 0.45, a.y - 0.45, 0.9, 0.9);
+        ctx.strokeStyle = 'rgba(15,15,18,0.5)';
+        ctx.lineWidth = 0.05;
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          ctx.moveTo(a.x + rng.range(-0.8, 0.8), a.y + rng.range(-0.8, 0.8));
+          ctx.quadraticCurveTo(a.x + rng.range(-1.2, 1.2), a.y + rng.range(-1.2, 1.2), a.x + rng.range(-0.8, 0.8), a.y + rng.range(-0.8, 0.8));
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   /** Shadow of the expressway and its ramps on the ground (sun from the upper left), with piers. */
@@ -492,7 +670,7 @@ export class RoadRenderer {
         const len = armLength(net, I, arm);
         ctx.fillStyle = '#c9c5bc'; // parapet
         strip(ctx, g, 0, len, -(A.half + 0.75), A.half + 0.75);
-        ctx.fillStyle = '#44474d'; // deck asphalt
+        ctx.fillStyle = this.tex.pattern(ctx, 'asphalt') || '#44474d'; // deck asphalt
         strip(ctx, g, 0, len, -A.half, A.half);
         ctx.fillStyle = 'rgba(0,0,0,0.18)';
         strip(ctx, g, 0, len, A.half, A.half + 0.2);
@@ -653,6 +831,11 @@ export class RoadRenderer {
     }
   }
 
+  _asphaltName() {
+    const t = this.network.map.theme;
+    return t === 'old-manila' || t === 'province' ? 'asphaltWorn' : 'asphalt';
+  }
+
   _medianStart(I, A) {
     if (SLOT_KINDS.has(I.kind)) return A.stop;
     return A.cwStart + CROSSWALK_WIDTH + 0.4;
@@ -675,7 +858,7 @@ export class RoadRenderer {
       return;
     }
     const h = m / 2 - 0.15;
-    ctx.fillStyle = style === 'grass' ? COLORS.medianGrass : COLORS.median;
+    ctx.fillStyle = style === 'grass' ? this.tex.pattern(ctx, 'grass') || COLORS.medianGrass : COLORS.median;
     strip(ctx, g, x0, len, -h, h);
     ctx.strokeStyle = COLORS.yellow;
     ctx.lineWidth = 0.2;
@@ -946,7 +1129,18 @@ export class RoadRenderer {
       ctx.rotate(b.angle);
       ctx.fillStyle = b.color;
       ctx.fillRect(minX, minY, w, h);
-      if (b.ribbed) {
+      // Roof material: corrugated yero, clay tiles or a concrete deck, in the building's colour
+      const roof = this.tex.pattern(ctx, b.ribbed ? 'yero' : b.tiled ? 'tiles' : 'concrete');
+      if (roof) {
+        ctx.save();
+        if (b.ribbed && w < h) ctx.rotate(Math.PI / 2); // ridges run along the long side
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = roof;
+        if (b.ribbed && w < h) ctx.fillRect(minY, -maxX, h, w);
+        else ctx.fillRect(minX, minY, w, h);
+        ctx.restore();
+      }
+      if (b.ribbed && !roof) {
         ctx.strokeStyle = 'rgba(0,0,0,0.13)';
         ctx.lineWidth = 0.12;
         ctx.beginPath();

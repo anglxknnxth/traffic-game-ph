@@ -22,6 +22,7 @@ function auditPeds(sim, margin = 0.1) {
   for (const p of sim.peds.peds) {
     for (const v of sim.vehicles) {
       if (Math.abs(v.x - p.x) > 8 || Math.abs(v.y - p.y) > 8) continue;
+      if (Math.abs(v.layer || 0) >= 1) continue; // up on the expressway or down in the underpass
       const d = distToVehicle(p.x, p.y, v.obb) - PED_RADIUS;
       if (d < margin) throw new Error(`Pedestrian ${p.id} (${p.state}) ${d.toFixed(2)} m from vehicle ${v.id} at t=${sim.time.toFixed(2)}`);
     }

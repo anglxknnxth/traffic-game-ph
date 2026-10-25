@@ -20,6 +20,7 @@ export class VehicleSpawner {
     this.keys = sim.network.externalApproachKeys();
     this.timers = new Map();
     this.pending = new Map();
+    this.nextSpawnAt = new Map(); // per lane: queued arrivals enter at a natural headway, not in a burst
     this.wavePhase = new Map();
     for (const lane of sim.network.spawnLanes) this.pending.set(lane, []);
     for (const k of this.keys) {
@@ -92,7 +93,8 @@ export class VehicleSpawner {
     }
     // Spawn from queues when the lane entry is free
     for (const [lane, q] of this.pending) {
-      if (q.length && this.trySpawn(lane, q[0])) q.shift();
+      if (!q.length || (this.nextSpawnAt.get(lane) ?? 0) > t) continue;
+      if (this.trySpawn(lane, q[0])) q.shift();
     }
   }
 
@@ -230,6 +232,9 @@ export class VehicleSpawner {
       }
     }
     sim.addVehicle(veh, lane);
+    // The next queued arrival on this lane follows at its driver's own headway.
+    const vEntry = Math.max(veh.v, 1);
+    this.nextSpawnAt.set(lane, sim.time + Math.min(3, Math.max(0.9, (spec.length + veh.p.minGap) / vEntry + veh.p.headway * 0.6)));
     return true;
   }
 }

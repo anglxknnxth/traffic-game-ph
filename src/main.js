@@ -21,6 +21,8 @@ if (play) {
     if (q.get('zoom')) {
       game.camera.zoomAt(Number(q.get('zoom')));
       const c = game.camera;
+      c.update(10); // finish the eased zoom right away
+      c.update(10);
       if (q.get('x') !== null || q.get('y') !== null) c.panBy((c.centerX - Number(q.get('x') ?? c.centerX)) * c.scale, (c.centerY - Number(q.get('y') ?? c.centerY)) * c.scale);
     }
   }

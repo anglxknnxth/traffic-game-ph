@@ -233,6 +233,31 @@ export class PedestrianManager {
     return { u: I.kind === 'uturn' ? 0 : (arm === 'N' || arm === 'S' ? I.hy : I.hx) + SW / 2, next: null, blend: false };
   }
 
+  /**
+   * A jeepney or tricycle stopped at the corner of `exitArm`: 1–3 passengers step off onto that
+   * corner's sidewalk (the exit side), and people strolling right there may hop on.
+   */
+  alight(v, I, exitArm) {
+    if (!this.cfg || I.arms[exitArm]?.type === 'none') return;
+    const rng = this.rng;
+    const side = 1; // exit lanes run on the right of the outward direction
+    const base = this._corner(I, exitArm, side).u;
+    for (const p of this.peds) {
+      if (p.state !== 'walk' || p.road?.I !== I || p.road.arm !== exitArm || p.side !== side) continue;
+      if (Math.abs(p.u - base) < 6 && rng.chance(0.5)) p.gone = true; // boarded
+    }
+    const n = rng.int(1, 3);
+    for (let i = 0; i < n && this.peds.length < MAX_PEDS; i++) {
+      const p = this._newPed();
+      p.road = { I, arm: exitArm };
+      p.side = side;
+      p.u = base + rng.range(0.5, 3.5);
+      p.dir = rng.chance(0.6) ? 1 : -1;
+      this._place(p);
+      this.peds.push(p);
+    }
+  }
+
   /** Position a sidewalk walker. Near a corner they drift to the middle of the sidewalk. */
   _place(p) {
     const A = p.road.I.arms[p.road.arm];
@@ -411,8 +436,9 @@ export class PedestrianManager {
       if (this._trafficComing(c)) return;
       red = true;
     }
-    if (c.grid.vehicleOn(line.fp)) return;
-    c.grid.reservePed(p, line.conn, line.fp);
+    // Only the first stretch of the crosswalk needs to be clear: a car crossing its far end does
+    // not stop people stepping out (they hold a moving window as they walk, see _crossing).
+    if (!c.grid.pedAdvance(p, line.conn, line.fp, 0)) return;
     const start = line.conn.path.points()[0];
     const lead = Math.hypot(start.x - p.x, start.y - p.y);
     p.cross = { c, line, s: -lead, lead, x0: p.x, y0: p.y };
@@ -453,7 +479,16 @@ export class PedestrianManager {
     const cr = p.cross;
     const ws = this.walkState(cr.c);
     const hurry = ws === 'walk' || ws === 'gap' ? 1 : 1.6;
-    cr.s += p.speed * hurry * dt;
+    const next = cr.s + p.speed * hurry * dt;
+    // Hold the crosswalk just ahead; if a vehicle is crossing it, wait where we stand.
+    if (!cr.c.grid.pedAdvance(p, cr.line.conn, cr.line.fp, Math.max(0, next), cr.waitMid || 0)) {
+      p.moving = false;
+      cr.waitMid = (cr.waitMid || 0) + dt;
+      this.stats.maxMidWait = Math.max(this.stats.maxMidWait || 0, cr.waitMid);
+      return;
+    }
+    cr.waitMid = 0;
+    cr.s = next;
     if (cr.s < 0) {
       const t = 1 + cr.s / Math.max(cr.lead, 1e-6);
       const s0 = cr.line.conn.path.points()[0];

@@ -159,6 +159,7 @@ export class Menu {
     if (Object.values(map.roads || {}).some((r) => r.types?.includes('bike'))) extra.push('🚲 Bike lanes');
     const heavy = ['truck', 'dumptruck', 'tanker'].reduce((n, t) => n + (lvl.mix?.[t] || 0), 0);
     if (heavy >= 0.1) extra.push('🚚 Trucks');
+    if (lvl.cornerStops > 0 && ['jeepney', 'ejeep', 'multicab', 'tricycle'].some((t) => lvl.mix?.[t] > 0)) extra.push('🚏 Jeeps stop at corners');
     if (lvl.pedestrians?.cross) extra.push('🚶 Pedestrians');
     if (lvl.pedestrians?.jaywalk) extra.push('Pasaway jaywalkers');
     if (lvl.emergency) extra.push('Emergency vehicles');

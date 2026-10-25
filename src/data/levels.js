@@ -12,6 +12,8 @@ const BASE = {
   initialGroups: { A: 'N', B: 'E' },
   demand: { N: 8, S: 8, E: 7, W: 7 },
   demandScale: 1.25,
+  // Chance that a jeepney / tricycle stops at the corner inside the junction to drop off passengers.
+  cornerStops: 0.15,
   demandRamp: 0,
   demandWave: 0.25,
   mix: { car: 1 },

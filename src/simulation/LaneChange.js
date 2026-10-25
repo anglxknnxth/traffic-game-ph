@@ -10,9 +10,10 @@
 import { Route } from './Vehicle.js';
 import { Network } from './LaneManager.js';
 import { idm } from './VehicleAI.js';
-import { LOADING_ZONE_S } from '../data/config.js';
+import { LOADING_ZONE_S, SIM_DT } from '../data/config.js';
 
 const CHECK_EVERY = 30; // steps between checks per vehicle (0.5 s at 60 Hz), staggered by id
+const SIGNAL_FIRST = 0.8; // seconds of indicator before a discretionary lane change starts
 
 export class LaneChanger {
   constructor(sim) {
@@ -34,9 +35,22 @@ export class LaneChanger {
     this.tick++;
     for (const v of this.sim.vehicles) {
       if (v.lc && (v.s >= v.lc.s0 + v.lc.L || v.segment !== v.route.entries[0].seg)) this.finish(v);
+      // Signal first: the indicator blinks for a moment before the move, then the choice is checked
+      // again (traffic may have changed) and carried out or dropped.
+      if (v.lcPending) {
+        v.lcPending.t -= SIM_DT;
+        if (v.lcPending.t > 0) continue;
+        const again = this.choose(v);
+        v.lcPending = null;
+        if (again) this.execute(v, again.lane, again.L);
+        else v.lcCooldown = 1.5;
+        continue;
+      }
       if (v.lc || v.lcCooldown > 0 || (this.tick + v.seq) % CHECK_EVERY !== 0) continue;
       const target = this.choose(v);
-      if (target) this.execute(v, target.lane, target.L);
+      if (!target) continue;
+      if (target.forced) this.execute(v, target.lane, target.L);
+      else v.lcPending = { t: SIGNAL_FIRST, dir: target.lane.laneIndex > v.segment.laneIndex ? 1 : -1 };
     }
   }
 
@@ -117,6 +131,8 @@ export class LaneChanger {
       if (this.sim.blockageOnLane(B, v.localS - v.hl - 2, v.localS + 45)) continue;
       // Do not drift into a dedicated lane you may use but did not pick (buses stay in the busway, motos in the moto lane, unless forced).
       if (B.allowed && !forced && seg.allowed !== B.allowed && !B.allowed.has(v.type)) continue;
+      // No weaving: don't go straight back to the lane just left unless forced.
+      if (!forced && v.lcBack && v.lcBack.lane === B && this.sim.time < v.lcBack.until) continue;
       const { lead, follow } = this._around(B, v.localS, v);
       const gapFront = lead ? lead.localS - lead.hl - v.localS - v.hl : Infinity;
       const gapBack = follow ? v.localS - v.hl - follow.localS - follow.hl : Infinity;
@@ -134,7 +150,7 @@ export class LaneChanger {
       }
       const accNew = this._accWith(v, lead);
       const gain = accNew - accCur - (P.politeness ?? 0.4) * followerLoss + (forced ? 2 : 0);
-      if (gain > threshold && (!best || gain > best.gain)) best = { lane: B, gain, L };
+      if (gain > threshold && (!best || gain > best.gain)) best = { lane: B, gain, L, forced };
     }
     return best;
   }
@@ -181,6 +197,7 @@ export class LaneChanger {
     v._gateS = undefined;
     v.lc = { s0: v.s, L, off, fromLane: A };
     v.lcCooldown = 3 + (v.seq % 5);
+    v.lcBack = { lane: A, until: this.sim.time + 12 };
     if (v.loading && v.loading.state === 'pending') {
       const exit = route.exitLane;
       const ok = (exit.isCurb && exit.type === 'general') || (exit.type === 'bus' && v.type === 'bus');

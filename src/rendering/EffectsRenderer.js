@@ -63,6 +63,17 @@ export class EffectsRenderer {
         ctx.roundRect ? ctx.roundRect(v.x - w / 2, y - 0.9, w, 1.8, 0.6) : ctx.rect(v.x - w / 2, y - 0.9, w, 1.8);
         ctx.fill();
         worldText(ctx, v.hornText, v.x, y + 0.02, 1.15, '#ffd60a');
+      } else if (v.sayTimer > 0 && v.say) {
+        // Passengers calling a stop ("PARA PO!") while a jeepney drops off at the corner
+        const y = v.y - v.hl - 2.2;
+        const w = v.say.length * 0.72 + 1.2;
+        ctx.globalAlpha = Math.min(1, v.sayTimer / 0.4);
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(v.x - w / 2, y - 0.9, w, 1.8, 0.6) : ctx.rect(v.x - w / 2, y - 0.9, w, 1.8);
+        ctx.fill();
+        worldText(ctx, v.say, v.x, y + 0.02, 1.15, '#166534');
+        ctx.globalAlpha = 1;
       }
     }
   }

@@ -11,6 +11,8 @@ import { makeObb, setObb, obbOverlap } from '../utils/math.js';
 import { CELL_SIZE, FOOTPRINT_PAD, GRID_EXTENSION, LANE_WIDTH, ARMS } from '../data/config.js';
 import { VEHICLE_TYPES } from '../data/vehicles.js';
 
+const SHARE_MARGIN = 1.0; // seconds between one vehicle leaving a shared cell and the next arriving
+const PED_AHEAD = 2.5; // metres of crosswalk a walking pedestrian holds ahead of themselves
 const _pt = { x: 0, y: 0, dx: 0, dy: 0 };
 const _pa = { x: 0, y: 0, dx: 0, dy: 0 };
 const _pb = { x: 0, y: 0, dx: 0, dy: 0 };
@@ -93,6 +95,7 @@ export class IntersectionManager {
     const hl = spec.length / 2 + this.pad;
     const hw = spec.width / 2 + this.pad;
     const lastS = new Map();
+    const firstS = new Map();
     const obb = makeObb();
     const path = conn.path;
     const step = 0.3;
@@ -104,10 +107,16 @@ export class IntersectionManager {
       path.pointAt(s + 0.6, _pb);
       const ang = Math.atan2(_pb.y - _pa.y, _pb.x - _pa.x);
       setObb(obb, _pt.x, _pt.y, Math.cos(ang), Math.sin(ang), hl, hw);
-      this._rasterize(obb, (idx) => lastS.set(idx, s));
+      this._rasterize(obb, (idx) => {
+        if (!firstS.has(idx)) firstS.set(idx, s);
+        lastS.set(idx, s);
+      });
     }
     const cells = Int32Array.from(lastS.keys());
     const last = Float64Array.from(cells, (c) => lastS.get(c));
+    const first = Float64Array.from(cells, (c) => firstS.get(c));
+    const index = new Map();
+    for (let i = 0; i < cells.length; i++) index.set(cells[i], i);
 
     // Cells outside the core that intrude on *other* approach lanes: those lanes must keep clear.
     // (Pedestrian crossings never reach into a lane outside the box.)
@@ -159,7 +168,7 @@ export class IntersectionManager {
       }
     }
 
-    fp = { cells, lastS: last, keepClear };
+    fp = { cells, firstS: first, lastS: last, index, keepClear };
     this.cache.set(key, fp);
     return fp;
   }
@@ -169,8 +178,14 @@ export class IntersectionManager {
     return this.findBlocker(vehicle, conn) === null;
   }
 
-  /** The vehicle preventing `vehicle` from reserving `conn`, or null when the path is free. */
-  findBlocker(vehicle, conn) {
+  /**
+   * The vehicle preventing `vehicle` from reserving `conn`, or null when the path is free.
+   * With `arrival` ({ dist, v, a }: distance from the front to the stop line, speed, acceleration),
+   * a cell still held by a moving vehicle that will have left it well before we can get there is
+   * treated as free: the two reservations then share it, and the later vehicle must stop short of
+   * it until the earlier one has released it (see sharedLimit).
+   */
+  findBlocker(vehicle, conn, arrival = null) {
     const fp = this.footprint(conn, vehicle.spec);
     const { cells } = fp;
     for (let i = 0; i < cells.length; i++) {
@@ -179,7 +194,9 @@ export class IntersectionManager {
         const o = owners[j];
         if (o === vehicle) continue;
         const r = o.reservations.get(this.id);
-        if (!r || r.conn !== conn) return o;
+        if (r && r.conn === conn) continue;
+        if (arrival && r && this._clearsBefore(o, r, cells[i], vehicle, fp.firstS[i], arrival)) continue;
+        return o;
       }
     }
     // Vehicles physically standing in intruded areas of other lanes block the reservation.
@@ -236,15 +253,69 @@ export class IntersectionManager {
     return list;
   }
 
+  /**
+   * Will vehicle O (reservation r) have left cell `idx` at least SHARE_MARGIN seconds before
+   * `vehicle` could possibly reach it? Only for moving, well-behaved vehicles.
+   */
+  _clearsBefore(o, r, idx, vehicle, firstS, arrival) {
+    if (o.isPed || o.v < 2 || o.a < -1 || o.boxBlocker || o.emergency) return false;
+    if (o.cornerStop && o.cornerStop.state !== 'done') return false;
+    const k = r.fp.index.get(idx);
+    if (k === undefined) return false;
+    const left = r.fp.lastS[k] - (o.s - r.connStart);
+    if (left <= 0) return true;
+    const tClear = left / o.v;
+    if (tClear > 3) return false;
+    // Earliest arrival of our body centre at the cell: full acceleration from the current speed.
+    const d = arrival.dist + vehicle.hl + firstS;
+    if (d <= 0) return false;
+    const a = Math.max(0.5, arrival.a);
+    const tArrive = (-arrival.v + Math.sqrt(arrival.v * arrival.v + 2 * a * d)) / a;
+    return tClear + SHARE_MARGIN < tArrive;
+  }
+
   reserve(vehicle, conn, connStart) {
     const fp = this.footprint(conn, vehicle.spec);
     const held = new Uint8Array(fp.cells.length).fill(1);
-    for (let i = 0; i < fp.cells.length; i++) this.owners[fp.cells[i]].push(vehicle);
-    const res = { conn, fp, held, remaining: fp.cells.length, connStart, keepClearActive: fp.keepClear.length > 0 };
+    // Cells still held by someone else (time-shared, see findBlocker): wait short of them until freed.
+    let shared = null;
+    for (let i = 0; i < fp.cells.length; i++) {
+      const owners = this.owners[fp.cells[i]];
+      for (const o of owners) {
+        if (o === vehicle || o.isPed) continue;
+        const r = o.reservations.get(this.id);
+        if (r && r.conn === conn) continue;
+        (shared ||= []).push({ idx: fp.cells[i], firstS: fp.firstS[i], owner: o });
+      }
+      owners.push(vehicle);
+    }
+    const res = { conn, fp, held, remaining: fp.cells.length, connStart, keepClearActive: fp.keepClear.length > 0, shared };
     vehicle.reservations.set(this.id, res);
     for (const kc of fp.keepClear) kc.lane.keepClear.set(vehicle, kc.limit);
     this.reservationCount++;
     return res;
+  }
+
+  /**
+   * Furthest connector progress (body centre) `vehicle` may reach while cells it shares are still
+   * held by the vehicle that had them first; null when nothing is pending.
+   */
+  sharedLimit(vehicle) {
+    const res = vehicle.reservations.get(this.id);
+    if (!res || !res.shared) return null;
+    let lim = null;
+    let pending = false;
+    for (const sc of res.shared) {
+      if (!sc.owner || !this.owners[sc.idx].includes(sc.owner)) {
+        sc.owner = null;
+        continue;
+      }
+      pending = true;
+      const l = sc.firstS - 0.3;
+      if (lim === null || l < lim) lim = l;
+    }
+    if (!pending) res.shared = null;
+    return lim;
   }
 
   _removeOwner(idx, vehicle) {
@@ -321,6 +392,49 @@ export class IntersectionManager {
     ped.reservations.set(this.id, { conn, fp, held, remaining: fp.cells.length });
   }
 
+  /**
+   * Moving window: make sure the pedestrian holds every crossing cell from `progress` to
+   * `progress + PED_AHEAD`. Returns false, acquiring nothing, when a vehicle holds any of them
+   * (the pedestrian then waits where they are). After waiting `patient` seconds mid-road they
+   * also claim every free cell still ahead, so no new vehicle can cut in before they finish.
+   */
+  pedAdvance(ped, conn, fp, progress, patient = 0) {
+    let res = ped.reservations.get(this.id);
+    if (!res || res.conn !== conn) {
+      if (res) this.releasePedAll(ped);
+      res = { conn, fp, held: new Uint8Array(fp.cells.length), remaining: 0 };
+      ped.reservations.set(this.id, res);
+    }
+    const reach = progress + PED_AHEAD;
+    for (let i = 0; i < fp.cells.length; i++) {
+      if (res.held[i] || fp.firstS[i] > reach || fp.lastS[i] < progress) continue;
+      const owners = this.owners[fp.cells[i]];
+      for (let j = 0; j < owners.length; j++) if (!owners[j].isPed) {
+        if (patient > 1) this._pedClaimAhead(ped, res, progress);
+        return false;
+      }
+    }
+    for (let i = 0; i < fp.cells.length; i++) {
+      if (res.held[i] || fp.firstS[i] > reach || fp.lastS[i] < progress) continue;
+      res.held[i] = 1;
+      res.remaining++;
+      this.owners[fp.cells[i]].push(ped);
+    }
+    return true;
+  }
+
+  _pedClaimAhead(ped, res, progress) {
+    const fp = res.fp;
+    for (let i = 0; i < fp.cells.length; i++) {
+      if (res.held[i] || fp.lastS[i] < progress) continue;
+      const owners = this.owners[fp.cells[i]];
+      if (owners.some((o) => !o.isPed)) continue;
+      res.held[i] = 1;
+      res.remaining++;
+      owners.push(ped);
+    }
+  }
+
   /** Release crossing cells the pedestrian has walked past. */
   releasePed(ped, progress) {
     const res = ped.reservations.get(this.id);
@@ -332,7 +446,7 @@ export class IntersectionManager {
         this._removeOwner(res.fp.cells[i], ped);
       }
     }
-    if (res.remaining <= 0) ped.reservations.delete(this.id);
+    // (The reservation record stays while crossing: the window keeps acquiring cells ahead.)
   }
 
   releasePedAll(ped) {

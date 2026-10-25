@@ -5,9 +5,11 @@
 // simulator applies hard limits and the collision gate afterwards.
 
 import { clamp } from '../utils/math.js';
-import { MIN_BUFFER } from '../data/config.js';
+import { MIN_BUFFER, SIM_DT } from '../data/config.js';
 import { AI_STATE } from './Vehicle.js';
+import { CORNER_STOP_TYPES } from '../data/vehicles.js';
 
+const JERK = 5; // m/s^3: how quickly comfortable acceleration may change
 const SIREN_CROSS_SPEED = 6; // m/s: emergency vehicles slow to this before crossing against a red
 
 export function idm(v, vLead, gap, v0, a, b, s0, T) {
@@ -142,7 +144,9 @@ export class VehicleAI {
         // a right turn on red: come to a full stop before looking for a gap.
         const mustStop = (I.kind === 'yield' && !I.major.has(conn.arm)) || (sig === 'flash' && !sirens) || rtor;
         if (want && mustStop && v.signStop !== I.id) {
-          if (distToStop < 1.6 && v.v < 0.3) {
+          // A full stop, or a rolling one (slow, close to the line) when nothing at all is coming.
+          const rolling = distToStop < 2.5 && v.v < 2.0 && !v.emergency && sim.clearToRoll(v, conn, sig, rtor);
+          if ((distToStop < 1.6 && v.v < 0.3) || rolling) {
             v.signStop = I.id;
             v.signStopAt = sim.time;
           } else {
@@ -153,6 +157,7 @@ export class VehicleAI {
         if (want && sim.tryEnter(v, conn, ce.start, distToStop)) {
           res = v.reservations.get(I.id);
           if (res) res.yellowCommit = duringYellow || sirens || rtor;
+          if (res) this.maybeCornerStop(v, conn, ce.start);
         }
         if (!res) {
           const aS = idmStop(v.v, distToStop - P.stopMargin, v0, aMax, b);
@@ -173,6 +178,16 @@ export class VehicleAI {
           constraint = 'signal';
           v.blockReason = 'signal';
         }
+      }
+    }
+
+    // 2b. Time-shared box cells: ease to a stop short of a cell the vehicle ahead still holds.
+    const sh = sim.sharedFrontLimit(v);
+    if (sh !== null) {
+      const aSh = idmStop(v.v, sh - front, v0, aMax, b);
+      if (aSh < acc) {
+        acc = aSh;
+        constraint = 'shared';
       }
     }
 
@@ -206,6 +221,32 @@ export class VehicleAI {
       if (L.state === 'stopped') {
         acc = Math.min(acc, -b);
         constraint = 'loading';
+      }
+    }
+
+    // 4b. Pasaway jeepney / tricycle stopping at the corner inside the junction (see maybeCornerStop)
+    if (v.cornerStop && v.cornerStop.state !== 'done') {
+      const C = v.cornerStop;
+      // Never hold up an emergency vehicle: cut the stop short and clear the box.
+      if (sim.emergencyClaimFor(v, C.I)) C.state = 'done';
+      else if (C.state === 'pending') {
+        const d = C.s - front;
+        if (d < 0.8 && v.v < 0.3) {
+          C.state = 'stopped';
+          C.timer = C.duration;
+          sim.onCornerStop(v, C);
+        } else if (d < -1) C.state = 'done';
+        else {
+          const aP = idmStop(v.v, d, v0, aMax, b);
+          if (aP < acc) {
+            acc = aP;
+            constraint = 'cornerstop';
+          }
+        }
+      }
+      if (C.state === 'stopped') {
+        acc = Math.min(acc, -b);
+        constraint = 'cornerstop';
       }
     }
 
@@ -247,8 +288,10 @@ export class VehicleAI {
     }
 
     // Start-up reaction: once whatever held a stopped vehicle clears, it takes a moment to go.
+    // In a queue that is already moving, drivers anticipate: only the head waits the full time.
     if (v.v < 0.3 && acc > 0.05) {
       if (v.reactTimer === null) v.reactTimer = v.reaction + env.reactionExtra;
+      if (lead && lead.vehicle.v > 0.8 && v.reactTimer > 0.3) v.reactTimer = 0.3;
       if (v.reactTimer > 0) {
         acc = Math.min(acc, 0);
         constraint = 'reacting';
@@ -258,7 +301,30 @@ export class VehicleAI {
     }
 
     v.constraint = constraint;
-    v.a = clamp(acc, -spec.hardDecel, aMax);
+    let a = clamp(acc, -spec.hardDecel, aMax);
+    // Jerk limit for comfort: acceleration builds up (and brakes release) gradually. Braking for
+    // anything that matters is never delayed; only easing off for a bend or cruising is.
+    const prev = v.v < 0.05 ? Math.max(0, v.a || 0) : v.a || 0; // a stopped car's brakes are simply held
+    const step = JERK * SIM_DT;
+    if (a > prev + step) a = prev + step;
+    else if (a < prev - step && (constraint === 'curve' || constraint === 'free') && a > -b) a = prev - step;
+    v.a = a;
+  }
+
+  /**
+   * Just granted the box: a jeepney or tricycle may stop at the far corner to let passengers off
+   * (straight on or turning right at a signal). It keeps its reservation the whole time, so cross
+   * traffic and pedestrians simply wait for it.
+   */
+  maybeCornerStop(v, conn, connStart) {
+    const sim = this.sim;
+    const I = conn.intersection;
+    if (!CORNER_STOP_TYPES.has(v.type) || I.kind !== 'signal' || v.boxBlocker || v.cornerStopAt === I.id) return;
+    if (conn.movement !== 'straight' && conn.movement !== 'right') return;
+    if (conn.toLane.type !== 'general' || sim.emergencyClaimFor(v, I)) return;
+    if (!sim.rng.chance(sim.level.cornerStops || 0)) return;
+    v.cornerStopAt = I.id;
+    v.cornerStop = { I, conn, s: connStart + conn.length - 0.6, duration: sim.rng.range(3, 7), timer: 0, state: 'pending' };
   }
 
   /** Acceleration that respects the cornering speed of curved lanes ahead (Infinity when none). */
@@ -308,6 +374,11 @@ export class VehicleAI {
       v.loading.timer -= dt;
       if (v.loading.timer <= 0) v.loading.state = 'done';
     }
+    if (v.cornerStop?.state === 'stopped') {
+      v.cornerStop.timer -= dt;
+      if (v.cornerStop.timer <= 0) v.cornerStop.state = 'done';
+    }
+    if (v.sayTimer > 0) v.sayTimer -= dt;
 
     v.state = this.classify(v, sim);
     if (!v.emergency) this.horn(v, sim);

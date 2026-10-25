@@ -14,7 +14,7 @@
 import { Path, cubicBezierPoints } from '../utils/math.js';
 import { ARMS, DIRS, LANE_WIDTH, BIKE_LANE_WIDTH, CROSSWALK_WIDTH, ARM_LENGTH, ARM_LABEL, GROUP_LABEL } from '../data/config.js';
 import { getMap } from '../data/maps/index.js';
-import { Centerline, STRAIGHT_LEAD, LINK_LEAD, curveLimits } from './RoadGeometry.js';
+import { Centerline, STRAIGHT_LEAD, LINK_LEAD, curveLimits, pathCurveLimits } from './RoadGeometry.js';
 import { River } from './River.js';
 
 export const CROSSWALK_GAP = 0.8; // asphalt between the crossing road edge and the zebra
@@ -484,6 +484,8 @@ export class Network {
   }
 
   _addConnector(I, conn) {
+    // Turns get a cornering speed, so drivers ease off before the turn instead of braking in it.
+    conn.curves = conn.movement === 'straight' ? [] : pathCurveLimits(conn.path);
     I.connectors.push(conn);
     this.connectors.push(conn);
     this.segments.push(conn);

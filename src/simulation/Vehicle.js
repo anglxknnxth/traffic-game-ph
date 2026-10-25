@@ -191,6 +191,27 @@ export class Vehicle {
     setObb(this.obb, p.x, p.y, Math.cos(p.angle), Math.sin(p.angle), this.hl, this.hw);
   }
 
+  /**
+   * Pose for drawing at route coordinate s. Long vehicles take their heading from two axle points
+   * (front and rear wheels on the path), so a bus swings its tail through a turn instead of
+   * pivoting about its centre. Display only: the collision box keeps the path tangent.
+   */
+  displayPose(s, out) {
+    const p = this._pose(s);
+    out.x = p.x;
+    out.y = p.y;
+    out.angle = p.angle;
+    if (this.spec.length > 5) {
+      const k = this.spec.length * 0.3;
+      const f = this._pose(s + k);
+      const fx = f.x;
+      const fy = f.y;
+      const r = this._pose(Math.max(0, s - k));
+      out.angle = Math.atan2(fy - r.y, fx - r.x);
+    }
+    return out;
+  }
+
   /** Current lateral offset from the lane centre (0 outside lane changes). */
   lateralOffset() {
     return this.lc ? lateralAt(this.lc, this.s, _lat).off : 0;
@@ -229,6 +250,7 @@ export class Vehicle {
   /** Turn indicator: -1 left, 1 right, 0 none — shown when close to or inside a turn. */
   turnSignal() {
     if (this.lc) return this.lc.off > 0 ? -1 : 1; // moving toward the target lane
+    if (this.lcPending) return this.lcPending.dir; // signalling before the move
     const ce = this.nextConnEntry();
     let conn = null;
     if (this.segment.kind === 'connector') conn = this.segment;

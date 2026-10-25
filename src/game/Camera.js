@@ -34,6 +34,8 @@ export class Camera {
   setFocus(focus, bounds) {
     this.focus = focus;
     if (bounds) this.bounds = bounds;
+    this.targetZoom = null;
+    this.anchor = null;
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
@@ -107,18 +109,47 @@ export class Camera {
     return { x: (x - this.centerX) * this.scale + this.screenCX, y: (y - this.centerY) * this.scale + this.screenCY };
   }
 
+  /** Zoom toward a screen point. The zoom eases there over a few frames (see update). */
   zoomAt(factor, px = this.screenCX, py = this.screenCY) {
-    const before = this.screenToWorld(px, py);
-    this.zoom = clamp(this.zoom * factor, this.zoomFloor ?? this.minZoom, this.maxZoom);
+    const from = this.targetZoom ?? this.zoom;
+    this.targetZoom = clamp(from * factor, this.zoomFloor ?? this.minZoom, this.maxZoom);
+    const w = this.screenToWorld(px, py);
+    this.anchor = { px, py, wx: w.x, wy: w.y };
+  }
+
+  /** True while an eased zoom is still moving. */
+  get animating() {
+    return this.targetZoom !== undefined && this.targetZoom !== null;
+  }
+
+  /** Advance the zoom easing (call once per rendered frame with real seconds). */
+  update(dt) {
+    if (!this.animating) return;
+    const k = 1 - Math.exp(-Math.max(0, dt) / 0.09);
+    const done = Math.abs(this.targetZoom - this.zoom) < this.targetZoom * 0.002;
+    this.zoom = done ? this.targetZoom : this.zoom + (this.targetZoom - this.zoom) * k;
     this._recompute();
-    const after = this.screenToWorld(px, py);
-    this.panX += before.x - after.x;
-    this.panY += before.y - after.y;
-    this._clampPan();
+    const a = this.anchor;
+    if (a) {
+      // keep the world point under the cursor fixed while zooming
+      const after = this.screenToWorld(a.px, a.py);
+      this.panX += a.wx - after.x;
+      this.panY += a.wy - after.y;
+      this._clampPan();
+    }
     this.version++;
+    if (done) {
+      this.targetZoom = null;
+      this.anchor = null;
+    }
   }
 
   panBy(dx, dy) {
+    // A drag moves the camera directly; it also keeps a running zoom anchored to the drag.
+    if (this.anchor) {
+      this.anchor.px += dx;
+      this.anchor.py += dy;
+    }
     this.panX -= dx / this.scale;
     this.panY -= dy / this.scale;
     this._clampPan();
@@ -126,6 +157,8 @@ export class Camera {
   }
 
   reset() {
+    this.targetZoom = null;
+    this.anchor = null;
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;

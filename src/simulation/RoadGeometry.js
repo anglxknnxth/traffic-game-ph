@@ -246,6 +246,31 @@ function mergeStraight(pts) {
   return out;
 }
 
+/**
+ * Curved stretches of any path (turn connectors) as [{ s0, s1, vmax }]: sampled every metre, the
+ * radius from the heading change over two metres, merged where the speed is about the same.
+ */
+export function pathCurveLimits(path, aLat = 2.5) {
+  const out = [];
+  const a = { x: 0, y: 0, dx: 0, dy: 0 };
+  const b = { x: 0, y: 0, dx: 0, dy: 0 };
+  const L = path.length;
+  for (let s = 0; s < L; s += 1) {
+    const s1 = Math.min(L, s + 1);
+    path.pointAt(Math.max(0, s - 0.5), a);
+    path.pointAt(Math.min(L, s1 + 0.5), b);
+    const dphi = Math.abs(Math.atan2(a.dx * b.dy - a.dy * b.dx, a.dx * b.dx + a.dy * b.dy));
+    if (dphi < 1e-4) continue;
+    const R = (Math.min(L, s1 + 0.5) - Math.max(0, s - 0.5)) / dphi;
+    const vmax = Math.round(Math.sqrt(aLat * R) * 2) / 2; // 0.5 m/s buckets keep the list short
+    if (vmax > 15) continue;
+    const last = out[out.length - 1];
+    if (last && last.vmax === vmax && Math.abs(last.s1 - s) < 1e-6) last.s1 = s1;
+    else out.push({ s0: s, s1, vmax: Math.max(2.5, vmax) });
+  }
+  return out;
+}
+
 /** Curved stretches of a lane as [{ s0, s1, vmax }] in lane coordinates (comfortable cornering speed). */
 export function curveLimits(center, uStart, uEnd, reversed) {
   const out = [];

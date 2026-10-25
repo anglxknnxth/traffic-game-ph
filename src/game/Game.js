@@ -328,11 +328,12 @@ export class Game {
     }
   }
 
-  render(dtReal) {
+  render(dtReal, alpha = 1) {
+    this.camera.update(dtReal);
     this.uiTime += dtReal;
     const sim = this.sim;
     if (!sim) return;
-    this.renderer.render(sim, { time: sim.time, debug: this.state.debug, hoveredHead: this.hoveredHead });
+    this.renderer.render(sim, { time: sim.time, debug: this.state.debug, hoveredHead: this.hoveredHead, alpha, dt: dtReal });
     const events = sim.drainEvents();
     this.audio.updateMusic(this.musicMood());
     if (this.session && !this.session.ended) {

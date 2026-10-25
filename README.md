@@ -81,6 +81,9 @@ What you'll see on the map:
   a green for them still gets them through faster.
 - Small walk / don't-walk lights stand at each crosswalk; they blink orange during yellow and
   flashing yellow.
+- A jeepney or tricycle with its hazards on and a "PARA PO!" bubble has stopped right at the
+  corner, inside the junction, to let passengers off. Traffic crossing its path waits until it
+  pulls away (3–7 s).
 - Rivers run under bridges (parapets, a name plaque), with bangka boats passing underneath.
 - "PASAWAY!" and a whistle mean someone is crossing where (or when) they shouldn't.
 - Rain, dusk and night change how drivers behave: longer gaps, gentler braking, slower starts.
@@ -173,6 +176,24 @@ All simulation code is DOM-free (`src/simulation`) and runs headless in the test
   Commonwealth, Avenida on Dalawang Pampang, the main street of Tatlong Kanto). Bicycles ride
   only there and never change lanes, and nobody else may enter it. Lanes may differ in width;
   offsets are cumulative.
+- **Smooth movement.**
+  - Drawing interpolates between simulation steps, along the route itself.
+  - Long vehicles take their heading from their axles, so a bus swings its tail through a turn.
+  - Lights fade in and out, and the camera zoom eases.
+  - Acceleration is jerk-limited for comfort (braking that matters never is).
+  - Turns have a cornering speed, so drivers slow before the turn.
+  - Queues pull away together once the head moves.
+  - Drivers signal before changing lanes and don't weave back.
+  - Spawns follow each driver's headway.
+  - Right-on-red, flashing-yellow and STOP-sign drivers roll through slowly when nothing at all is
+    coming.
+- **Box sharing.** A box cell still held by a moving vehicle that will have left it at least a
+  second before another vehicle could get there doesn't block that vehicle's entry. The later
+  vehicle then may not reach the shared cell until the first has released it. Waits only ever point
+  to vehicles that entered earlier, so they can't form a cycle.
+- **Pedestrian window.** People hold only the crosswalk around and just ahead of them (2.5 m), so a
+  car may cross while they are still on the far half. If a vehicle holds the stretch ahead, they
+  wait where they stand. After 1 s they claim the rest of the crossing so nobody new cuts in.
 - **Off-screen spawning.** Every external road is extended until its lanes run past the largest
   area the camera may show, and the camera can't zoom out or pan beyond that area. Vehicles
   enter from beyond the screen edge and leave past it.

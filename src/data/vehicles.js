@@ -203,3 +203,5 @@ for (const k of ['bus', 'truck']) VEHICLE_TYPES[k].bigHorn = true;
 
 export const HEAVY_TYPES = new Set(['bus', 'truck', 'jeepney', 'tricycle', 'ejeep', 'dumptruck', 'tanker', 'multicab']);
 export const LOADING_TYPES = new Set(['jeepney', 'bus', 'ejeep']);
+/** Vehicles that may stop right at the corner, inside the junction, to drop off or pick up. */
+export const CORNER_STOP_TYPES = new Set(['jeepney', 'ejeep', 'multicab', 'tricycle']);

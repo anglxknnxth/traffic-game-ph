@@ -126,6 +126,13 @@ export class TrafficSimulator {
 
   // ---------------------------------------------------------------- main step
   step(dt = SIM_DT) {
+    // Poses at the start of the step, so the renderer can interpolate between steps.
+    for (const v of this.vehicles) v.ps = v.s;
+    for (const p of this.peds.peds) {
+      p.px = p.x;
+      p.py = p.y;
+      p.pa = p.angle;
+    }
     this.time += dt;
     this.env.update(dt, this.scheduleTime);
     this.lights.update(dt);
@@ -185,6 +192,23 @@ export class TrafficSimulator {
       if (gf !== null && gf < lim) lim = gf;
     }
     if (v.loading && v.loading.state === 'stopped') lim = Math.min(lim, v.front);
+    if (v.cornerStop && v.cornerStop.state === 'stopped') lim = Math.min(lim, v.front);
+    const sh = this.sharedFrontLimit(v);
+    if (sh !== null && sh < lim) lim = sh;
+    return lim;
+  }
+
+  /** Front limit while a time-shared box cell is still held by the vehicle that had it first. */
+  sharedFrontLimit(v) {
+    if (!v.reservations.size) return null;
+    let lim = null;
+    for (const [id, res] of v.reservations) {
+      if (!res.shared) continue;
+      const c = this.imgr.get(id).sharedLimit(v);
+      if (c === null) continue;
+      const f = res.connStart + c + v.hl;
+      if (lim === null || f < lim) lim = f;
+    }
     return lim;
   }
 
@@ -480,6 +504,30 @@ export class TrafficSimulator {
     return null;
   }
 
+  /**
+   * May v roll through its stop (right on red, flashing yellow, STOP sign) without coming to a
+   * halt? Only when no vehicle is in, or anywhere near, a crossing path and the box is free.
+   */
+  clearToRoll(v, conn, sig, rtor) {
+    const I = conn.intersection;
+    const mgr = this.imgr.get(I.id);
+    if (mgr.findBlocker(v, conn)) return false;
+    if (rtor) return !this.rightOnRedBlocker(v, conn);
+    if (sig === 'flash' && this.stopOrderBlocker(v, conn)) return false;
+    if (I.kind === 'yield' && this.priorityYield(v, conn)) return false;
+    for (const pc of mgr.crossConflicts(conn)) {
+      if (pc.vehicles.length) return false;
+      for (const o of pc.fromLane.vehicles) {
+        const oce = o.nextConnEntry();
+        if (!oce || oce.seg.intersection !== I || oce.seg.arm !== pc.arm || oce.seg.movement !== pc.movement) continue;
+        if (o.reservations.has(I.id)) return false;
+        const d = oce.start - o.front;
+        if (d > -0.01 && d < 25) return false;
+      }
+    }
+    return true;
+  }
+
   /** Attempt to reserve the intersection path for v. All safety checks live here. */
   /** True when v is queued in front of an emergency vehicle on its lane into I (it clears the way). */
   isEscort(v, I) {
@@ -516,7 +564,10 @@ export class TrafficSimulator {
       return false;
     }
     const mgr = this.imgr.get(I.id);
-    const blocker = mgr.findBlocker(v, conn);
+    // Box sharing: a cell still held by a vehicle that will be long gone by the time we get there
+    // does not block entry (the shared cell is then guarded by sharedLimit).
+    const arrival = this.level.boxSharing === false || v.emergency ? null : { dist: Math.max(0, distToStop), v: v.v, a: v.spec.accel * v.p.accelFactor };
+    const blocker = mgr.findBlocker(v, conn, arrival);
     if (blocker) {
       v.blockReason = blocker.isPed ? 'pedestrian' : 'box';
       v.blockerId = blocker.id;
@@ -669,6 +720,16 @@ export class TrafficSimulator {
     return res;
   }
 
+  /** A jeepney / tricycle has stopped at the corner: passengers call it and step off. */
+  onCornerStop(v, C) {
+    this.stats.cornerStops = (this.stats.cornerStops || 0) + 1;
+    const lines = ['PARA PO!', 'BABA!', 'DITO LANG PO!', 'SAKAY NA!'];
+    v.say = lines[(v.seq + this.stats.cornerStops) % lines.length];
+    v.sayTimer = 1.8;
+    this.notify('CORNER_STOP', NOTIFY_TEXT.CORNER_STOP, 'info');
+    this.peds.alight?.(v, C.I, C.conn.exitArm);
+  }
+
   /** Flashing yellow at a node: every approach stops, then goes in arrival order when clear. */
   requestFlash(intersectionId) {
     const res = this.lights.requestFlash(intersectionId);
@@ -790,7 +851,8 @@ export class TrafficSimulator {
       for (const v of vehicles) {
         if (v._box !== I.id) continue;
         boxCount++;
-        if (v.avgSpeed < 0.7 && v.boxTime > 3) boxStopped++;
+        // A jeepney dropping off at the corner is loading, not stuck.
+        if (v.avgSpeed < 0.7 && v.boxTime > 3 && v.cornerStop?.state !== 'stopped') boxStopped++;
       }
       const exitsBlocked = approaches.reduce((n, a) => n + a.exitLanes, 0);
       const det = this.detectors.get(I.id);

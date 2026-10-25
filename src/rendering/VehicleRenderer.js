@@ -650,15 +650,21 @@ export function drawVehicle(ctx, v, time) {
 
   // Lights: headlights, brake lights, indicators
   const twoWheel = v.type === 'motorcycle' || v.type === 'bicycle';
+  // Brake lights ease on and off (render-only state on the vehicle).
   const braking = v.a < -0.6 || v.v < 0.15;
-  ctx.fillStyle = braking ? '#ff2a2a' : '#8b1d1d';
+  const target = braking ? 1 : 0;
+  v._brakeGlow = (v._brakeGlow ?? target) + (target - (v._brakeGlow ?? target)) * 0.3;
+  const g = v._brakeGlow;
+  ctx.fillStyle = `rgb(${Math.round(139 + 116 * g)},${Math.round(29 + 13 * g)},${Math.round(29 + 13 * g)})`;
   if (twoWheel) ctx.fillRect(-hl - 0.02, -0.1, 0.14, 0.2);
   else {
     ctx.fillRect(-hl - 0.02, -hw + 0.12, 0.14, 0.38);
     ctx.fillRect(-hl - 0.02, hw - 0.5, 0.14, 0.38);
   }
-  if (braking && v.a < -0.6) {
-    ctx.fillStyle = 'rgba(255,40,40,0.25)';
+  const hard = v.a < -0.6 ? 1 : 0;
+  v._brakeHalo = (v._brakeHalo ?? 0) + (hard - (v._brakeHalo ?? 0)) * 0.25;
+  if (v._brakeHalo > 0.03) {
+    ctx.fillStyle = `rgba(255,40,40,${(0.25 * v._brakeHalo).toFixed(3)})`;
     ctx.fillRect(-hl - 0.6, -hw, 0.6, W);
   }
   ctx.fillStyle = '#fff6c2';
@@ -667,12 +673,21 @@ export function drawVehicle(ctx, v, time) {
     ctx.fillRect(hl - 0.12, -hw + 0.12, 0.12, 0.34);
     ctx.fillRect(hl - 0.12, hw - 0.46, 0.12, 0.34);
   }
-  const turn = v.type === 'bicycle' ? 0 : v.turnSignal();
-  if (turn !== 0 && Math.floor(time * 3) % 2 === 0) {
-    ctx.fillStyle = '#ffb703';
-    const y = turn < 0 ? -hw - 0.05 : hw - 0.25;
-    ctx.fillRect(hl - 0.45, y, 0.4, 0.3);
-    ctx.fillRect(-hl + 0.05, y, 0.4, 0.3);
+  // Indicators (and hazards while stopped at a corner) pulse smoothly rather than snapping on/off.
+  const hazard = v.cornerStop?.state === 'stopped';
+  const turn = v.type === 'bicycle' ? 0 : hazard ? 2 : v.turnSignal();
+  if (turn !== 0) {
+    const pulse = Math.max(0, Math.sin(time * Math.PI * 3));
+    if (pulse > 0.02) {
+      ctx.globalAlpha = Math.min(1, pulse * 1.4);
+      ctx.fillStyle = '#ffb703';
+      for (const side of turn === 2 ? [-1, 1] : [turn]) {
+        const y = side < 0 ? -hw - 0.05 : hw - 0.25;
+        ctx.fillRect(hl - 0.45, y, 0.4, 0.3);
+        ctx.fillRect(-hl + 0.05, y, 0.4, 0.3);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
   ctx.restore();
 }

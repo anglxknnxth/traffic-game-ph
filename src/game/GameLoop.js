@@ -50,7 +50,8 @@ export class GameLoop {
       if (steps >= MAX_STEPS_PER_FRAME) this.acc = 0;
     }
     try {
-      this.render(dt);
+      // alpha: how far real time has run past the last simulated step (0..1), for interpolation.
+      this.render(dt, this.paused ? 1 : Math.min(1, this.acc / SIM_DT));
     } catch (err) {
       console.error(err);
     }

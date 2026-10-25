@@ -2,10 +2,10 @@
 // emergency banner, playback controls and the tutorial coach.
 
 import { formatTime } from '../utils/math.js';
-import { ARM_LABEL } from '../data/config.js';
 import { MODE_LABEL } from '../game/GameState.js';
 import { CONGESTION } from '../simulation/GridlockDetector.js';
 import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
+import { Monitor } from './Monitor.js';
 
 export const ICONS = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
@@ -29,9 +29,9 @@ const LEVEL_TEXT = {
 
 const TUTORIAL_STEPS = [
   { title: 'Welcome, traffic controller!', body: 'This is a busy kanto in Metro Manila, seen from directly above. Cars arrive from all four roads and you control the traffic lights.' },
-  { title: 'One road at a time', body: 'Every approach has its own green: the opposite road stays red. Tap a road\'s button below, tap its traffic light, or tap the yellow box in the middle to go to the next road. The change takes 2 seconds. <b>⚠ Flash</b> (or Y) turns every light to flashing yellow: drivers stop, then go when it is clear.' },
+  { title: 'One road at a time', body: 'Every approach has its own green. Tap a road\'s button below, tap its traffic light, or tap the yellow box in the middle to go to the next road. The change takes 2 seconds. Tap the <b>opposite</b> road while one is green and both go together, straight and right only (no left turn); tap a cross road and both turn red. <b>⚠ Flash</b> (or Y) turns every light to flashing yellow: drivers stop, then go when it is clear.' },
   { title: 'Safe transitions', body: 'You are in full control: a change starts the moment you tap, with a short <b>yellow</b> and <b>all-red</b> before the next green. Tap the current green during yellow to cancel.' },
-  { title: 'Watch the box', body: 'Drivers wait if their exit road is full. Impatient ones may squeeze in anyway and block the yellow box. A red outline means a vehicle is stuck inside.' },
+  { title: 'Watch the box', body: 'Drivers wait if their exit road is full. Impatient ones may squeeze in anyway and block the yellow box. A red outline means a vehicle is stuck inside. A vehicle with an orange <b>!</b> is stuck: tap it and it goes ahead (optional, it clears on its own too).' },
   { title: 'Your goal', body: 'Move as many vehicles as you can and keep waiting times low. Your target is shown at the top. Keys: <b>1</b>/<b>2</b> switch phases, <b>Space</b> pauses, <b>F</b> changes speed.' },
 ];
 
@@ -56,6 +56,7 @@ export class HUD {
       </div>
       <div class="hud-objectives"></div>
       <aside class="hud-metrics"></aside>
+      <aside class="hud-monitor" hidden></aside>
       <div class="hud-notify" aria-live="polite"></div>
       <div class="hud-emergency" hidden></div>
       <div class="hud-bottom">
@@ -63,7 +64,7 @@ export class HUD {
         <div class="hud-controls">
           <button class="icon-btn" data-act="restart" title="Restart (R)">${ICONS.restart}</button>
           <div class="seg" role="group" aria-label="Simulation speed">
-            <button data-speed="1">1x</button><button data-speed="2">2x</button><button data-speed="3">3x</button>
+            <button data-speed="1">1x</button><button data-speed="2">2x</button><button data-speed="3">3x</button><button data-speed="4">4x</button>
           </div>
           <button class="icon-btn" data-act="mute" title="Mute (M)">${ICONS.sound}</button>
           <input class="vol" type="range" min="0" max="100" step="1" data-act="volume" aria-label="Sound effects volume" />
@@ -71,6 +72,10 @@ export class HUD {
           <button class="icon-btn" data-act="zoomout" title="Zoom out (-)">${ICONS.zoomOut}</button>
           <button class="icon-btn" data-act="zoomin" title="Zoom in (+)">${ICONS.zoomIn}</button>
           <button class="icon-btn" data-act="metrics" title="Toggle metrics">${ICONS.stats}</button>
+          <button class="icon-btn mon-btn" data-act="monitor" title="Monitor: queues, throughput, green timeline (T)">📡</button>
+          <button class="icon-btn heat-btn" data-act="heat" title="Speed heatmap and queue counts on the map (O)">🌡️</button>
+          <button class="icon-btn watch-btn" data-act="watch" title="Watch mode: hide the controls and let the camera find the action (H)">👁</button>
+          <button class="icon-btn auto-all" data-act="autoall" title="AUTO LAHAT: every light runs itself (click a light to take it over)" hidden>AUTO</button>
         </div>
       </div>
       <div class="hud-toast"></div>
@@ -98,7 +103,12 @@ export class HUD {
       music: root.querySelector('[data-act="music"]'),
       bottom: root.querySelector('.hud-bottom'),
       top: root.querySelector('.hud-top'),
+      autoAll: root.querySelector('[data-act="autoall"]'),
+      monitor: root.querySelector('.hud-monitor'),
+      monBtn: root.querySelector('[data-act="monitor"]'),
+      heatBtn: root.querySelector('[data-act="heat"]'),
     };
+    this.monitor = new Monitor(this.el.monitor);
     this.root.addEventListener('click', (e) => this.onClick(e));
     this.el.volume.addEventListener('input', () => game.setVolume(this.el.volume.value / 100));
     this.hide();
@@ -113,6 +123,8 @@ export class HUD {
     this.el.notify.innerHTML = '';
     this.notes = [];
     this.buildPanels(session.sim);
+    this.monitor.reset();
+    this._simT = session.sim.time;
     this.syncControls();
     this.update(1, true);
     this.root.classList.toggle('metrics-hidden', !this.game.state.showMetrics);
@@ -126,11 +138,25 @@ export class HUD {
   }
 
   buildPanels(sim) {
-    const managers = [...sim.lights.managers];
+    // Growing city: only the open junctions have controls.
+    const managers = [...sim.lights.managers].filter(([id]) => !sim.openNodes || sim.openNodes.has(id));
     const multi = managers.length > 1;
     let key = 0;
+    // Many junctions: an MMDA-style control box with one tab per junction and one panel showing.
+    const tabbed = managers.length > 2;
+    if (!tabbed || !managers.some(([id]) => id === this.selected)) this.selected = managers[0]?.[0] ?? null;
     this.el.panels.classList.toggle('compact', managers.length > 2);
-    this.el.panels.innerHTML = managers
+    this.el.panels.classList.toggle('tabbed', tabbed);
+    const tabs = tabbed
+      ? `<div class="ctl-tabs">${managers
+          .map(([id]) => {
+            const I = sim.network.byId.get(id);
+            const names = [...new Set(['N', 'E', 'S', 'W'].map((a) => sim.network.roadName(I, a)).filter(Boolean))].slice(0, 2).join(' × ');
+            return `<button class="ctl-tab" data-tab="${id}" title="${names}"><i class="tab-dot"></i><b>${id}</b><span>${names}</span></button>`;
+          })
+          .join('')}</div>`
+      : '';
+    this.el.panels.innerHTML = tabs + managers
       .map(([id, m]) => {
         const btn = (g) => {
           key++;
@@ -139,9 +165,10 @@ export class HUD {
         const half = Math.ceil(m.groups.length / 2);
         const left = m.groups.slice(0, half).map(btn).join('');
         const right = m.groups.slice(half).map(btn).join('');
+        const auto = sim.level.allowAuto ? `<button class="auto-btn" data-auto="${id}" title="Hand this signal to AUTO, or take it back">AUTO</button>` : '';
         return `
-      <div class="sig-panel" data-int="${id}">
-        ${multi ? `<div class="sig-title">Intersection ${id}</div>` : ''}
+      <div class="sig-panel" data-int="${id}" ${tabbed && id !== this.selected ? 'hidden' : ''}>
+        ${multi || auto ? `<div class="sig-title">${multi ? `Intersection ${id}${tabbed ? ` · ${this._junctionName(sim, id)}` : ''}` : ''}${auto}</div>` : ''}
         <div class="sig-row">
           ${left}
           <div class="phase"><b class="phase-label"></b><span class="phase-count"></span><button class="flash-btn" data-flash="${id}" title="Flashing yellow: every road stops, then goes when clear (Y)">⚠ Flash</button></div>
@@ -156,7 +183,50 @@ export class HUD {
       count: p.querySelector('.phase-count'),
       btns: [...p.querySelectorAll('.sig-btn')],
       flash: p.querySelector('.flash-btn'),
+      auto: p.querySelector('.auto-btn'),
     }));
+    this.tabEls = [...this.el.panels.querySelectorAll('.ctl-tab')];
+    this.el.autoAll.hidden = !sim.level.allowAuto;
+    this.syncAuto();
+    this._syncTabs();
+  }
+
+  _junctionName(sim, id) {
+    const I = sim.network.byId.get(id);
+    return [...new Set(['N', 'E', 'S', 'W'].map((a) => sim.network.roadName(I, a)).filter(Boolean))].slice(0, 2).join(' × ');
+  }
+
+  /** Show junction `id` in the control box (a tapped light, a tab). */
+  select(id) {
+    if (!this.tabEls?.length || id === this.selected || !this.panelEls.some((p) => p.id === id)) return;
+    this.selected = id;
+    for (const p of this.el.panels.querySelectorAll('.sig-panel')) p.hidden = p.dataset.int !== id;
+    this._syncTabs();
+  }
+
+  _syncTabs() {
+    const sim = this.session?.sim;
+    if (!sim || !this.tabEls?.length) return;
+    for (const t of this.tabEls) {
+      const id = t.dataset.tab;
+      t.classList.toggle('active', id === this.selected);
+      t.classList.toggle('auto', sim.autopilot.isAuto(id));
+      const p = sim.metrics.perIntersection?.find((x) => x.id === id);
+      t.classList.toggle('alert', !!p && (p.level === 'GRIDLOCK' || p.level === 'PARTIAL' || p.approaches.some((a) => a.headBlocked)));
+      t.classList.toggle('siren', sim.priority.some((x) => x.intersectionId === id));
+    }
+  }
+
+  /** AUTO badges: lit while the autopilot runs that signal. */
+  syncAuto() {
+    const sim = this.session?.sim;
+    if (!sim) return;
+    for (const p of this.panelEls || []) {
+      const on = sim.autopilot.isAuto(p.id);
+      p.auto?.classList.toggle('active', on);
+      if (p.auto) p.auto.textContent = on ? 'AUTO' : '↺ AUTO';
+    }
+    this.el.autoAll.classList.toggle('active', sim.autopilot.allAuto);
   }
 
   syncControls() {
@@ -167,6 +237,11 @@ export class HUD {
     this.el.volume.value = Math.round(g.audio.volume * 100);
     this.el.music.classList.toggle('active', g.audio.musicOn);
     this.el.pause.innerHTML = g.state.paused ? ICONS.play : ICONS.pause;
+    this.el.monitor.hidden = !g.state.showMonitor;
+    this.el.monBtn.classList.toggle('active', !!g.state.showMonitor);
+    this.el.heatBtn.classList.toggle('active', g.state.overlay === 'heat');
+    this.root.classList.toggle('watch', !!g.state.watch);
+    this.root.querySelector('[data-act="watch"]').classList.toggle('active', !!g.state.watch);
     this.root.classList.toggle('metrics-hidden', !g.state.showMetrics);
   }
 
@@ -176,6 +251,17 @@ export class HUD {
     const sig = e.target.closest('.sig-btn');
     if (sig) {
       g.requestPhase(sig.dataset.int, sig.dataset.group, 'button');
+      return;
+    }
+    const tab = e.target.closest('[data-tab]');
+    if (tab) {
+      this.select(tab.dataset.tab);
+      return;
+    }
+    const auto = e.target.closest('[data-auto]');
+    if (auto) {
+      const id = auto.dataset.auto;
+      g.setAuto(id, !g.sim.autopilot.isAuto(id));
       return;
     }
     const flash = e.target.closest('[data-flash]');
@@ -221,6 +307,18 @@ export class HUD {
       case 'metrics':
         g.toggleMetrics();
         break;
+      case 'monitor':
+        g.toggleMonitor();
+        break;
+      case 'heat':
+        g.toggleOverlay();
+        break;
+      case 'watch':
+        g.toggleWatch();
+        break;
+      case 'autoall':
+        g.setAuto(null, !g.sim.autopilot.allAuto);
+        break;
       default:
         break;
     }
@@ -232,7 +330,22 @@ export class HUD {
     const top = this.el.top.getBoundingClientRect().bottom + 6;
     const bottom = window.innerHeight - this.el.bottom.getBoundingClientRect().top + 6;
     const wide = window.innerWidth > 980 && this.game.state.showMetrics;
-    return { top, bottom, left: wide ? 236 : 0, right: 0 };
+    const mon = window.innerWidth > 980 && this.game.state.showMonitor;
+    return { top, bottom, left: wide ? 236 : 0, right: mon ? 262 : 0 };
+  }
+
+  /** Big centred banner (a new district opened, ...). */
+  banner(text) {
+    let b = this.root.querySelector('.hud-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.className = 'hud-banner';
+      this.root.appendChild(b);
+    }
+    b.textContent = text;
+    b.classList.remove('show');
+    void b.offsetWidth;
+    b.classList.add('show');
   }
 
   toast(text, kind = 'info') {
@@ -267,6 +380,9 @@ export class HUD {
     const sim = s.sim;
     const m = sim.metrics;
     const lvl = s.level;
+    this.monitor.sample(sim, Math.max(0, sim.time - this._simT));
+    this._simT = sim.time;
+    if (this.game.state.showMonitor) this.monitor.render(sim);
     this.el.time.textContent = lvl.duration ? formatTime(Math.max(0, lvl.duration - s.elapsed)) : formatTime(s.elapsed);
     this.el.score.textContent = sim.scoring.total().toLocaleString();
     // Clock and weather (levels with an environment only)
@@ -281,6 +397,11 @@ export class HUD {
     this.el.status.className = `hud-block hud-status ${cls}`;
 
     // Signal panels
+    this._autoTimer = (this._autoTimer || 0) + 1;
+    if (this._autoTimer % 4 === 0) {
+      this.syncAuto();
+      this._syncTabs();
+    }
     for (const p of this.panelEls || []) {
       const mgr = sim.lights.manager(p.id);
       const d = mgr.describe();
@@ -288,10 +409,12 @@ export class HUD {
       p.label.className = `phase-label ${d.state === 'GREEN' ? 'g' : d.state === 'YELLOW' || d.state === 'FLASH' ? 'y' : 'r'}`;
       p.count.textContent = d.state === 'GREEN' || d.state === 'FLASH' ? `${d.elapsed.toFixed(0)}s` : `${d.countdown.toFixed(1)}s → ${mgr.labelOf(d.pending)}`;
       p.flash.classList.toggle('active', mgr.flashing || mgr.nextGroup === FLASH_GROUP);
+      p.label.parentElement.classList.toggle('paired', mgr.paired);
       for (const b of p.btns) {
         const group = b.dataset.group;
         const sig = mgr.signalForGroup(group);
         b.dataset.sig = sig;
+        b.classList.toggle('partner', mgr.partner === group || (mgr.paired && mgr.activeGroup === group));
         b.classList.toggle('pending', mgr.pendingGroup === group || (mgr.state !== 'GREEN' && mgr.nextGroup === group));
         b.classList.toggle('priority', mgr.priorityGroup === group && sig !== 'green');
       }
@@ -301,14 +424,17 @@ export class HUD {
     const st = this.game.levels.objectiveStatus(lvl, sim, s.tracker);
     this.el.objectives.innerHTML = st.length
       ? st.map((o) => `<div class="obj ${o.pass ? 'pass' : ''}"><span>${o.label}</span><b>${o.value}</b><i style="width:${Math.round(Math.max(0, Math.min(1, o.progress)) * 100)}%"></i></div>`).join('')
-      : lvl.mode === 'endless'
-        ? `<div class="obj"><span>Survive and move traffic</span><b>${sim.stats.processed} through</b></div>`
-        : '';
+      : sim.growth
+        ? `<div class="obj"><span>${sim.growth.nextAt ? `Next district at ${sim.growth.nextAt} vehicles` : 'The whole city is open'}</span><b>${sim.stats.processed} through</b>${sim.growth.nextAt ? `<i style="width:${Math.round(Math.min(1, sim.stats.processed / sim.growth.nextAt) * 100)}%"></i>` : ''}</div>`
+        : lvl.mode === 'endless' || lvl.mode === 'chill'
+          ? `<div class="obj"><span>${lvl.mode === 'chill' ? 'Chill · no game over' : 'Survive and move traffic'}</span><b>${sim.stats.processed} through</b></div>`
+          : '';
 
     // Metrics
     if (this.game.state.showMetrics) {
       const cong = Math.round(m.congestion * 100);
-      const phases = [...sim.lights.managers.values()].map((m) => m.describe().label).join(' · ');
+      const mgrs = [...sim.lights.managers.values()];
+      const phases = mgrs.length > 2 ? `${mgrs.length} signals · ${[...sim.lights.managers.keys()].filter((id) => sim.autopilot.isAuto(id)).length} on AUTO` : mgrs.map((m) => m.describe().label).join(' · ');
       this.el.metrics.innerHTML = `
         <h4>Traffic</h4>
         <div class="row"><span>Level</span><b>${typeof lvl.id === 'number' ? lvl.id : lvl.name}</b></div>
@@ -335,7 +461,8 @@ export class HUD {
       const ok = mgr.signalForGroup(p.group) === 'green';
       this.el.emergency.hidden = false;
       this.el.emergency.className = `hud-emergency ${ok ? 'ok' : ''}`;
-      this.el.emergency.innerHTML = `<b>${p.label.toUpperCase()}</b> from the ${ARM_LABEL[p.arm]} ${ok ? 'has a green light' : `will run the red · give <b>${mgr.labelOf(p.group)}</b> green to clear the way`}${multi ? ` at ${p.intersectionId}` : ''} · ${Math.max(0, p.dist).toFixed(0)} m`;
+      const I = sim.network.byId.get(p.intersectionId);
+      this.el.emergency.innerHTML = `<b>${p.label.toUpperCase()}</b> on ${sim.network.armName(I, p.arm)} ${ok ? 'has a green light' : `will run the red · give <b>${mgr.labelOf(p.group)}</b> green to clear the way`}${multi ? ` at ${p.intersectionId}` : ''} · ${Math.max(0, p.dist).toFixed(0)} m`;
     } else {
       this.el.emergency.hidden = true;
     }

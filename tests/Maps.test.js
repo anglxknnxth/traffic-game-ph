@@ -104,7 +104,8 @@ describe('Philippine maps stay collision-free with mixed traffic', () => {
       const sim = new TrafficSimulator(mixed(id), { seed: 11 });
       let wrongLane = 0;
       const uturned = new Set();
-      runMap(sim, 120, (s) => {
+      // U-turn slots sit far up the long roads: give those maps time for some to reach them.
+      runMap(sim, id === 'edsa' || id === 'commonwealth' ? 200 : 120, (s) => {
         for (const v of s.vehicles) {
           if (!v.segment.allows?.(v.type) && v.segment.kind === 'lane') wrongLane++;
           if (v.segment.kind === 'connector' && v.segment.movement === 'uturn') uturned.add(v.id);

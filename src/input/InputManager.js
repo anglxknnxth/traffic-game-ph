@@ -44,6 +44,7 @@ export class InputManager {
     let best = null;
     let bestD = Infinity;
     for (const h of sim.lights.heads) {
+      if (sim.openNodes && !sim.openNodes.has(h.intersectionId)) continue;
       const d = Math.hypot(h.x - w.x, h.y - w.y);
       if (d < radius && d < bestD) {
         best = h;
@@ -53,11 +54,19 @@ export class InputManager {
     return best;
   }
 
+  hitVehicle(px, py) {
+    const sim = this.game.sim;
+    if (!sim || !this.game.session) return null;
+    const cam = this.game.camera;
+    const w = cam.screenToWorld(px, py);
+    return sim.vehicleAt(w.x, w.y, Math.max(0.6, 10 / cam.scale));
+  }
+
   hitBox(px, py) {
     const sim = this.game.sim;
     if (!sim) return null;
     const w = this.game.camera.screenToWorld(px, py);
-    return sim.network.intersections.find((I) => sim.lights.manager(I.id) && Network.inCore(I, w.x, w.y)) || null;
+    return sim.network.intersections.find((I) => sim.lights.manager(I.id) && (!sim.openNodes || sim.openNodes.has(I.id)) && Network.inCore(I, w.x, w.y)) || null;
   }
 
   onDown(e) {
@@ -77,7 +86,9 @@ export class InputManager {
       if (e.pointerType === 'mouse') {
         const h = this.hitHead(p.x, p.y);
         this.game.setHover(h);
-        this.canvas.style.cursor = h || this.hitBox(p.x, p.y) ? 'pointer' : 'grab';
+        const v = h ? null : this.hitVehicle(p.x, p.y);
+        const stuck = v && this.game.sim.isStuck(v);
+        this.canvas.style.cursor = h || stuck || this.hitBox(p.x, p.y) ? 'pointer' : 'grab';
       }
       return;
     }
@@ -97,6 +108,12 @@ export class InputManager {
     const dy = p.y - prev.y;
     this.dragDist += Math.abs(dx) + Math.abs(dy);
     if (this.dragDist > 6) {
+      if (this.game.director) {
+        // A drag takes the camera back from the watch-mode director for a while.
+        this.game.director.follow = null;
+        this.game.director.shot = null;
+        this.game.director.timer = 12;
+      }
       this.game.camera.panBy(dx, dy);
       this.canvas.style.cursor = 'grabbing';
     }
@@ -113,6 +130,10 @@ export class InputManager {
       this.game.requestPhase(head.intersectionId, head.group, 'light');
       return;
     }
+    // A stuck vehicle: wave it through (clicking is optional, everything also clears by itself).
+    const v = this.hitVehicle(p.x, p.y);
+    if (v && this.game.wavePass(v)) return;
+    if (v && this.game.followVehicle?.(v)) return;
     const I = this.hitBox(p.x, p.y);
     if (I) {
       const m = this.game.sim.lights.manager(I.id);
@@ -144,7 +165,10 @@ export class InputManager {
     if (!g.session || g.session.ended) return;
     // 1–9: every phase of every signal in order (classic junction: 1–4 = N, E, S, W; 5+ = next junction).
     if (k >= '1' && k <= '9' && k.length === 1) {
-      const p = phaseKeys(g.sim)[Number(k) - 1];
+      // With many junctions, the number keys work the one shown in the control box.
+      const sel = g.hud.selected;
+      const list = g.sim.lights.managers.size > 2 && sel ? g.sim.lights.manager(sel).groups.map((group) => ({ id: sel, group })) : phaseKeys(g.sim);
+      const p = list[Number(k) - 1];
       if (p) g.requestPhase(p.id, p.group, 'key');
       return;
     }
@@ -175,7 +199,7 @@ export class InputManager {
         break;
       case 'f':
       case 'F':
-        g.setSpeed((g.state.speed % 3) + 1);
+        g.setSpeed((g.state.speed % 4) + 1);
         break;
       case 'm':
       case 'M':
@@ -184,6 +208,18 @@ export class InputManager {
       case 'd':
       case 'D':
         g.toggleDebug();
+        break;
+      case 't':
+      case 'T':
+        g.toggleMonitor();
+        break;
+      case 'o':
+      case 'O':
+        g.toggleOverlay();
+        break;
+      case 'h':
+      case 'H':
+        g.toggleWatch?.();
         break;
       case '+':
       case '=':

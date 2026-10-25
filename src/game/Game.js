@@ -12,6 +12,7 @@ import { Menu } from '../ui/Menu.js';
 import { loadSave, writeSave, clearSave } from '../utils/storage.js';
 import { CAREER_COUNT, PINOY_COUNT } from '../data/levels.js';
 import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
+import { Director } from './Director.js';
 
 export class Game {
   constructor(root) {
@@ -42,6 +43,7 @@ export class Game {
     this.demo = null;
     this.hoveredHead = null;
     this.uiTime = 0;
+    this.director = new Director(this);
 
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 200));
@@ -75,7 +77,10 @@ export class Game {
   }
 
   applyNetwork(sim) {
-    this.camera.setFocus(sim.network.focusRect(), sim.network.viewLimit());
+    if (sim.growth) {
+      const f = sim.growth.focusRect();
+      this.camera.setFocus(f, sim.network.reachFor(f));
+    } else this.camera.setFocus(sim.network.focusRect(), sim.network.viewLimit());
     this.renderer.setNetwork(sim.network);
     this.resize();
   }
@@ -83,7 +88,7 @@ export class Game {
   // ------------------------------------------------------------------ sessions
   startDemo() {
     const sim = this.levels.createSim(this.levels.demo, 4242);
-    this.demo = { sim, nextSwitch: sim.time + 10 };
+    this.demo = { sim };
     if (!this.session) this.applyNetwork(sim);
   }
 
@@ -94,7 +99,7 @@ export class Game {
     this.session = {
       mode,
       id: level.id,
-      mapId: mode === 'endless' ? level.map || 'single' : null,
+      mapId: mode === 'endless' || mode === 'chill' ? (mode === 'chill' ? id || 'single' : level.map || 'single') : null,
       level,
       sim,
       elapsed: 0,
@@ -104,6 +109,8 @@ export class Game {
     };
     this.state.screen = SCREEN.PLAYING;
     this.state.paused = false;
+    this.state.watch = false;
+    this.director.reset();
     this.loop.setPaused(false);
     this.loop.speed = this.state.speed;
     this.menu.hide();
@@ -124,7 +131,8 @@ export class Game {
 
   restart() {
     if (!this.session) return;
-    this.startSession(this.session.mode, this.session.mode === 'endless' ? this.session.mapId : this.session.id);
+    const m = this.session.mode;
+    this.startSession(m, m === 'endless' || m === 'chill' ? this.session.mapId : this.session.id);
   }
 
   quitToMenu() {
@@ -160,6 +168,16 @@ export class Game {
   }
 
   onEscape() {
+    if (this.director.follow) {
+      this.director.follow = null;
+      this.director.shot = null;
+      this.hud.toast('Stopped following');
+      return;
+    }
+    if (this.state.watch) {
+      this.toggleWatch();
+      return;
+    }
     if (this.session && !this.session.ended) {
       if (this.menu.current === 'settings') this.menu.showPause();
       else this.togglePause();
@@ -251,6 +269,36 @@ export class Game {
     this.setShowMetrics(!this.state.showMetrics);
   }
 
+  /** Watch mode: HUD out of the way, the camera finds the action by itself. */
+  toggleWatch() {
+    if (!this.session || this.session.ended) return;
+    this.state.watch = !this.state.watch;
+    this.director.reset();
+    this.hud.syncControls();
+    this.hud.toast(this.state.watch ? 'WATCH MODE · panoorin lang · click a vehicle to follow it · H or Esc to exit' : 'Watch mode off');
+  }
+
+  /** Follow a vehicle with the camera (watch mode). */
+  followVehicle(v) {
+    if (!this.state.watch) return false;
+    this.director.followVehicle(v);
+    this.hud.toast(`Following: ${v.spec.label}`);
+    return true;
+  }
+
+  toggleMonitor() {
+    this.state.showMonitor = !this.state.showMonitor;
+    this.hud.syncControls();
+    if (this.session) this.resize();
+  }
+
+  /** Map overlay: speed heatmap with queue counts, or none. */
+  toggleOverlay() {
+    this.state.overlay = this.state.overlay === 'heat' ? null : 'heat';
+    this.hud.syncControls();
+    this.hud.toast(this.state.overlay ? 'Heatmap on: red = stopped, green = moving' : 'Heatmap off');
+  }
+
   resetProgress() {
     const settings = { ...this.save.settings };
     this.save = clearSave();
@@ -265,17 +313,70 @@ export class Game {
   requestPhase(intersectionId, group) {
     if (!this.session || this.session.ended || this.state.paused) return;
     const sim = this.session.sim;
+    if (sim.openNodes && !sim.openNodes.has(intersectionId)) {
+      this.hud.toast('That junction is not open yet: it runs on AUTO', 'info');
+      return;
+    }
+    this.hud.select(intersectionId);
+    // The player took this signal over: it leaves AUTO.
+    const wasAuto = sim.autopilot.isAuto(intersectionId);
+    sim.autopilot.onPlayerInput(intersectionId);
     const res = sim.requestPhase(intersectionId, group);
     const multi = sim.lights.managers.size > 1;
     const where = multi ? ` (${intersectionId})` : '';
-    const label = sim.lights.manager(intersectionId)?.labelOf(group) || group;
-    if (res.status === 'accepted') {
+    const m = sim.lights.manager(intersectionId);
+    const label = m?.labelOf(group) || group;
+    if (wasAuto) this.hud.toast(`MANUAL${where}: you have the lights · ↺ AUTO to hand back`, 'info');
+    else if (res.status === 'accepted') {
       this.audio.click();
       if (res.reason === 'Change cancelled') this.hud.toast(`${label}${where} stays green`, 'ok');
+      else if (res.reason === 'Pairing') this.hud.toast(`+ ${label}${where}: both roads go together · no left turn`, 'ok');
+      else if (res.reason === 'Dropping pair') this.hud.toast(`Only ${label}${where} now · left turns back in ${res.wait.toFixed(1)}s`, 'ok');
+      else if (res.reason === 'Pair kept') this.hud.toast(`Both roads stay green${where}`, 'ok');
       else this.hud.toast(`Switching to ${label}${where}: green in ${res.wait.toFixed(1)}s`, 'ok');
     } else if (res.status === 'ignored') {
       this.hud.toast(`${res.reason}${where}`, 'info');
     }
+  }
+
+  /** AUTO lights: one signal, or every signal (id null). */
+  setAuto(intersectionId, on) {
+    const sim = this.session?.sim;
+    if (!sim) return;
+    if (intersectionId) sim.autopilot.setAuto(intersectionId, on);
+    else sim.autopilot.setAll(on);
+    this.hud.toast(on ? (intersectionId ? `AUTO · ${intersectionId}` : 'AUTO LAHAT · the lights run themselves') : 'MANUAL · you have the lights', 'ok');
+    this.hud.syncAuto?.();
+  }
+
+  /** The player clicked a vehicle: a stuck one is waved through ("bigla na lang aandar"). */
+  wavePass(v) {
+    if (!this.session || this.session.ended || this.state.paused) return false;
+    const ok = this.session.sim.grantPass(v);
+    if (ok) {
+      this.audio.whistle(0);
+      this.hud.toast('Pinadaan! The stuck vehicle goes ahead', 'ok');
+    }
+    return ok;
+  }
+
+  /** Callout text for an emergency vehicle (emergency pointer). */
+  emergencyInfo(v) {
+    const sim = this.sim;
+    const icon = v.type === 'firetruck' ? '🚒' : v.type === 'police' ? '🚓' : '🚑';
+    const p = sim.priority.find((x) => x.vehicleId === v.id);
+    const ce = v.nextConnEntry();
+    const I = ce?.seg.intersection;
+    const where = I ? sim.network.armLabel(I, ce.seg.arm) : '';
+    if (!p) return { title: `${icon} ${v.spec.label.toUpperCase()}${where ? ` · ${where}` : ''}`, line: 'Clear the way · tabi muna', ok: true };
+    const mgr = sim.lights.manager(p.intersectionId);
+    const ok = mgr.signalForGroup(p.group) === 'green';
+    const at = sim.lights.managers.size > 1 ? ` at ${p.intersectionId}` : '';
+    return {
+      title: `${icon} ${v.spec.label.toUpperCase()} · ${where}`,
+      line: ok ? `Has the green${at} · ${Math.max(0, p.dist).toFixed(0)} m` : `Give ${mgr.labelOf(p.group)} the green${at} · ${Math.max(0, p.dist).toFixed(0)} m`,
+      ok,
+    };
   }
 
   /** Flashing yellow on/off. Turning it off hands green to the busiest approach. */
@@ -310,6 +411,18 @@ export class Game {
       if (s.ended) return;
       s.sim.step(dt);
       s.elapsed += dt;
+      // Growing city: a new district opened. Ease the camera out to it and hand over its lights.
+      const g = s.sim.growth;
+      if (g && g.events.length) {
+        for (const e of g.events) {
+          const f = g.focusRect();
+          this.camera.transitionTo(f, s.sim.network.reachFor(f));
+          this.hud.buildPanels(s.sim);
+          this.hud.banner?.(`BAGONG KANTO! · ${e.name}`);
+          this.audio.click();
+        }
+        g.events.length = 0;
+      }
       s.metricTimer += dt;
       if (s.metricTimer >= 0.25) {
         this.levels.track(s.tracker, s.sim, s.elapsed, s.metricTimer);
@@ -320,20 +433,27 @@ export class Game {
     } else if (this.demo) {
       const sim = this.demo.sim;
       sim.step(dt);
-      if (sim.time > this.demo.nextSwitch) {
-        demoAutopilot(sim);
-        this.demo.nextSwitch = sim.time + 1;
-      }
       if (sim.time > 600) this.startDemo();
     }
   }
 
   render(dtReal, alpha = 1) {
     this.camera.update(dtReal);
+    if (this.session && !this.session.ended && (this.state.watch || this.director.follow)) this.director.update(dtReal, this.session.sim, this.state.watch && !this.state.paused);
     this.uiTime += dtReal;
     const sim = this.sim;
     if (!sim) return;
-    this.renderer.render(sim, { time: sim.time, debug: this.state.debug, hoveredHead: this.hoveredHead, alpha, dt: dtReal });
+    const playing = !!this.session && !this.session.ended;
+    this.renderer.render(sim, {
+      time: sim.time,
+      debug: this.state.debug,
+      hoveredHead: this.hoveredHead,
+      alpha,
+      dt: dtReal,
+      interactive: playing,
+      overlay: this.state.overlay,
+      emergencyInfo: playing && !this.state.watch ? (v) => this.emergencyInfo(v) : null,
+    });
     const events = sim.drainEvents();
     this.audio.updateMusic(this.musicMood());
     if (this.session && !this.session.ended) {
@@ -439,22 +559,5 @@ export class Game {
       objectives,
       breakdown: sim.scoring.breakdown(),
     });
-  }
-}
-
-/** Simple queue-balancing controller for the menu background. */
-function demoAutopilot(sim) {
-  for (const [id, m] of sim.lights.managers) {
-    if (m.state !== 'GREEN' || m.pendingGroup) continue;
-    const p = sim.metrics.perIntersection.find((x) => x.id === id);
-    if (!p) continue;
-    const q = Object.fromEntries(m.groups.map((g) => [g, 0]));
-    for (const a of p.approaches) {
-      const g = m.phaseFor(a.arm);
-      if (g) q[g] += a.queue;
-    }
-    let other = null;
-    for (const g of m.groups) if (g !== m.activeGroup && (other === null || q[g] > q[other])) other = g;
-    if (other && m.timer > 7 && (q[other] > q[m.activeGroup] * 1.3 + 1 || m.timer > 24)) sim.requestPhase(id, other);
   }
 }

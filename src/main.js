@@ -12,7 +12,7 @@ window.__tcp = game;
 const play = new URLSearchParams(location.search).get('play');
 if (play) {
   const [mode, id] = play.split(':');
-  if (['career', 'challenge', 'endless', 'tutorial', 'pinoy'].includes(mode)) game.startSession(mode, id || (mode === 'pinoy' ? 'poblacion' : 1));
+  if (['career', 'challenge', 'endless', 'tutorial', 'pinoy', 'chill', 'growing'].includes(mode)) game.startSession(mode, id || (mode === 'pinoy' ? 'poblacion' : 1));
   // Dev server only: &ff=60 fast-forwards the simulation, &zoom=2&x=0&y=-80 frames the camera.
   if (import.meta.env.DEV && game.session) {
     const q = new URLSearchParams(location.search);

@@ -196,6 +196,9 @@ export class IntersectionManager {
         const r = o.reservations.get(this.id);
         if (r && r.conn === conn) continue;
         if (arrival && r && this._clearsBefore(o, r, cells[i], vehicle, fp.firstS[i], arrival)) continue;
+        // Queueing behind: a vehicle from our own lane, or one heading into our exit lane, will be
+        // ahead of us all the way. Share its cells and follow it in (sharedLimit keeps the order).
+        if (arrival && r && (r.conn.fromLane === conn.fromLane || r.conn.toLane === conn.toLane) && this._followable(o)) continue;
         return o;
       }
     }
@@ -272,6 +275,13 @@ export class IntersectionManager {
     const a = Math.max(0.5, arrival.a);
     const tArrive = (-arrival.v + Math.sqrt(arrival.v * arrival.v + 2 * a * d)) / a;
     return tClear + SHARE_MARGIN < tArrive;
+  }
+
+  /** May a later vehicle queue behind O inside the box? Not behind someone stuck or stopping there. */
+  _followable(o) {
+    if (o.isPed || o.boxBlocker || o.emergency) return false;
+    if (o.cornerStop && o.cornerStop.state !== 'done') return false;
+    return true;
   }
 
   reserve(vehicle, conn, connStart) {

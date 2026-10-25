@@ -19,7 +19,7 @@
 // Maps can list arms without a crosswalk: node.noCrossing = ['N', 'S'] (footbridges on EDSA).
 // The manager has its own random stream, so traffic on levels without pedestrians is unchanged.
 
-import { Rng, Path } from '../utils/math.js';
+import { Rng, Path, pointSegDist2 } from '../utils/math.js';
 import { ARMS, DIRS, LANE_WIDTH, SIDEWALK_WIDTH, OPPOSITE } from '../data/config.js';
 import { rightOf, leftOf } from './LaneManager.js';
 import { PHASE } from './TrafficPhaseManager.js';
@@ -31,6 +31,11 @@ const SW = SIDEWALK_WIDTH;
 const CURB = 0.5; // crossing lines start and end this far onto the sidewalk
 const LONG_WAIT = 45; // seconds: waiting longer than this costs points
 const MAX_PEDS = 260;
+// Turning paths can cut across a sidewalk corner (a narrow road meeting a wide one): people keep
+// this far from any path a vehicle can take (widest half-width + body + a margin).
+const TURN_CLEAR = 1.3 + PED_RADIUS + 0.35;
+const CLEAR_STEP = 0.5; // m along the road between samples of the clearance table
+const CLEAR_SPAN = 30; // m from the node centre covered by the table
 
 const SHIRTS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#f5f5f4', '#1f2937', '#84cc16', '#14b8a6', '#b45309', '#64748b'];
 const HAIR = ['#1c1917', '#292524', '#3f2a1d', '#44403c', '#1f1a17'];
@@ -67,6 +72,7 @@ export class PedestrianManager {
     this.crossingAt = new Map();
     this.sites = [];
     this.seq = 0;
+    this.clearance = new Map();
     this.resetStats();
     const cfg = sim.level.pedestrians;
     this.cfg = cfg
@@ -80,6 +86,7 @@ export class PedestrianManager {
     // Sidewalk ends at the map edge, two per external road.
     this.ends = [];
     for (const I of sim.network.intersections) {
+      if (I.layer !== 0) continue; // no sidewalks up on the expressway
       for (const arm of ARMS) {
         if (I.arms[arm].type !== 'external') continue;
         for (const side of [-1, 1]) this.ends.push({ I, arm, side, timer: this.cfg.strollers > 0 ? this.rng.exp(this.cfg.strollers / 60) : Infinity });
@@ -126,8 +133,11 @@ export class PedestrianManager {
   _buildSites() {
     const net = this.sim.network;
     for (const I of net.intersections) {
+      // Nobody walks across an expressway, a ramp or a road with a tunnel trench in the middle.
+      if (I.layer !== 0 || I.def.underpass) continue;
       for (const arm of ARMS) {
         const A = I.arms[arm];
+        if (A.type === 'link' && net.byId.get(A.other).layer !== 0) continue;
         if (A.type === 'external') {
           const u0 = A.stop + 18;
           const u1 = A.length - 45;
@@ -206,11 +216,21 @@ export class PedestrianManager {
     const m = this.sim.lights.manager(c.I.id);
     if (!m) return 'walk';
     if (m.state === PHASE.FLASH) return 'gap';
-    const phase = m.byId.get(m.activeGroup);
-    if (phase && phase.arms.has(c.arm)) return 'stop'; // traffic on this road is moving
-    if (m.state === PHASE.GREEN) return 'walk';
-    if (m.state === PHASE.YELLOW) return 'flash';
-    return 'stop';
+    if (m.state === PHASE.ALL_RED) return 'stop';
+    // Only the crosswalk on the right of a green road walks: its straight and left traffic never
+    // drives over it, and its right turners give way to people (the shared conflict grid).
+    let walk = false;
+    for (const arm of ARMS) {
+      if (!c.I.approachLanes[arm]) continue;
+      const s = m.signalForArm(arm, 'straight');
+      if (s === 'red') continue;
+      if (arm === c.arm) return 'stop'; // traffic on this road is moving
+      if (armOf(rightOf({ x: -DIRS[arm].x, y: -DIRS[arm].y })) === c.arm) walk = true;
+      else if (m.signalForArm(arm, 'left') !== 'red' && armOf(leftOf({ x: -DIRS[arm].x, y: -DIRS[arm].y })) === c.arm) return 'stop';
+      else if (armOf({ x: -DIRS[arm].x, y: -DIRS[arm].y }) === c.arm) return 'stop'; // straight across it
+    }
+    if (!walk) return 'stop';
+    return m.state === PHASE.GREEN ? 'walk' : 'flash';
   }
 
   // ------------------------------------------------------------------ sidewalk geometry
@@ -258,12 +278,54 @@ export class PedestrianManager {
     }
   }
 
+  /**
+   * Smallest distance from the kerb (into the sidewalk) that keeps a person clear of every turning
+   * path at node I, at road distance u along arm `arm` on `side`. Tabulated once per sidewalk.
+   */
+  minLat(I, arm, side, u) {
+    if (u > CLEAR_SPAN) return 0;
+    const key = `${I.id}:${arm}:${side}`;
+    let t = this.clearance.get(key);
+    if (!t) {
+      t = this._clearanceTable(I, arm, side);
+      this.clearance.set(key, t);
+    }
+    const i = Math.max(0, Math.min(t.length - 1, Math.round(u / CLEAR_STEP)));
+    return t[i];
+  }
+
+  _clearanceTable(I, arm, side) {
+    const A = I.arms[arm];
+    const n = Math.ceil(CLEAR_SPAN / CLEAR_STEP) + 1;
+    const t = new Float32Array(n);
+    const paths = I.connectors.map((c) => c.path);
+    const clear = (x, y) => {
+      for (const P of paths) {
+        for (let i = 1; i < P.n; i++) {
+          if (pointSegDist2(x, y, P.xs[i - 1], P.ys[i - 1], P.xs[i], P.ys[i]) < TURN_CLEAR * TURN_CLEAR) return false;
+        }
+      }
+      return true;
+    };
+    for (let i = 0; i < n; i++) {
+      const u = i * CLEAR_STEP;
+      let lat = 0;
+      while (lat < SW - 0.3) {
+        A.center.point(u, side * (A.half + lat), _pt);
+        if (clear(_pt.x, _pt.y)) break;
+        lat += 0.25;
+      }
+      t[i] = Math.min(lat, SW - 0.3);
+    }
+    return t;
+  }
+
   /** Position a sidewalk walker. Near a corner they drift to the middle of the sidewalk. */
   _place(p) {
     const A = p.road.I.arms[p.road.arm];
     const c = this._corner(p.road.I, p.road.arm, p.side);
     const k = c.blend ? Math.min(1, Math.max(0, (p.u - c.u) / 5)) : 1;
-    const lat = SW / 2 + (p.lat - SW / 2) * k;
+    const lat = Math.max(SW / 2 + (p.lat - SW / 2) * k, this.minLat(p.road.I, p.road.arm, p.side, p.u));
     A.center.point(p.u, p.side * (A.half + lat), _pt);
     p.x = _pt.x;
     p.y = _pt.y;
@@ -369,7 +431,14 @@ export class PedestrianManager {
    * corner (curb radius 4 m), so people stand at least ~0.6 m inside it.
    */
   _setGoal(p, c, from) {
-    p.goal = { c, from, waitU: c.A.cwStart + this.rng.range(0.8, 3.2), waitLat: this.rng.range(1.8, 3.2) };
+    let waitU = c.A.cwStart + this.rng.range(0.8, 3.2);
+    let waitLat = this.rng.range(1.8, 3.2);
+    // Step back along the sidewalk until the spot is clear of turning vehicles.
+    for (let k = 0; k < 24 && this.minLat(c.I, c.arm, from, waitU) > waitLat; k++) {
+      waitLat = Math.min(SW - 0.4, Math.max(waitLat, this.minLat(c.I, c.arm, from, waitU)));
+      if (this.minLat(c.I, c.arm, from, waitU) > waitLat) waitU += 0.5;
+    }
+    p.goal = { c, from, waitU, waitLat };
   }
 
   _walk(p, dt) {
@@ -379,6 +448,8 @@ export class PedestrianManager {
     if (p.dir > 0) {
       if (A.type === 'external') {
         if (p.u > A.length + 25) p.gone = true;
+      } else if (A.type === 'link' && p.u >= A.center.length / 2 && this.sim.network.byId.get(A.other).layer !== 0) {
+        p.dir = -1; // the sidewalk ends where the ramp climbs: walk back
       } else if (A.type === 'link' && p.u >= A.center.length / 2) {
         const B = this.sim.network.byId.get(A.other);
         const bArm = A.link.a === I.id ? A.link.bArm : A.link.aArm;

@@ -283,3 +283,57 @@ export const tulay = {
   armLength: 115,
   focus: { minX: -70, maxX: 70, minY: -92, maxY: 92 },
 };
+
+// A highway town strip: two side streets join the highway with no traffic light (they give way and
+// merge), then the curb lane ends before the signal at Burgos St (3 lanes become 2: zipper merge).
+export const serbisyo = {
+  id: 'serbisyo',
+  name: 'MacArthur Hwy',
+  region: 'Gitnang Luzon',
+  blurb: 'Side streets feed straight onto the highway with no light, and the curb lane ends before the Burgos St signal: three lanes squeeze into two.',
+  sceneSeed: 1936,
+  theme: 'province',
+  roads: {
+    hwy: { name: 'MacArthur Hwy', lanes: 3, median: 2 },
+    side: { name: 'Service Rd', lanes: 1, median: 0 },
+    sampaguita: { name: 'Sampaguita St', lanes: 1, median: 0 },
+    burgos: { name: 'Burgos St', lanes: 2, median: 0 },
+  },
+  nodes: [
+    {
+      id: 'Y1',
+      x: -120,
+      y: 0,
+      kind: 'yield',
+      arms: { S: 'side', E: 'hwy', W: 'hwy' },
+      major: ['E', 'W'],
+      shape: { S: [{ straight: 40 }, { curve: 30, radius: 45 }, { straight: 20 }, { curve: -30, radius: 45 }], W: [{ straight: 40 }, { curve: -12, radius: 200 }] },
+    },
+    {
+      id: 'Y2',
+      x: -10,
+      y: 0,
+      kind: 'yield',
+      arms: { N: 'sampaguita', E: 'hwy', W: 'hwy' },
+      major: ['E', 'W'],
+      shape: { N: [{ straight: 40 }, { curve: -35, radius: 40 }, { straight: 15 }, { curve: 35, radius: 40 }] },
+    },
+    {
+      id: 'A',
+      x: 110,
+      y: 0,
+      kind: 'signal',
+      arms: { N: 'burgos', S: 'burgos', E: 'hwy', W: 'hwy' },
+      // The curb lane ends before the junction, so right turns also go from the middle lane.
+      moves: { W: [['straight', 'left'], ['straight', 'right'], ['straight', 'right']] },
+      shape: { E: [{ straight: 40 }, { curve: 14, radius: 180 }], N: [{ straight: 40 }, { curve: 30, radius: 55 }], S: [{ straight: 40 }, { curve: -25, radius: 60 }] },
+    },
+  ],
+  links: [
+    { a: 'Y1', aArm: 'E', b: 'Y2', bArm: 'W' },
+    { a: 'Y2', aArm: 'E', b: 'A', bArm: 'W' },
+  ],
+  laneDrops: [{ node: 'A', arm: 'W', lane: 2, before: 45 }],
+  armLength: 115,
+  focus: { minX: -160, maxX: 150, minY: -60, maxY: 60 },
+};

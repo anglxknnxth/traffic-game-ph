@@ -2,6 +2,12 @@
 
 import { makeObb, setObb } from '../utils/math.js';
 
+/** Level of segment seg at local coordinate s (see LaneManager: 0 ground, 1 elevated, ...). */
+function segLayer(seg, s) {
+  if (seg.kind === 'connector') return seg.layer ?? 0;
+  return s < (seg.layerSplit ?? Infinity) ? seg.layerA ?? 0 : seg.layerB ?? 0;
+}
+
 export const AI_STATE = {
   SPAWNING: 'SPAWNING',
   APPROACHING: 'APPROACHING',
@@ -185,6 +191,8 @@ export class Vehicle {
 
   updatePose() {
     const p = this._pose(this.s);
+    const e = this.route.entries[this.route.indexAt(this.s)];
+    this.layer = segLayer(e.seg, this.s - e.start);
     this.x = p.x;
     this.y = p.y;
     this.angle = p.angle;

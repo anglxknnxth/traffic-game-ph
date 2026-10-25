@@ -4,7 +4,13 @@
 // Nodes are axis-aligned junctions with up to four arms (N/E/S/W):
 //   'signal' — player-controlled traffic lights
 //   'uturn'  — median U-turn slot; through traffic has priority over U-turners
-//   'yield'  — unsignalised; vehicles on minor arms stop and wait for a gap
+//   'yield'  — unsignalised; vehicles on minor arms stop and wait for a gap (def.rolling: they only
+//              give way, as at a highway on-ramp)
+//   'toll'   — toll plaza: every vehicle stops at its booth for a moment, then drives on
+//   'pass'   — a plain join between two roads (no control)
+// Grade separation: a node may sit on another level (def.layer: 1 for an elevated expressway), a
+// link between levels is a ramp, and lanes of type 'tunnel' pass under a node marked
+// def.underpass (an underpass). Vehicles only interact with vehicles on a nearby level.
 // Each arm uses a road profile: lanes per direction, median width and lane types. Lanes of one
 // direction are indexed from the median (0) to the curb (n-1). With two lanes and no median this
 // reproduces the classic layout: lane 0 straight + left, lane 1 straight + right.
@@ -23,9 +29,19 @@ export const MOVE_ORDER = ['straight', 'left', 'right', 'uturn'];
 /** Direction traffic from each approach travels into the junction (for phase labels). */
 const ARM_ARROW = { N: '↓', E: '←', S: '↑', W: '→' };
 
+/** Nodes laid out like a U-turn slot: a short straight box with no crosswalks. */
+export const SLOT_KINDS = new Set(['uturn', 'toll', 'pass']);
+// Level of a vehicle: ground 0, elevated 1, ramps 0.5, tunnel trench -0.5, under a junction -1.
+// Two vehicles interact only when their levels differ by less than 1.
+export const RAMP_LAYER = 0.5;
+export const TRENCH_LAYER = -0.5;
+export const UNDER_LAYER = -1;
+const PORTAL = 70; // m from an underpass node where its tunnel lanes leave ground level
+
 /** Vehicle types allowed on dedicated lanes (null = everyone). */
 export const LANE_ALLOWED = {
   general: null,
+  tunnel: null,
   bus: new Set(['bus', 'ambulance', 'firetruck']),
   moto: new Set(['motorcycle']),
   bike: new Set(['bicycle']),
@@ -63,7 +79,7 @@ function normalizeProfile(map, ref) {
   // The curb lane for loading and right turns is the outermost lane that is not a bike lane.
   let curb = lanes - 1;
   while (curb > 0 && types[curb] === 'bike') curb--;
-  return { key: typeof ref === 'string' ? ref : null, name: p.name || null, lanes, median, types, widths, offsets, curb, half: edge };
+  return { key: typeof ref === 'string' ? ref : null, name: p.name || null, lanes, median, types, widths, offsets, curb, half: edge, layer: p.layer ?? 0 };
 }
 
 export class Segment {
@@ -98,6 +114,7 @@ export class Network {
       exitLanes: {},
       connectors: [],
       major: new Set(d.major || []),
+      layer: d.layer ?? 0,
     }));
     this.byId = new Map(this.intersections.map((I) => [I.id, I]));
 
@@ -129,8 +146,16 @@ export class Network {
       this._buildConnectors(I);
       I.phases = I.kind === 'signal' ? this._phases(I) : [];
     }
+    this._assignLayers();
     this.bounds = this._computeBounds();
     this.river = map.river ? new River(map.river) : null;
+    // Lane drops: { node, arm, lane, before } -> that approach lane ends `before` m from the stop line.
+    this.laneDrops = (map.laneDrops || []).map((d) => {
+      const lane = this.byId.get(d.node).approachLanes[d.arm][d.lane];
+      if (!lane) throw new Error(`Map ${map.id}: no lane ${d.lane} on ${d.node}${d.arm}`);
+      lane.dropAt = lane.length - d.before;
+      return { lane, s: lane.dropAt, before: d.before };
+    });
   }
 
   // ------------------------------------------------------------------ geometry
@@ -139,7 +164,7 @@ export class Network {
     I.hx = Math.max(half('N'), half('S')); // half-width of the north–south road
     I.hy = Math.max(half('E'), half('W')); // half-width of the east–west road
     let uturnHalf = 0;
-    if (I.kind === 'uturn') {
+    if (SLOT_KINDS.has(I.kind)) {
       // Depth needed for a U-turn from the first general lane to the first general lane opposite.
       let d = 0;
       for (const arm of I.def.uturn || []) {
@@ -154,7 +179,7 @@ export class Network {
       if (A.type === 'none') continue;
       A.half = A.profile.half;
       A.median = A.profile.median;
-      if (I.kind === 'uturn') {
+      if (SLOT_KINDS.has(I.kind)) {
         A.stop = uturnHalf;
         A.exitStop = uturnHalf;
         A.cwStart = null;
@@ -210,8 +235,7 @@ export class Network {
    * The largest area the camera may show: the focus rect widened for landscape screens (and, less,
    * for portrait ones). External roads are extended to leave it.
    */
-  _reachRect() {
-    const f = this.focusRect();
+  _reachRect(f = this.focusRect()) {
     const fw = f.maxX - f.minX;
     const fh = f.maxY - f.minY;
     const cx = (f.minX + f.maxX) / 2;
@@ -235,6 +259,13 @@ export class Network {
   /** Area the camera is kept inside (so lane ends stay off screen). */
   viewLimit() {
     return { ...this.reach };
+  }
+
+  /** Camera limit for a smaller focus area (growing city), never beyond the full reach. */
+  reachFor(focus) {
+    const r = this._reachRect(focus);
+    const R = this.reach;
+    return { minX: Math.max(R.minX, r.minX), maxX: Math.min(R.maxX, r.maxX), minY: Math.max(R.minY, r.minY), maxY: Math.min(R.maxY, r.maxY) };
   }
 
   _checkRadius(I, arm, A) {
@@ -386,6 +417,8 @@ export class Network {
     const byType = (t) => lanes.map((l, i) => (l.type === t ? i : -1)).filter((i) => i >= 0);
     const general = byType('general');
     assign(general);
+    // Through lanes that dive under a junction: straight on only, everywhere.
+    for (const i of byType('tunnel')) if (S) moves[i].push('straight');
     for (const i of byType('bus')) {
       if (S) moves[i].push('straight');
       else assign([i]);
@@ -469,6 +502,8 @@ export class Network {
           conn.laneIndex = k;
           conn.fromLane = lane;
           conn.toLane = toLane;
+          // Tunnel lanes go under an underpass node: no lights, no conflicts with the junction above.
+          conn.under = !!(I.def.underpass && lane.type === 'tunnel' && m === 'straight');
           this._addConnector(I, conn);
           lane.connectors[m] = conn;
           if (widePts) {
@@ -481,6 +516,32 @@ export class Network {
         }
       }
     }
+  }
+
+  /** Levels of lanes and connectors (see RAMP_LAYER etc.). Lanes may change level along their length. */
+  _assignLayers() {
+    for (const c of this.connectors) c.layer = c.under ? UNDER_LAYER : c.intersection.layer;
+    for (const lane of this.lanes) {
+      const a = lane.startInt ? lane.startInt.layer : null;
+      const b = lane.endInt ? lane.endInt.layer : null;
+      let base = a ?? b ?? 0;
+      if (a !== null && b !== null && a !== b) base = RAMP_LAYER;
+      lane.layerA = base;
+      lane.layerB = base;
+      lane.layerSplit = Infinity;
+      if (lane.type === 'tunnel') {
+        // Down into the trench toward an underpass node, up again after it.
+        if (lane.endInt?.def.underpass) {
+          lane.layerB = TRENCH_LAYER;
+          lane.layerSplit = Math.max(0, lane.length - PORTAL);
+        } else if (lane.startInt?.def.underpass) {
+          lane.layerA = TRENCH_LAYER;
+          lane.layerSplit = Math.min(lane.length, PORTAL);
+        }
+      }
+      lane.layered = lane.layerA !== 0 || lane.layerB !== 0;
+    }
+    this.layered = this.lanes.some((l) => l.layered) || this.connectors.some((c) => c.layer !== 0);
   }
 
   _addConnector(I, conn) {
@@ -504,16 +565,37 @@ export class Network {
   _phases(I) {
     const present = (a) => I.arms[a].type !== 'none' && I.approachLanes[a]?.length;
     const label = (arms) => {
-      if (arms.length === 1) {
-        const name = I.arms[arms[0]].profile.name;
-        return name ? `${name} ${ARM_ARROW[arms[0]]}` : ARM_LABEL[arms[0]];
-      }
-      const names = new Set(arms.map((a) => I.arms[a].profile.name));
+      if (arms.length === 1) return this.armLabel(I, arms[0]);
+      const names = new Set(arms.map((a) => this.roadName(I, a)));
       if (names.size === 1 && [...names][0]) return [...names][0];
       return GROUP_LABEL[arms.join('')] || arms.join('–');
     };
     if (I.def.phases) return I.def.phases.map((p) => ({ ...p, label: p.label || label(p.arms) }));
     return ARMS.filter(present).map((a) => ({ id: a, arms: [a], label: label([a]) }));
+  }
+
+  /** Level of a point s along segment seg. */
+  static layerAt(seg, s) {
+    if (seg.kind === 'connector') return seg.layer ?? 0;
+    return s < seg.layerSplit ? seg.layerA ?? 0 : seg.layerB ?? 0;
+  }
+
+  /** Street name of arm `arm` at node I (the node's own name for it, else the road's). */
+  roadName(I, arm) {
+    return I.def.names?.[arm] || I.arms[arm]?.profile?.name || null;
+  }
+
+  /** Short label for traffic coming in on arm `arm`: "Rizal St ↓" (or "North" for unnamed roads). */
+  armLabel(I, arm) {
+    const name = this.roadName(I, arm);
+    return name ? `${name} ${ARM_ARROW[arm]}` : ARM_LABEL[arm];
+  }
+
+  /** Long label: "Rizal St (from the north)". */
+  armName(I, arm) {
+    const name = this.roadName(I, arm);
+    const from = `from the ${ARM_LABEL[arm].toLowerCase()}`;
+    return name ? `${name} (${from})` : ARM_LABEL[arm];
   }
 
   _computeBounds() {

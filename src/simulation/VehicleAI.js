@@ -79,6 +79,16 @@ export class VehicleAI {
         constraint = 'leader';
       }
     }
+    // Zipper merge: let one vehicle in from a lane that ends just ahead.
+    const ml = sim.mergeLeader(v);
+    if (ml) {
+      const aM = idm(v.v, ml.vehicle.v, ml.gap, v0, aMax, b, Math.max(P.minGap * env.gapFactor, 2.5), T);
+      if (aM < acc) {
+        acc = aM;
+        constraint = 'merge';
+        v.yieldingTo = ml.vehicle.id;
+      }
+    } else v.yieldingTo = null;
     // Mid lane change: keep a safe gap to traffic in the lane being left as well.
     if (v.lc && v.lc.fromLane && Math.abs(v.lateralOffset()) > 0.9) {
       let best = null;
@@ -105,9 +115,9 @@ export class VehicleAI {
       }
     }
 
-    // 2. Intersection entry
+    // 2. Intersection entry (tunnel lanes simply drive on under an underpass)
     const ce = v.nextConnEntry();
-    if (ce) {
+    if (ce && !ce.seg.under) {
       const conn = ce.seg;
       const I = conn.intersection;
       const distToStop = ce.start - front;
@@ -142,7 +152,8 @@ export class VehicleAI {
         }
         // STOP sign on the minor arms of a yield junction, every approach under flashing yellow, and
         // a right turn on red: come to a full stop before looking for a gap.
-        const mustStop = (I.kind === 'yield' && !I.major.has(conn.arm)) || (sig === 'flash' && !sirens) || rtor;
+        // Merges (def.rolling: ramps, slip roads) only yield: no full stop needed.
+        const mustStop = (I.kind === 'yield' && !I.major.has(conn.arm) && !I.def.rolling) || I.kind === 'toll' || (sig === 'flash' && !sirens) || rtor;
         if (want && mustStop && v.signStop !== I.id) {
           // A full stop, or a rolling one (slow, close to the line) when nothing at all is coming.
           const rolling = distToStop < 2.5 && v.v < 2.0 && !v.emergency && sim.clearToRoll(v, conn, sig, rtor);
@@ -153,6 +164,11 @@ export class VehicleAI {
             want = false;
             v.blockReason = 'sign';
           }
+        }
+        // Toll plaza: pay at the booth (electronic lane by the median is quicker), then go.
+        if (want && I.kind === 'toll' && v.signStop === I.id && sim.time - v.signStopAt < (conn.fromLane.laneIndex === 0 ? 0.8 : 1.8 + (v.seq % 10) * 0.12)) {
+          want = false;
+          v.blockReason = 'toll';
         }
         if (want && sim.tryEnter(v, conn, ce.start, distToStop)) {
           res = v.reservations.get(I.id);
@@ -228,7 +244,7 @@ export class VehicleAI {
     if (v.cornerStop && v.cornerStop.state !== 'done') {
       const C = v.cornerStop;
       // Never hold up an emergency vehicle: cut the stop short and clear the box.
-      if (sim.emergencyClaimFor(v, C.I)) C.state = 'done';
+      if (sim.emergencyClaimFor(v, C.I, C.conn)) C.state = 'done';
       else if (C.state === 'pending') {
         const d = C.s - front;
         if (d < 0.8 && v.v < 0.3) {
@@ -275,7 +291,7 @@ export class VehicleAI {
     }
 
     // 7. Look-ahead probe for crossing / merging traffic near intersections
-    if (sim.nearIntersection(v) && v.v > 0.05) {
+    if (sim.nearIntersection(v) && v.v > 0.05 && !sim.hasPass(v)) {
       const maxD = Math.min(16, (v.v * v.v) / (2 * b) + 4);
       const free = sim.collision.probe(v, maxD);
       if (free !== Infinity) {
@@ -321,8 +337,8 @@ export class VehicleAI {
     const I = conn.intersection;
     if (!CORNER_STOP_TYPES.has(v.type) || I.kind !== 'signal' || v.boxBlocker || v.cornerStopAt === I.id) return;
     if (conn.movement !== 'straight' && conn.movement !== 'right') return;
-    if (conn.toLane.type !== 'general' || sim.emergencyClaimFor(v, I)) return;
-    if (!sim.rng.chance(sim.level.cornerStops || 0)) return;
+    if (conn.toLane.type !== 'general' || sim.emergencyClaimFor(v, I, conn)) return;
+    if (!sim.rng.chance(sim.cornerStopRate)) return;
     v.cornerStopAt = I.id;
     v.cornerStop = { I, conn, s: connStart + conn.length - 0.6, duration: sim.rng.range(3, 7), timer: 0, state: 'pending' };
   }

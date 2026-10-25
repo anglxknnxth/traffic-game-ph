@@ -74,6 +74,8 @@ export class Camera {
     const fw = this.focus.maxX - this.focus.minX;
     const fh = this.focus.maxY - this.focus.minY;
     this.base = Math.min(this.viewW / fw, this.viewH / fh);
+    // Big maps: still allow zooming in until a car is clearly visible (about 14 px per metre).
+    this.maxZoom = Math.max(3.5, 14 / this.base);
     // Never zoom out past the bounds: the whole canvas (HUD areas included) must fit inside them,
     // so the ends of the lanes, where vehicles appear and leave, stay off screen.
     const bw = this.bounds.maxX - this.bounds.minX;
@@ -117,14 +119,56 @@ export class Camera {
     this.anchor = { px, py, wx: w.x, wy: w.y };
   }
 
+  /** Ease the focus (and camera limit) to a new area over `secs` (the growing city opening up). */
+  transitionTo(focus, bounds, secs = 1.6) {
+    this.transition = { from: { ...this.focus }, to: focus, bounds, t: 0, secs, panX: this.panX, panY: this.panY };
+    this.bounds = {
+      minX: Math.min(this.bounds.minX, bounds.minX),
+      maxX: Math.max(this.bounds.maxX, bounds.maxX),
+      minY: Math.min(this.bounds.minY, bounds.minY),
+      maxY: Math.max(this.bounds.maxY, bounds.maxY),
+    };
+  }
+
+  /** Keep a world point centred (follow a vehicle, cinematic shots), easing toward it. */
+  track(x, y, dt, zoom = null) {
+    const k = 1 - Math.exp(-Math.max(0, dt) / 0.6);
+    const fcx = (this.focus.minX + this.focus.maxX) / 2;
+    const fcy = (this.focus.minY + this.focus.maxY) / 2;
+    this.panX += (x - fcx - this.panX) * k;
+    this.panY += (y - fcy - this.panY) * k;
+    if (zoom !== null) {
+      this.zoom += (Math.max(this.zoomFloor ?? this.minZoom, Math.min(this.maxZoom, zoom)) - this.zoom) * k * 0.5;
+      this._recompute();
+    } else this._clampPan();
+    this.version++;
+  }
+
   /** True while an eased zoom is still moving. */
   get animating() {
-    return this.targetZoom !== undefined && this.targetZoom !== null;
+    return (this.targetZoom !== undefined && this.targetZoom !== null) || !!this.transition;
   }
 
   /** Advance the zoom easing (call once per rendered frame with real seconds). */
   update(dt) {
-    if (!this.animating) return;
+    const tr = this.transition;
+    if (tr) {
+      tr.t = Math.min(tr.secs, tr.t + Math.max(0, dt));
+      const e = tr.t / tr.secs;
+      const k = e * e * (3 - 2 * e);
+      const lerp = (a, b) => a + (b - a) * k;
+      this.focus = { minX: lerp(tr.from.minX, tr.to.minX), maxX: lerp(tr.from.maxX, tr.to.maxX), minY: lerp(tr.from.minY, tr.to.minY), maxY: lerp(tr.from.maxY, tr.to.maxY) };
+      this.panX = tr.panX * (1 - k);
+      this.panY = tr.panY * (1 - k);
+      this._recompute();
+      if (tr.t >= tr.secs) {
+        this.transition = null;
+        this.bounds = tr.bounds;
+        this._recompute();
+      }
+      this.version++;
+    }
+    if (!(this.targetZoom !== undefined && this.targetZoom !== null)) return;
     const k = 1 - Math.exp(-Math.max(0, dt) / 0.09);
     const done = Math.abs(this.targetZoom - this.zoom) < this.targetZoom * 0.002;
     this.zoom = done ? this.targetZoom : this.zoom + (this.targetZoom - this.zoom) * k;

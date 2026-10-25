@@ -4,10 +4,15 @@
 //   FLASH -> ALL_RED -> GREEN(phase)
 // The player is fully in control: there is no minimum green, a change starts the moment it is
 // requested, and a change in progress can be redirected or cancelled. Yellow and a short fixed
-// all-red still run between greens, and only one phase is ever green. A phase is a set of approach
-// arms (optionally limited to some movements); by default every approach is its own phase.
+// all-red still run between greens. A phase is a set of approach arms (optionally limited to some
+// movements); by default every approach is its own phase.
+//
+// Paired greens: while one single-road phase is green, requesting the road opposite it adds that
+// road (its left turn first goes yellow then red, then the opposite road turns green). Both run
+// straight and right only, so their paths never cross. Requesting one of the pair again drops the
+// other through yellow; requesting any cross road changes over normally (both go yellow).
 
-import { SIGNAL_TIMING } from '../data/config.js';
+import { SIGNAL_TIMING, OPPOSITE } from '../data/config.js';
 
 export const PHASE = Object.freeze({ GREEN: 'GREEN', YELLOW: 'YELLOW', ALL_RED: 'ALL_RED', FLASH: 'FLASH' });
 /** Pseudo group id used as the target of a change into flashing yellow. */
@@ -20,6 +25,8 @@ export const DEFAULT_PHASES = Object.freeze([
 ]);
 // Old paired group ids (still used by some level data and saved warm-ups).
 const LEGACY_AXIS = { NS: ['N', 'S'], EW: ['E', 'W'] };
+// Movements that cross the opposite road's straight traffic: banned while paired.
+const CROSSING_MOVES = new Set(['left', 'uturn']);
 
 export class TrafficPhaseManager {
   constructor({
@@ -39,6 +46,9 @@ export class TrafficPhaseManager {
     this.activeGroup = initial;
     this.nextGroup = null;
     this.pendingGroup = null; // never set: requests act immediately (kept for callers that check it)
+    // Paired green: { other, stage: 'adding' | 'on' | 'dropping', drop, t }. `other` is the second
+    // green road; while dropping, `drop` is the road going yellow and the other one stays.
+    this.pair = null;
     this.timer = 0;
     this.earlyRequests = 0;
     this.switches = 0;
@@ -59,6 +69,11 @@ export class TrafficPhaseManager {
     return this.state === PHASE.FLASH;
   }
 
+  /** True when both roads of a pair are green (or the pair is being set up or taken down). */
+  get paired() {
+    return !!this.pair;
+  }
+
   labelOf(group) {
     if (group === FLASH_GROUP) return 'FLASHING YELLOW';
     return this.byId.get(group)?.label || group || '';
@@ -77,22 +92,77 @@ export class TrafficPhaseManager {
     return null;
   }
 
-  signalForGroup(group) {
+  /** The phase that may be paired with `group`: the single road opposite a single road. */
+  oppositeOf(group) {
+    const p = this.byId.get(group);
+    if (!p || p.moves || p.arms.size !== 1) return null;
+    const opp = OPPOSITE[[...p.arms][0]];
+    for (const q of this.phases) if (!q.moves && q.arms.size === 1 && q.arms.has(opp)) return q.id;
+    return null;
+  }
+
+  /** The other road of the pair (null when not paired). */
+  get partner() {
+    return this.pair ? this.pair.other : null;
+  }
+
+  /**
+   * Signal of one movement of `group`. Straight and right follow the phase; left (and U-turns)
+   * read red while paired.
+   */
+  _groupSignal(group, move) {
     if (this.state === PHASE.FLASH) return 'flash';
-    if (group !== this.activeGroup) return 'red';
-    if (this.state === PHASE.GREEN) return 'green';
-    if (this.state === PHASE.YELLOW) return 'yellow';
-    return 'red';
+    const P = this.pair;
+    const main = group === this.activeGroup;
+    const other = P && group === P.other;
+    if (!main && !other) return 'red';
+    if (this.state === PHASE.ALL_RED) return 'red';
+    const banned = P && CROSSING_MOVES.has(move);
+    let s = this.state === PHASE.GREEN ? 'green' : 'yellow';
+    if (P) {
+      const leaving = P.stage === 'dropping' ? P.drop : null;
+      if (group === leaving) return P.t < this.yellow ? 'yellow' : 'red';
+      if (P.stage === 'adding') {
+        if (other) return 'red';
+        // The main road's left turn clears first: yellow, then red.
+        if (banned) return P.t < this.yellow && s === 'green' ? 'yellow' : 'red';
+        return s;
+      }
+      if (P.stage === 'dropping') {
+        // The road that stays gets its left turn back once the dropped road has cleared.
+        if (banned) return 'red';
+        return s;
+      }
+      if (banned) return 'red';
+    }
+    return s;
+  }
+
+  signalForGroup(group) {
+    return this._groupSignal(group, 'straight');
   }
 
   /** 'green' | 'yellow' | 'red' | 'flash' (flashing yellow: stop, then go when clear). */
   signalForArm(arm, move = 'straight') {
     if (this.state === PHASE.FLASH) return 'flash';
-    return this.covers(this.activeGroup, arm, move) ? this.signalForGroup(this.activeGroup) : 'red';
+    if (this.covers(this.activeGroup, arm, move)) return this._groupSignal(this.activeGroup, move);
+    if (this.pair && this.covers(this.pair.other, arm, move)) return this._groupSignal(this.pair.other, move);
+    return 'red';
   }
 
   greenGroups() {
     return this.groups.filter((g) => this.signalForGroup(g) === 'green');
+  }
+
+  /**
+   * Safety check for the controller: two greens are fine only as a pair of opposite roads with
+   * their crossing movements on red.
+   */
+  conflicting() {
+    const greens = this.groups.filter((g) => ['straight', 'right', 'left', 'uturn'].some((m) => this._groupSignal(g, m) === 'green'));
+    if (greens.length <= 1) return false;
+    if (greens.length > 2 || this.oppositeOf(greens[0]) !== greens[1]) return true;
+    return greens.some((g) => this._groupSignal(g, 'left') === 'green' || this._groupSignal(g, 'uturn') === 'green');
   }
 
   /**
@@ -111,7 +181,34 @@ export class TrafficPhaseManager {
       return { status: 'accepted', reason: 'Changing', early: false, wait: this.remaining() };
     }
     if (this.state === PHASE.GREEN) {
-      if (group === this.activeGroup) return { status: 'ignored', reason: 'Already green', early: false, wait: 0 };
+      const P = this.pair;
+      if (P) {
+        if (P.stage === 'dropping') {
+          if (group === P.drop && P.t < this.yellow) {
+            // Changed our mind while it was still yellow: keep both roads.
+            this.pair = { other: P.other, stage: 'on', drop: null, t: 0 };
+            return { status: 'accepted', reason: 'Pair kept', early: false, wait: 0 };
+          }
+          if (group === this.activeGroup || group === P.other) return { status: 'ignored', reason: 'Already changing', early: false, wait: this.remaining() };
+        } else if (group === this.activeGroup || group === P.other) {
+          if (P.stage === 'adding') {
+            if (group === P.other) return { status: 'ignored', reason: 'Already changing', early: false, wait: this.remaining() };
+            this.pair = null; // cancel: the main road keeps all its movements
+            return { status: 'accepted', reason: 'Change cancelled', early: false, wait: 0 };
+          }
+          // Keep `group` alone; the other road goes yellow, then red.
+          const drop = group === this.activeGroup ? P.other : this.activeGroup;
+          this.pair = { other: P.other, stage: 'dropping', drop, t: 0 };
+          return { status: 'accepted', reason: 'Dropping pair', early: false, wait: this.remaining() };
+        }
+      } else {
+        if (group === this.activeGroup) return { status: 'ignored', reason: 'Already green', early: false, wait: 0 };
+        if (this.oppositeOf(this.activeGroup) === group) {
+          this.pair = { other: group, stage: 'adding', drop: null, t: 0 };
+          this.history.push({ state: 'PAIR', group });
+          return { status: 'accepted', reason: 'Pairing', early: false, wait: this.remaining() };
+        }
+      }
       this._beginYellow(group);
       return { status: 'accepted', reason: 'Changing', early: false, wait: this.remaining() };
     }
@@ -142,6 +239,14 @@ export class TrafficPhaseManager {
   }
 
   _beginYellow(next) {
+    // A pair being set up never turned its second road green: just drop it.
+    if (this.pair && this.pair.stage === 'adding') this.pair = null;
+    if (this.pair && this.pair.stage === 'dropping') {
+      // The dropped road is already yellow or red; the one staying is the only real green.
+      const keep = this.pair.drop === this.activeGroup ? this.pair.other : this.activeGroup;
+      this.activeGroup = keep;
+      this.pair = null;
+    }
     this.state = PHASE.YELLOW;
     this.nextGroup = next;
     this.timer = 0;
@@ -151,10 +256,27 @@ export class TrafficPhaseManager {
   /** Advance timers. All-red is a fixed interval; box safety is enforced per vehicle. */
   update(dt) {
     this.timer += dt;
+    const P = this.pair;
+    if (P && this.state === PHASE.GREEN) {
+      P.t += dt;
+      if (P.t >= this.yellow + this.allRed) {
+        if (P.stage === 'adding') {
+          this.pair = { other: P.other, stage: 'on', drop: null, t: 0 };
+          this.switches++;
+          this.history.push({ state: this.state, group: `${this.activeGroup}+${P.other}` });
+        } else if (P.stage === 'dropping') {
+          this.activeGroup = P.drop === this.activeGroup ? P.other : this.activeGroup;
+          this.pair = null;
+          this.timer = 0;
+          this.history.push({ state: this.state, group: this.activeGroup });
+        }
+      }
+    }
     switch (this.state) {
       case PHASE.YELLOW:
         if (this.timer >= this.yellow) {
           this.state = PHASE.ALL_RED;
+          this.pair = null;
           this.timer = 0;
           this.history.push({ state: this.state, group: null });
         }
@@ -185,12 +307,20 @@ export class TrafficPhaseManager {
   remaining() {
     if (this.state === PHASE.YELLOW) return Math.max(0, this.yellow - this.timer) + this.allRed;
     if (this.state === PHASE.ALL_RED) return Math.max(0, this.allRed - this.timer);
+    if (this.pair && this.pair.stage !== 'on') return Math.max(0, this.yellow + this.allRed - this.pair.t);
     return 0;
   }
 
   /** HUD description of the phase. `countdown` is one continuous count to the next green. */
   describe() {
     if (this.state === PHASE.GREEN) {
+      const P = this.pair;
+      if (P) {
+        const both = `${this.labelOf(this.activeGroup)} + ${this.labelOf(P.other)}`;
+        if (P.stage === 'on') return { label: `GREEN ${both} · NO LEFT TURN`, state: this.state, group: this.activeGroup, partner: P.other, countdown: null, pending: null, elapsed: this.timer };
+        const label = P.stage === 'adding' ? `ADDING ${this.labelOf(P.other)}` : `DROPPING ${this.labelOf(P.drop)}`;
+        return { label, state: this.state, group: this.activeGroup, partner: P.other, countdown: this.remaining(), pending: P.stage === 'adding' ? P.other : null, elapsed: this.timer };
+      }
       return { label: `GREEN ${this.labelOf(this.activeGroup)}`, state: this.state, group: this.activeGroup, countdown: null, pending: null, elapsed: this.timer };
     }
     if (this.state === PHASE.FLASH) {

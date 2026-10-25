@@ -91,8 +91,25 @@ export class LaneChanger {
     if (lead && lead.v < 0.5 && (lead.loading?.state === 'stopped' || lead.broken)) {
       return lead.localS - lead.hl - v.localS - v.hl < 40;
     }
+    // Sirens: an emergency vehicle stuck behind slow traffic looks for a clearer lane.
+    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40) return true;
+    // ... and drivers with sirens close behind them move over to let it through.
+    if (!v.emergency && this._sirenBehind(v, lane)) return true;
+    // A lane that ends: start merging well before the end, as drivers do.
+    const lf = v.localS + v.hl;
+    if (lane.dropAt !== undefined && lane.dropAt > lf - 0.5 && lane.dropAt - lf < 90) return true;
     const blk = this.sim.nextBlockage(v);
     return blk !== null && blk - v.front < 45;
+  }
+
+  /** An emergency vehicle close behind v in its own lane. */
+  _sirenBehind(v, lane) {
+    for (const o of lane.vehicles) {
+      if (!o.emergency || o === v) continue;
+      const gap = v.localS - v.hl - o.localS - o.hl;
+      if (gap > -0.5 && gap < 35) return true;
+    }
+    return false;
   }
 
   choose(v) {
@@ -106,8 +123,11 @@ export class LaneChanger {
     const room = limit - v.front;
     // Long vehicles change lanes gently: a short change would swing a bus body 40° and sweep its tail
     // across the next lane (or over the kerb).
-    const L = Math.max(v.spec.length * 2.2, Math.min(24, Math.max(moto ? 5 : 7, v.v * 2.8)));
-    if (room < L + 12) return null;
+    let L = Math.max(v.spec.length * 2.2, Math.min(24, Math.max(moto ? 5 : 7, v.v * 2.8)));
+    // Merging out of a lane that ends: a slow, short move (the end of the lane is open road).
+    const dropping = seg.dropAt !== undefined && seg.dropAt > v.localS;
+    if (dropping) L = Math.max(v.spec.length * 1.2, Math.min(L, 8 + v.v * 1.5));
+    if (room < L + (dropping ? 3 : 12)) return null;
     if (seg.gate && !v.gatePassed && this.sim.gateFront(v) !== null && this.sim.gateFront(v) - v.front < L + 6) return null;
     // Never swerve round someone crossing the road ahead: the body would still be in their lane.
     if (this.sim.blockageOnLane(seg, v.localS, v.front + L + 15, 'ped')) return null;
@@ -115,7 +135,9 @@ export class LaneChanger {
 
     const own = this._around(seg, v.localS, v);
     const forced = this._blockedAhead(v, seg, own.lead);
-    if (v.v < minSpeed && !forced) return null;
+    // Stopped in a queue with room in the next lane: drivers slide over (checked per lane below).
+    const hop = !forced && v.v < minSpeed && !!own.lead && own.lead.v < 0.5 && own.lead.localS - own.lead.hl - v.localS - v.hl < 12;
+    if (v.v < minSpeed && !forced && !hop) return null;
     const accCur = forced ? -3 : this._accWith(v, own.lead);
 
     const P = v.p;
@@ -129,6 +151,8 @@ export class LaneChanger {
       if ((v.type === 'bicycle') !== (B.type === 'bike')) continue;
       if (move && !B.connectors[move]) continue;
       if (this.sim.blockageOnLane(B, v.localS - v.hl - 2, v.localS + 45)) continue;
+      // Never move into a lane that ends further on.
+      if (B.dropAt !== undefined) continue;
       // Do not drift into a dedicated lane you may use but did not pick (buses stay in the busway, motos in the moto lane, unless forced).
       if (B.allowed && !forced && seg.allowed !== B.allowed && !B.allowed.has(v.type)) continue;
       // No weaving: don't go straight back to the lane just left unless forced.
@@ -139,6 +163,8 @@ export class LaneChanger {
       const s0 = P.minGap * this.sim.env.gapFactor;
       if (gapFront < Math.max(1.5, 0.6 * s0, v.v * 0.6) || gapBack < Math.max(1.2, follow ? 0.5 * follow.p.minGap + follow.v * 0.5 : 0)) continue;
       if (forced && gapFront < 0.45 * L) continue;
+      // Sliding over from a standstill only into real space, not to the next car's bumper.
+      if (hop && (gapFront < Math.max(14, v.spec.length * 2.5) || (lead && lead.v < 0.5 && gapFront < 20))) continue;
       // The vehicle must have room to straighten up before reaching whatever is ahead in its own lane.
       if (own.lead && own.lead.localS - own.lead.hl - v.localS - v.hl < 0.45 * L) continue;
       let followerLoss = 0;
@@ -176,6 +202,8 @@ export class LaneChanger {
 
   execute(v, B, L) {
     const A = v.segment;
+    // Whoever was letting this vehicle in has done their turn of the zipper.
+    if (A.dropAt !== undefined) for (const o of B.vehicles) if (o.yieldingTo === v.id) o.letIn = this.sim.time;
     const s = v.localS;
     // Lanes of one direction share their longitudinal coordinate, so the new route is shifted to keep
     // the vehicle's route coordinate (and everything keyed on it) continuous.

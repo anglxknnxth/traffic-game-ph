@@ -23,9 +23,14 @@ import { ScoringSystem } from './ScoringSystem.js';
 import { Environment } from './Environment.js';
 import { LaneChanger } from './LaneChange.js';
 import { PedestrianManager } from './PedestrianManager.js';
+import { SignalAutopilot } from './Autopilot.js';
+import { EventScheduler } from './EventScheduler.js';
+import { CityGrowth } from './CityGrowth.js';
 
 const METRIC_INTERVAL = 0.25;
 const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's stop lines
+const FREE_FLOW = 50; // vehicles/s: an exit without a downstream gate never holds anyone
+const RTOR_GAP = 3; // s: right turn on red needs this much time before green traffic arrives
 const EMERGENCY_CLAIM_DIST = 60; // an emergency vehicle this close to a stop line holds that junction
 
 export class TrafficSimulator {
@@ -59,6 +64,11 @@ export class TrafficSimulator {
       const exitLanes = this.network.exitLanesByKey(b.exit);
       return { ...b, id: i, laneObjs: b.lanes.map((k) => exitLanes[k]).filter(Boolean), active: false, done: false };
     });
+    // Lane drops (map): a lane that ends before the junction. Traffic in it must merge (zipper).
+    for (const d of this.network.laneDrops) {
+      this.blockages.push({ id: `drop:${d.lane.id}`, kind: 'laneEnd', label: 'LANE ENDS', laneObjs: [d.lane], s: d.s, active: true, done: false, start: -Infinity, end: Infinity });
+    }
+    this.mergers = [];
     // Downstream discharge (the next, off-map intersection). Per-exit overrides let a level make one
     // direction a chronic bottleneck whose queue can spill back into the box.
     const ds = level.downstream || {};
@@ -68,7 +78,9 @@ export class TrafficSimulator {
       const stop = lane.startInt.arms[lane.startArm].exitStop;
       lane.gateLocal = gateAt ? Math.min(lane.length - 0.5, Math.max(20, gateAt - stop)) : lane.length - 0.5;
       lane.gateVisible = !!gateAt;
-      lane.gateRate = o.rate ?? ds.rate ?? 0.9;
+      // Only exits with a visible "next junction" gate are throttled; every other road drains
+      // freely off the edge of the map, so nobody queues at the very end of a road.
+      lane.gateRate = gateAt ? o.rate ?? ds.rate ?? 0.9 : FREE_FLOW;
       lane.gateVar = o.variability ?? ds.variability ?? 0;
       lane.gateWave = { phase: this.rng.range(0, Math.PI * 2), period: this.rng.range(45, 85) };
       lane.gate.tokens = 1;
@@ -77,6 +89,15 @@ export class TrafficSimulator {
     this.spawner = new VehicleSpawner(this);
     this.peds = new PedestrianManager(this);
     this.metrics = this._emptyMetrics();
+    // AUTO lights: on for every signal when the level asks for it (watch / sandbox modes).
+    // Random scenarios (endless modes): breakdowns, roadworks, school out, jeep waves.
+    this.cornerStopRate = level.cornerStops || 0;
+    this.scenarios = level.randomEvents ? new EventScheduler(this, level.randomEvents) : null;
+    this.autopilot = new SignalAutopilot(this, { auto: !!level.autoLights, returnAfter: level.autoReturn ?? null });
+    // Growing city: only the open districts are the player's (the rest runs on AUTO).
+    this.openNodes = null;
+    this.demandMul = 1;
+    this.growth = level.growth ? new CityGrowth(this, level.growth) : null;
   }
 
   resetStats() {
@@ -137,12 +158,15 @@ export class TrafficSimulator {
     this.env.update(dt, this.scheduleTime);
     this.lights.update(dt);
     this.updatePriority();
+    this.autopilot.update(dt);
+    this.scenarios?.update(dt);
     this.updateBlockages();
     this.peds.update(dt);
     this.spawner.update(dt);
     this.updateGates(dt);
 
     const vehicles = this.vehicles;
+    this._updateMergers();
     this.laneChanger.update();
     this.collision.rebuild(vehicles);
     for (let i = 0; i < vehicles.length; i++) this.ai.decide(vehicles[i]);
@@ -154,6 +178,7 @@ export class TrafficSimulator {
     if (this._metricTimer >= METRIC_INTERVAL) {
       this.computeMetrics(this._metricTimer);
       this._metricTimer = 0;
+      this.growth?.update();
     }
   }
 
@@ -181,7 +206,7 @@ export class TrafficSimulator {
   hardLimit(v) {
     let lim = Infinity;
     const ce = v.nextConnEntry();
-    if (ce && !v.reservations.has(ce.seg.intersection.id)) lim = ce.start - 0.05;
+    if (ce && !ce.seg.under && !v.reservations.has(ce.seg.intersection.id)) lim = ce.start - 0.05;
     const kc = this.keepClearLimit(v);
     if (kc !== null && kc < lim) lim = kc;
     const blk = this.nextBlockage(v);
@@ -198,9 +223,50 @@ export class TrafficSimulator {
     return lim;
   }
 
+  /**
+   * Vehicles waiting at the end of a dropped lane to merge. Traffic in the lanes beside them lets
+   * them in one at a time (zipper, see mergeLeader).
+   */
+  _updateMergers() {
+    const list = this.mergers;
+    list.length = 0;
+    if (!this.network.laneDrops.length) return;
+    for (const d of this.network.laneDrops) {
+      let best = null;
+      for (const v of d.lane.vehicles) {
+        if (v.lc) continue;
+        const gap = d.s - (v.localS + v.hl);
+        if (gap < 0 || gap > 14 || v.v > 3) continue;
+        if (!best || v.localS > best.localS) best = v;
+      }
+      if (best) list.push({ v: best, lane: d.lane, targets: LaneChanger.neighbours(d.lane).filter((B) => B.allows(best.type)) });
+    }
+  }
+
+  /** A merging vehicle the driver of v lets in ahead of it (zipper), as { vehicle, gap }, or null. */
+  mergeLeader(v) {
+    if (!this.mergers.length || v.segment.kind !== 'lane') return null;
+    let best = null;
+    for (const m of this.mergers) {
+      if (!m.targets.includes(v.segment) || m.v === v) continue;
+      const ahead = m.v.localS - v.localS;
+      if (ahead < 0.5 || ahead > 30) continue;
+      // Zipper: only the driver right behind the merge point waits; whoever let someone in just
+      // now does not stop again for the next one.
+      if (v.letIn && this.time - v.letIn < 6) continue;
+      const lead = this.findLeader(v, 40);
+      if (lead && lead.vehicle.localS < m.v.localS && lead.vehicle.segment === v.segment) continue;
+      const gap = m.v.localS - m.v.hl - v.localS - v.hl;
+      // Already alongside: drive on; the next driver back makes the gap.
+      if (gap < 1) continue;
+      if (!best || gap < best.gap) best = { vehicle: m.v, gap };
+    }
+    return best;
+  }
+
   /** Front limit while a time-shared box cell is still held by the vehicle that had it first. */
   sharedFrontLimit(v) {
-    if (!v.reservations.size) return null;
+    if (!v.reservations.size || this.hasPass(v)) return null;
     let lim = null;
     for (const [id, res] of v.reservations) {
       if (!res.shared) continue;
@@ -229,7 +295,7 @@ export class TrafficSimulator {
 
       // Stop-line crossing
       const ce = v.nextConnEntry();
-      if (ce && v.front >= ce.start && v.reservations.has(ce.seg.intersection.id)) {
+      if (ce && v.front >= ce.start && (ce.seg.under || v.reservations.has(ce.seg.intersection.id))) {
         if (v.emergency && !v.emergencyDone) this._emergencyCleared(v, ce);
         ce.seg.fromLane.lastCross = this.time;
         v.nextConn++;
@@ -249,6 +315,10 @@ export class TrafficSimulator {
         if (gf !== null && v.front >= gf - 0.02 && gate.tokens >= 1) {
           gate.tokens -= 1;
           v.gatePassed = true;
+        } else if (gf === null && !v.gatePassed) {
+          // Waved through the gate (see grantPass): it passes without using a token.
+          const exit = v.route.exitLane;
+          if (v.front >= v.route.startOf(exit) + exit.gateLocal - 0.02) v.gatePassed = true;
         }
         if (v.gatePassed && v.front >= v.route.length - 0.5 - 1e-6) {
           v._remove = true;
@@ -495,7 +565,10 @@ export class TrafficSimulator {
         if (o.reservations.has(I.id)) return o;
         const d = oce.start - o.front;
         if (d < -0.01) continue;
-        if (d < 12 || (o.v > 0.5 && d / o.v < v.p.leftGapTime)) return o;
+        // Moving traffic within ~3 s, or a green head about to pull away. A green vehicle that is
+        // itself held (no exit space, people crossing) does not stop the turn.
+        if (o.v > 0.5 && d / o.v < RTOR_GAP) return o;
+        if (d < 4 && o.v <= 0.5 && o.blockReason !== 'exit' && o.blockReason !== 'pedestrian' && o.blockReason !== 'box') return o;
       }
       // Vehicles already inside the box on this connector hold its cells; the grid check catches
       // them, but a reservation on the way out still counts as "coming".
@@ -531,20 +604,32 @@ export class TrafficSimulator {
   /** Attempt to reserve the intersection path for v. All safety checks live here. */
   /** True when v is queued in front of an emergency vehicle on its lane into I (it clears the way). */
   isEscort(v, I) {
-    if (v.emergency) return false;
+    // Drivers ahead of a siren do not run the red: they keep their place or move over (LaneChange).
+    if (v.emergency || !this.level.escortsRunRed) return false;
     for (const c of this.emergencyClaims) {
       if (c.I === I && c.lane && c.lane === v.segment && v.localS > c.v.localS) return true;
     }
     return false;
   }
 
-  /** The emergency claim v must give way to at I, or null. */
-  emergencyClaimFor(v, I) {
-    if (v.emergency) return null;
+  /**
+   * The emergency claim v must give way to at I when taking `conn` there, or null. Only movements
+   * whose paths cross or merge into the emergency vehicle's path give way; everything else keeps
+   * flowing. Without a known connector (v is not heading through I) nothing is claimed.
+   */
+  emergencyClaimFor(v, I, conn = null) {
+    if (v.emergency || !this.emergencyClaims.length || this.hasPass(v)) return null;
+    if (!conn) {
+      const ce = v.nextConnEntry();
+      conn = ce && ce.seg.intersection === I ? ce.seg : v.segment.kind === 'connector' && v.segment.intersection === I ? v.segment : null;
+    }
+    if (!conn) return null;
     for (const c of this.emergencyClaims) {
-      if (c.I !== I) continue;
+      if (c.I !== I || c.v === v) continue;
       if (c.lane && c.lane === v.segment && v.localS > c.v.localS) continue; // escort: goes ahead
-      return c;
+      if (!c.conn || c.conn === conn || c.conn.toLane === conn.toLane) return c;
+      if (this.imgr.get(I.id).crossConflicts(c.conn).includes(conn)) return c;
+      if (c.conn.arm === conn.arm && c.conn.fromLane === conn.fromLane) return c;
     }
     return null;
   }
@@ -557,7 +642,7 @@ export class TrafficSimulator {
     }
     const I = conn.intersection;
     // Give way to an emergency vehicle about to cross, unless it is too late to stop comfortably.
-    const claim = this.emergencyClaimFor(v, I);
+    const claim = this.emergencyClaimFor(v, I, conn);
     if (claim && (v.v * v.v) / (2 * v.spec.decel) < distToStop - 0.5) {
       v.blockReason = 'emergency';
       v.blockerId = claim.v.id;
@@ -592,7 +677,7 @@ export class TrafficSimulator {
         return false;
       }
     } else if (I.kind === 'signal') {
-      if (conn.movement === 'left' && !this.leftGapOk(v, conn)) {
+      if (conn.movement === 'left' && !this.hasPass(v) && !this.leftGapOk(v, conn)) {
         v.blockReason = 'yield';
         return false;
       }
@@ -605,7 +690,10 @@ export class TrafficSimulator {
       }
     }
     const space = this.exitSpace(v, conn);
-    if (space !== 'ok') {
+    // On green the box may fill up behind a queue that is still moving out: nobody gets stuck,
+    // the vehicle simply rolls on as the exit lane drains.
+    const flowing = (space === 'tight' && sig === 'green' && this.exitFlowing(conn)) || (space !== 'strict' && this.hasPass(v));
+    if (space !== 'ok' && !flowing) {
       v.blockReason = 'exit';
       if (space === 'strict' || v.emergency || onRed) return false;
       if (distToStop > 3 || v.v > 2 || v.decisionTimer > 0) return false;
@@ -623,7 +711,21 @@ export class TrafficSimulator {
     mgr.reserve(v, conn, connStart);
     conn.toLane.committed.add(v);
     v.blockReason = null;
+    if (onRed && conn.movement === 'right') {
+      this.stats.rightOnRed = (this.stats.rightOnRed || 0) + 1;
+      if (this.stats.rightOnRed === 1) this.notify('RTOR', NOTIFY_TEXT.RTOR, 'info');
+    }
     return true;
+  }
+
+  /** Is the queue in conn's exit lane still moving out (its last vehicle rolling)? */
+  exitFlowing(conn) {
+    const lane = conn.toLane;
+    if (lane.role === 'link' && lane.endInt && lane.length < 40) return false;
+    const last = lane.vehicles[0];
+    if (!last) return true;
+    for (const b of this.blockages) if (b.active && b.laneObjs.includes(lane)) return false;
+    return last.v > 0.8 && last.a > -1.5;
   }
 
   cancelReservation(v, I) {
@@ -642,18 +744,30 @@ export class TrafficSimulator {
     for (const v of this.vehicles) {
       if (!v.emergency) continue;
       const ce = v.nextConnEntry();
-      if (!ce) continue;
+      if (!ce || ce.seg.under) continue;
       const dist = ce.start - v.front;
       if (dist > EMERGENCY_CLAIM_DIST) continue;
+      // Stuck far back in a queue that is not moving yet: cross traffic need not stop for it.
+      if (dist > 35 && v.v < 1) continue;
       const I = ce.seg.intersection;
       const lane = v.segment.kind === 'lane' && v.segment.endInt === I ? v.segment : null;
-      claims.push({ I, v, lane, dist });
+      claims.push({ I, v, lane, dist, conn: ce.seg });
+    }
+    // A stuck vehicle the player waved through: crossing traffic holds back while it goes.
+    for (const v of this.vehicles) {
+      if (!this.hasPass(v)) continue;
+      const seg = v.segment;
+      if (seg.kind === 'connector') claims.push({ I: seg.intersection, v, lane: null, dist: 0, conn: seg, pass: true });
+      else {
+        const ce = v.nextConnEntry();
+        if (ce && ce.start - v.front < 6) claims.push({ I: ce.seg.intersection, v, lane: null, dist: ce.start - v.front, conn: ce.seg, pass: true });
+      }
     }
     this.emergencyClaims = claims;
     for (const v of this.vehicles) {
       if (!v.emergency || v.emergencyDone) continue;
       const ce = v.nextConnEntry();
-      if (!ce) continue;
+      if (!ce || ce.seg.under) continue;
       const dist = ce.start - v.front;
       if (dist > 170) continue;
       const I = ce.seg.intersection;
@@ -667,25 +781,32 @@ export class TrafficSimulator {
   }
 
   updateBlockages() {
+    if (this.blockages.some((b) => b.random && b.done)) this.blockages = this.blockages.filter((b) => !(b.random && b.done));
     for (const b of this.blockages) {
-      if (b.done || b.kind === 'ped') continue; // pedestrians manage their own blockages
+      if (b.done || b.kind === 'ped' || b.kind === 'laneEnd') continue; // pedestrians and lane drops manage themselves
       const t = this.scheduleTime;
       if (!b.active && t >= b.start && t < b.end) {
         // A breakdown only "appears" on a free stretch of road.
         const covered = b.laneObjs.some((lane) => lane.vehicles.some((o) => o.localS - o.hl < b.s + 1 && o.localS + o.hl > b.s - 1));
         if (!covered) {
           b.active = true;
-          const [, arm] = b.exit.split(':');
-          this.notify(`BLK_ON_${b.id}`, `${NOTIFY_TEXT.EXIT_BLOCKED}: ${ARM_LABEL[arm].toUpperCase()} · ${b.label || ''}`.trim(), 'warn');
+          this.notify(`BLK_ON_${b.id}`, `${NOTIFY_TEXT.EXIT_BLOCKED}: ${this.exitName(b.exit).toUpperCase()} · ${b.label || ''}`.trim(), 'warn');
         }
       }
       if (b.active && t >= b.end) {
         b.active = false;
         b.done = true;
-        const [, arm] = b.exit.split(':');
-        this.notify(`BLK_OFF_${b.id}`, `${NOTIFY_TEXT.EXIT_CLEARED}: ${ARM_LABEL[arm].toUpperCase()}`, 'good');
+        this.notify(`BLK_OFF_${b.id}`, `${NOTIFY_TEXT.EXIT_CLEARED}: ${this.exitName(b.exit).toUpperCase()}`, 'good');
       }
     }
+  }
+
+  /** Street name of an exit key ('A:N'), e.g. "Rizal St northbound". */
+  exitName(key) {
+    const [id, arm] = key.split(':');
+    const I = this.network.byId.get(id);
+    const name = I ? this.network.roadName(I, arm) : null;
+    return name ? `${name} ${{ N: 'northbound', S: 'southbound', E: 'eastbound', W: 'westbound' }[arm]}` : ARM_LABEL[arm];
   }
 
   downstreamFactor(lane) {
@@ -703,7 +824,7 @@ export class TrafficSimulator {
 
   /** Route coordinate (front) of the downstream gate for v, or null once passed. */
   gateFront(v) {
-    if (v.gatePassed) return null;
+    if (v.gatePassed || this.hasPass(v) || v.drain > this.time) return null;
     const exit = v.route.exitLane;
     if (!exit.gate) return null;
     if (v._gateS === undefined) v._gateS = v.route.startOf(exit) + exit.gateLocal;
@@ -718,6 +839,62 @@ export class TrafficSimulator {
       this.scoring.onEarlyRequest();
     }
     return res;
+  }
+
+  /** True while the player's "go ahead" for v is active. */
+  hasPass(v) {
+    return v.pass !== undefined && v.pass > this.time;
+  }
+
+  /** The vehicle under world point (x, y), or null. */
+  vehicleAt(x, y, margin = 0.6) {
+    let best = null;
+    let bestD = Infinity;
+    for (const v of this.vehicles) {
+      const dx = x - v.x;
+      const dy = y - v.y;
+      const c = Math.cos(v.angle);
+      const sn = Math.sin(v.angle);
+      const along = dx * c + dy * sn;
+      const across = -dx * sn + dy * c;
+      if (Math.abs(along) > v.hl + margin || Math.abs(across) > v.spec.width / 2 + margin) continue;
+      const d = Math.hypot(dx, dy);
+      if (d < bestD) {
+        best = v;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  /** Is v stuck: stopped in or at the box for a while (and not just waiting at a red)? */
+  isStuck(v) {
+    if (v.emergency || v.v > 0.5 || v.stoppedTime < 1.5) return false;
+    if (v.segment.kind === 'connector') return true;
+    if (v.state === 'BLOCKED_IN_INTERSECTION') return true;
+    const ce = v.nextConnEntry();
+    if (!ce || ce.seg.under || ce.start - v.front > 6 || v.reservations.has(ce.seg.intersection.id)) return false;
+    return v.signal === 'green' || v.signal === 'flash' || ce.seg.intersection.kind !== 'signal';
+  }
+
+  /**
+   * The player clicked a stuck vehicle: for 10 s it ignores exit-space courtesy, shared-cell order
+   * and the downstream gate, crossing traffic gives way to its path, and the queue ahead of it in
+   * its exit lane drains freely. The collision gate still applies, so it simply pulls away as soon
+   * as there is physical room.
+   */
+  grantPass(v, seconds = 10) {
+    if (!this.isStuck(v)) return false;
+    v.pass = this.time + seconds;
+    v.reactTimer = 0;
+    v.decisionTimer = 0;
+    const ce = v.segment.kind === 'connector' ? null : v.nextConnEntry();
+    const exit = v.segment.kind === 'connector' ? v.segment.toLane : ce?.seg.toLane;
+    for (const o of exit?.vehicles || []) o.drain = this.time + seconds;
+    this.stats.passes = (this.stats.passes || 0) + 1;
+    this.notify('PASS', NOTIFY_TEXT.PRIORITY_PASS, 'good');
+    this.events.push({ type: 'pass', x: v.x, y: v.y, vehicle: v.id });
+    return true;
   }
 
   /** A jeepney / tricycle has stopped at the corner: passengers call it and step off. */
@@ -786,7 +963,7 @@ export class TrafficSimulator {
     for (const v of vehicles) {
       v._box = null;
       for (const I of this.network.intersections) {
-        if (Network.inCore(I, v.x, v.y)) {
+        if (Math.abs((v.layer || 0) - I.layer) < 0.75 && Network.inCore(I, v.x, v.y)) {
           v._box = I.id;
           break;
         }
@@ -812,6 +989,7 @@ export class TrafficSimulator {
         let lastCross = -Infinity;
         let exitLanes = 0;
         for (const lane of lanes) {
+          if (lane.type === 'tunnel' && I.def.underpass) continue; // through traffic below the junction
           capacity += 10;
           queue += this.spawner.pendingFor(lane);
           for (const o of lane.vehicles) if (o.v < 1.5) queue++;
@@ -820,7 +998,8 @@ export class TrafficSimulator {
           if (lead && !lead.reservations.has(I.id) && lane.length - lead.localS - lead.hl < 8) {
             anyHead = true;
             // Yielding to oncoming traffic, an emergency vehicle or people on the crosswalk is not a blockage.
-            if (lead.blockReason !== 'yield' && lead.blockReason !== 'emergency' && lead.blockReason !== 'pedestrian') allYield = false;
+            // A left turner held at its red while the opposite road shares the green is waiting for its own light.
+            if (!['yield', 'emergency', 'pedestrian', 'signal', 'toll'].includes(lead.blockReason)) allYield = false;
             if (lead.blockReason === 'exit' && lead.greenWait >= 5) exitLanes++;
             if (lead.greenWait >= headWait) {
               headWait = lead.greenWait;

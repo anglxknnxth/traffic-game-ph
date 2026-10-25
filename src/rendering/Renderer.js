@@ -1,7 +1,8 @@
 // World renderer. Draw order: cached static road layer -> river ripples and boats -> dynamic road
-// overlays -> pedestrians -> under-effects ->
-// vehicles -> over-effects -> elevated structures -> traffic lights -> weather and night (signal heads
-// are drawn again over the darkness). The camera is strictly overhead (scale + translate).
+// overlays -> pedestrians -> under-effects -> ground vehicles -> over-effects -> tunnel shade ->
+// cached expressway layer -> vehicles up on the expressway -> elevated structures -> traffic
+// lights -> weather and night (signal heads are drawn again over the darkness). Vehicles under a
+// junction (in an underpass) are not drawn. The camera is strictly overhead (scale + translate).
 
 import { RoadRenderer } from './RoadRenderer.js';
 import { drawVehicle } from './VehicleRenderer.js';
@@ -21,6 +22,9 @@ export class Renderer {
     this.road = null;
     this.network = null;
     this.staticCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+    this.elevCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+    this._ground = [];
+    this._high = [];
     this.staticKey = '';
     this._visible = [];
     this._saved = [];
@@ -69,6 +73,18 @@ export class Renderer {
     sctx.clearRect(0, 0, sc.width, sc.height);
     cam.apply(sctx);
     this.road.drawStatic(sctx);
+    if (this.road.hasElevated) {
+      const ec = this.elevCanvas;
+      if (ec.width !== c.width || ec.height !== c.height) {
+        ec.width = c.width;
+        ec.height = c.height;
+      }
+      const ectx = ec.getContext('2d');
+      ectx.setTransform(1, 0, 0, 1, 0, 0);
+      ectx.clearRect(0, 0, ec.width, ec.height);
+      cam.apply(ectx);
+      this.road.drawElevated(ectx);
+    }
     return null;
   }
 
@@ -115,7 +131,29 @@ export class Renderer {
     }
   }
 
-  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60 } = {}) {
+  /** Growing city: everything outside the open districts is "under construction" haze. */
+  _drawFog(ctx, f, time) {
+    const big = 4000;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(f.minX - big, f.minY - big, f.maxX - f.minX + 2 * big, f.maxY - f.minY + 2 * big);
+    ctx.rect(f.minX, f.minY, f.maxX - f.minX, f.maxY - f.minY);
+    ctx.fillStyle = 'rgba(30,27,22,0.62)';
+    ctx.fill('evenodd');
+    // Construction tape along the edge
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -(time * 2) % 8;
+    ctx.strokeStyle = '#facc15';
+    ctx.strokeRect(f.minX, f.minY, f.maxX - f.minX, f.maxY - f.minY);
+    ctx.strokeStyle = '#111827';
+    ctx.lineDashOffset = 4 - ((time * 2) % 8);
+    ctx.strokeRect(f.minX, f.minY, f.maxX - f.minX, f.maxY - f.minY);
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, emergencyInfo = null, interactive = false, overlay = null } = {}) {
     const ctx = this.ctx;
     const cam = this.camera;
     this.setNetwork(sim.network);
@@ -123,17 +161,21 @@ export class Renderer {
     ctx.fillStyle = '#4b5a3a';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     const xf = this._ensureStatic();
-    if (xf) {
-      ctx.setTransform(xf.r, 0, 0, xf.r, xf.tx, xf.ty);
-      ctx.drawImage(this.staticCanvas, 0, 0);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    } else ctx.drawImage(this.staticCanvas, 0, 0);
+    const blit = (canvas) => {
+      if (xf) {
+        ctx.setTransform(xf.r, 0, 0, xf.r, xf.tx, xf.ty);
+        ctx.drawImage(canvas, 0, 0);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      } else ctx.drawImage(canvas, 0, 0);
+    };
+    blit(this.staticCanvas);
     this.weather.drawWet(ctx, this.canvas, sim.env);
 
     cam.apply(ctx);
     this.road.drawWater(ctx, time);
     this.road.drawDynamic(ctx, sim, time);
     if (debug) this.effects.drawReservations(ctx, sim);
+    if (overlay === 'heat') this.effects.drawHeat(ctx, sim, dt);
 
     const vr = cam.visibleRect(8);
     if (sim.peds?.enabled) {
@@ -141,20 +183,47 @@ export class Renderer {
       drawPedestrians(ctx, sim.peds.peds, sim.env?.rain || 0, vr);
     }
     const visible = this._visible;
+    const ground = this._ground;
+    const high = this._high;
     visible.length = 0;
+    ground.length = 0;
+    high.length = 0;
     for (const v of sim.vehicles) {
-      if (v.x > vr.minX && v.x < vr.maxX && v.y > vr.minY && v.y < vr.maxY) visible.push(v);
+      if (!(v.x > vr.minX && v.x < vr.maxX && v.y > vr.minY && v.y < vr.maxY)) continue;
+      const L = v.layer || 0;
+      if (L <= -1) continue; // under the junction, out of sight
+      visible.push(v);
+      (L >= 0.5 ? high : ground).push(v);
     }
-    this.effects.drawUnder(ctx, visible, time);
-    for (const v of visible) drawVehicle(ctx, v, time);
-    this.effects.drawOver(ctx, visible, time);
+    this.effects.drawUnder(ctx, ground, time);
+    for (const v of ground) drawVehicle(ctx, v, time);
+    this.effects.drawOver(ctx, ground, time);
+    if (interactive) this.effects.drawStuck(ctx, sim, ground, time);
+    if (sim.network.layered) this.road.drawTrenchShade(ctx);
+    if (this.road.hasElevated) {
+      // The expressway deck over everything on the ground, then its own traffic.
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      blit(this.elevCanvas);
+      cam.apply(ctx);
+      this.effects.drawUnder(ctx, high, time);
+      for (const v of high) drawVehicle(ctx, v, time);
+      this.effects.drawOver(ctx, high, time);
+      if (interactive) this.effects.drawStuck(ctx, sim, high, time);
+    }
+    if (overlay === 'heat') this.effects.drawQueueCounts(ctx, sim);
     this.road.drawOverlays(ctx, time);
     this.lights.draw(ctx, sim, time, hoveredHead);
+    if (sim.growth) this._drawFog(ctx, sim.growth.focusRect(), time);
     this.weather.drawAtmosphere(ctx, this.canvas, cam, sim, this.road.scenery.posts, visible, time);
     // Signal heads stay readable at night: draw them over the darkness.
     if (sim.env?.darkness > 0.02) {
       cam.apply(ctx);
       this.lights.draw(ctx, sim, time, hoveredHead);
+    }
+    // Screen-space pass (CSS pixels): emergency pointers.
+    if (emergencyInfo) {
+      ctx.setTransform(cam.dpr, 0, 0, cam.dpr, 0, 0);
+      this.effects.drawEmergencyPointers(ctx, sim, cam, time, emergencyInfo);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }

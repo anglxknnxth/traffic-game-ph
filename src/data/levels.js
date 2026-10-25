@@ -31,8 +31,15 @@ const BASE = {
   stars: [500, 800],
 };
 
+// The same street life in every game mode: people crossing at the lights and the odd jaywalker, a
+// clock and changing weather. Levels may tune these (lighter early on) but every mode has them.
+const DETAILS = {
+  pedestrians: { cross: 1.0, jaywalk: 0.4, strollers: 1.2 },
+  env: { hour: 9.5, rate: 0.3, random: true },
+};
+
 function level(def) {
-  return { ...BASE, ...def, downstream: { ...BASE.downstream, ...(def.downstream || {}) } };
+  return { ...BASE, ...DETAILS, ...def, downstream: { ...BASE.downstream, ...(def.downstream || {}) } };
 }
 
 export const CAREER_LEVELS = [
@@ -45,6 +52,8 @@ export const CAREER_LEVELS = [
     tip: 'Click a road\'s button or tap its traffic light. The change takes 2 seconds (yellow, then all-red). ⚠ Flash turns the junction into stop-and-go.',
     duration: 120,
     demand: { N: 6, S: 6, E: 5, W: 5 },
+    pedestrians: { cross: 0.6, jaywalk: 0, strollers: 1.2 },
+    env: { hour: 9, rate: 0.2 },
     turns: { left: 0.06, right: 0.1 },
     personalities: { patient: 0.9, impatient: 0.1, aggressive: 0 },
     mix: { car: 0.8, suv: 0.2 },
@@ -60,6 +69,8 @@ export const CAREER_LEVELS = [
     tip: 'Give the busier roads longer greens, but do not starve the quiet ones.',
     duration: 150,
     demand: { N: 10, S: 10, E: 8, W: 8 },
+    pedestrians: { cross: 0.8, jaywalk: 0.2, strollers: 1.2 },
+    env: { hour: 11, rate: 0.25 },
     mix: { car: 0.65, van: 0.15, suv: 0.12, pickup: 0.08 },
     objectives: [
       { type: 'processed', target: 60 },
@@ -430,6 +441,30 @@ export const PINOY_LEVELS = [
     stars: [2400, 2900],
   }),
   level({
+    id: 'serbisyo',
+    mode: 'pinoy',
+    map: 'serbisyo',
+    pedestrians: { cross: 1.2, jaywalk: 0.9, strollers: 1.4 },
+    name: 'Sa Highway',
+    subtitle: 'No-light side streets and a lane that ends',
+    description: 'MacArthur Highway through a town strip. Two side streets join with no traffic light and must find a gap, and the curb lane ends before the Burgos St signal: three lanes squeeze into two.',
+    tip: 'Long highway greens leave the side streets no gaps. When the merge backs up, give the highway a short red so the queue can zipper in.',
+    duration: 210,
+    initialGroups: { A: 'W' },
+    demand: { 'Y1:W': 15, 'A:E': 12, 'Y1:S': 4, 'Y2:N': 4, 'A:N': 5, 'A:S': 5 },
+    mix: { car: 0.26, motorcycle: 0.22, jeepney: 0.14, tricycle: 0.1, bus: 0.07, truck: 0.08, pickup: 0.05, multicab: 0.04, dumptruck: 0.02, tanker: 0.02 },
+    personalities: { patient: 0.4, impatient: 0.4, aggressive: 0.2 },
+    turns: { left: 0.14, right: 0.16 },
+    loadingStops: 0.4,
+    env: { hour: 16.5, rate: 0.4, weather: [{ t: 0, type: 'clear' }, { t: 120, type: 'rain' }] },
+    objectives: [
+      { type: 'processed', target: 110 },
+      { type: 'avgWait', target: 45 },
+    ],
+    fail: { congestion: 0.95, time: 60 },
+    stars: [2600, 3100],
+  }),
+  level({
     id: 'grid',
     mode: 'pinoy',
     map: 'grid',
@@ -476,9 +511,58 @@ export const ENDLESS_LEVEL = level({
   // Afternoon into the evening rush and nightfall, with passing rain showers.
   env: { hour: 15.5, rate: 0.5, random: true, rushHour: true },
   pedestrians: { cross: 1.4, jaywalk: 0.8, strollers: 1.5 },
+  // Every scenario can happen: breakdowns, roadworks, school out, jeep waves, emergencies, rain, night.
+  randomEvents: { every: [35, 70] },
   objectives: [],
   fail: { congestion: 0.85, time: 30 },
 });
+
+/** Traffic for the special maps that have no Pinoy Roads level of their own (endless and chill). */
+export const SPECIAL_TRAFFIC = {
+  metro: {
+    demand: { 'T1:N': 7, 'T1:W': 6, 'T2:W': 9, 'T3:W': 6, 'T3:S': 7, 'Y1:N': 3, 'Y2:S': 3, 'E1:N': 13, 'E2:E': 9, 'E3:S': 13, 'G1:E': 6, 'K1:N': 9, 'K2:S': 9 },
+    mix: { car: 0.28, motorcycle: 0.22, jeepney: 0.13, bus: 0.08, truck: 0.06, van: 0.05, suv: 0.05, tricycle: 0.04, ejeep: 0.03, dumptruck: 0.02, tanker: 0.01, pickup: 0.02, bicycle: 0.01 },
+    turns: { left: 0.14, right: 0.16 },
+    initialGroups: { T1: 'N', T2: 'W', T3: 'S', E1: 'N', E2: 'N', E3: 'S', G1: 'W' },
+  },
+};
+
+/** Lumalaking Lungsod: the Metro Manila map opens district by district as traffic moves. */
+export const GROWING_LEVEL = level({
+  id: 'growing',
+  mode: 'growing',
+  map: 'metro',
+  name: 'Lumalaking Lungsod',
+  subtitle: 'The city grows as you keep it moving',
+  description: 'Start with one junction: EDSA at the Quezon Ave underpass. Every milestone opens the next district (the EDSA corridor, Taft Ave, then the Skyway with its toll plaza) and more traffic pours in. No game over.',
+  tip: 'Junctions that are not open yet run on AUTO. Once a district opens, its lights are yours (or hand them back with ↺ AUTO).',
+  duration: null,
+  ...SPECIAL_TRAFFIC.metro,
+  demandScale: 0.8,
+  demandRamp: 0.02,
+  personalities: { patient: 0.4, impatient: 0.4, aggressive: 0.2 },
+  loadingStops: 0.4,
+  emergency: { interval: [80, 140] },
+  env: { hour: 6.5, rate: 0.5, random: true, rushHour: true },
+  pedestrians: { cross: 1.2, jaywalk: 0.6, strollers: 1.4 },
+  randomEvents: { every: [45, 80] },
+  growth: { milestones: [60, 160, 300] },
+  allowAuto: true,
+  objectives: [],
+  fail: null,
+  downstream: { rate: 0.9, exits: {} },
+});
+
+/** Chill endless: the same random city, but traffic never ends the run and AUTO lights are available. */
+export const CHILL = {
+  mode: 'chill',
+  subtitle: 'Walang game over · relax and watch the city move',
+  description: 'Endless traffic with every scenario, but no game over, even in gridlock. Hand any light to AUTO and just watch, or take over whenever you like.',
+  tip: 'AUTO LAHAT runs every signal by itself. Click any light to take it over (MANUAL); ↺ AUTO hands it back. Press H to hide the HUD and watch.',
+  fail: null,
+  demandRamp: 0.04,
+  allowAuto: true,
+};
 
 export const CHALLENGES = [
   level({
@@ -590,9 +674,11 @@ export const DEMO_LEVEL = level({
   personalities: { patient: 0.45, impatient: 0.4, aggressive: 0.15 },
   loadingStops: 0.4,
   downstream: { rate: 0.5, variability: 0.3, exits: { 'A:N': { rate: 0.08, gateAt: 80 } } },
+  autoLights: true,
   fail: null,
 });
 
+/** A level from just the given fields and the base defaults (no shared street details): for tests. */
 export function makeLevel(def) {
-  return level(def);
+  return { ...BASE, ...def, downstream: { ...BASE.downstream, ...(def.downstream || {}) } };
 }

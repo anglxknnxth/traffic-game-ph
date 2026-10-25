@@ -50,6 +50,8 @@ const busy = (over = {}) =>
   makeLevel({
     map: 'taft',
     prewarm: 0,
+    demandScale: 1,
+    cornerStops: 0,
     demand: { N: 12, S: 12, E: 9, W: 9 },
     mix: { car: 0.4, motorcycle: 0.25, jeepney: 0.2, bus: 0.05, tricycle: 0.05, truck: 0.05 },
     personalities: { patient: 0.2, impatient: 0.4, aggressive: 0.4 },
@@ -100,7 +102,12 @@ describe('Crosswalk rules', () => {
             starts++;
             const c = p.cross.c;
             if (!p.red) expect(s.peds.walkState(c)).not.toBe('stop');
-            expect(c.grid.vehicleOn(p.cross.line.fp)).toBeNull();
+            // People hold a moving window of the crosswalk: the stretch they step onto is theirs alone.
+            const res = p.reservations.get(c.I.id);
+            expect(res && res.remaining).toBeGreaterThan(0);
+            for (let k = 0; k < res.held.length; k++) {
+              if (res.held[k]) expect(c.grid.owners[res.fp.cells[k]].some((o) => !o.isPed)).toBe(false);
+            }
           }
           before.set(p, p.state);
         }

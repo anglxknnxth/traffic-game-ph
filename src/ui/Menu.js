@@ -73,6 +73,9 @@ export class Menu {
           <button class="btn" data-nav="levels">Career Mode</button>
           <button class="btn pinoy" data-nav="pinoy">🇵🇭 Pinoy Roads</button>
           <button class="btn" data-nav="brief" data-mode="endless">Endless Mode</button>
+          <button class="btn chill" data-nav="brief" data-mode="chill" data-id="single">☕ Chill Endless <small>walang game over</small></button>
+          <button class="btn metro" data-nav="brief" data-mode="chill" data-id="metro">🏙️ Metro Manila <small>sandbox · AUTO lights</small></button>
+          <button class="btn grow" data-nav="brief" data-mode="growing">🌆 Lumalaking Lungsod</button>
           <button class="btn" data-nav="challenges">Challenge Mode</button>
           <button class="btn" data-nav="levels">Level Selection</button>
           <button class="btn" data-nav="tutorial">Tutorial${save.tutorialDone ? ' ✔' : ''}</button>
@@ -174,15 +177,29 @@ export class Menu {
       else if (end > 17.5) extra.push('🌆 Dusk to night');
     }
     const label =
-      mode === 'career' ? `Level ${lvl.id}` : mode === 'challenge' ? `Challenge ${String(lvl.id).toUpperCase()}` : mode === 'pinoy' ? `Pinoy Roads · ${pinoyIdx + 1}` : 'Endless';
+      mode === 'career'
+        ? `Level ${lvl.id}`
+        : mode === 'challenge'
+          ? `Challenge ${String(lvl.id).toUpperCase()}`
+          : mode === 'pinoy'
+            ? `Pinoy Roads · ${pinoyIdx + 1}`
+            : mode === 'chill'
+              ? 'Chill Endless · no game over'
+              : mode === 'growing'
+                ? 'Lumalaking Lungsod'
+                : 'Endless';
     // Endless can be played on any map
+    const picked = mode === 'chill' ? id || 'single' : lvl.map || 'single';
     const mapPick =
-      mode === 'endless'
+      mode === 'endless' || mode === 'chill'
         ? `<h4>Map</h4><div class="chips map-pick">${this.game.levels
             .endlessMaps()
-            .map((m) => `<button class="chip ${m === (lvl.map || 'single') ? 'active' : ''}" data-nav="brief" data-mode="endless" data-id="${m}">${getMap(m).name}</button>`)
+            .map((m) => `<button class="chip ${m === picked ? 'active' : ''}" data-nav="brief" data-mode="${mode}" data-id="${m}">${getMap(m).name}</button>`)
             .join('')}</div>`
         : '';
+    if (lvl.allowAuto) extra.push('🤖 AUTO lights');
+    if (lvl.fail === null && mode !== 'growing') extra.push('☕ No game over');
+    if (lvl.randomEvents) extra.push('🎲 Random events');
     const blurb = map.blurb ? `<p class="muted">📍 <b>${map.name}</b> — ${map.blurb}</p>` : '';
     this._show(
       'brief',
@@ -196,11 +213,12 @@ export class Menu {
         ${mapPick}
         ${objectives ? `<h4>Objectives</h4><ul class="obj-list">${objectives}</ul>` : ''}
         ${lvl.mode === 'endless' ? '<p class="muted">The run ends when congestion stays critical for 30 seconds. Score as much as you can.</p>' : ''}
+        ${lvl.mode === 'chill' ? '<p class="muted">No game over: play as long as you like, gridlock and all. Press <b>H</b> to hide the HUD and watch.</p>' : ''}
         <div class="chips">${extra.map((x) => `<span class="chip">${x}</span>`).join('')}</div>
         <div class="tip"><b>Tip:</b> ${lvl.tip}</div>
         <div class="actions">
           <button class="btn" data-nav="${mode === 'challenge' ? 'challenges' : mode === 'career' ? 'levels' : mode === 'pinoy' ? 'pinoy' : 'menu'}">Back</button>
-          <button class="btn primary" data-nav="play" data-mode="${mode}" data-id="${mode === 'endless' ? lvl.map || 'single' : lvl.id}">Start ▸</button>
+          <button class="btn primary" data-nav="play" data-mode="${mode}" data-id="${mode === 'endless' ? lvl.map || 'single' : mode === 'chill' ? picked : lvl.id}">Start ▸</button>
         </div>
       </div>`,
       'dim',

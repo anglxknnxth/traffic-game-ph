@@ -1,6 +1,6 @@
 // Level catalogue, simulation construction and objective / end-condition evaluation.
 
-import { CAREER_LEVELS, PINOY_LEVELS, ENDLESS_LEVEL, CHALLENGES, DEMO_LEVEL, makeLevel } from '../data/levels.js';
+import { CAREER_LEVELS, PINOY_LEVELS, ENDLESS_LEVEL, CHALLENGES, DEMO_LEVEL, CHILL, GROWING_LEVEL, SPECIAL_TRAFFIC, makeLevel } from '../data/levels.js';
 import { MAPS } from '../data/maps/index.js';
 import { TrafficSimulator } from '../simulation/TrafficSimulator.js';
 import { CONGESTION } from '../simulation/GridlockDetector.js';
@@ -13,6 +13,7 @@ export class LevelManager {
     this.endless = ENDLESS_LEVEL;
     this.demo = DEMO_LEVEL;
     this._endlessByMap = new Map();
+    this._chillByMap = new Map();
   }
 
   get(mode, id) {
@@ -20,12 +21,26 @@ export class LevelManager {
     if (mode === 'pinoy') return this.pinoy.find((l) => l.id === id) || this.pinoy[0];
     if (mode === 'challenge') return this.challenges.find((l) => l.id === id) || this.challenges[0];
     if (mode === 'endless') return this.endlessOn(id);
+    if (mode === 'chill') return this.chillOn(id);
+    if (mode === 'growing') return GROWING_LEVEL;
     return this.demo;
   }
 
-  /** Maps Endless can be played on: the default kanto plus every Pinoy Roads map. */
+  /** Maps Endless can be played on: the default kanto, every Pinoy Roads map and the special maps. */
   endlessMaps() {
-    return ['single', ...this.pinoy.map((l) => l.map)].filter((m, i, a) => MAPS[m] && a.indexOf(m) === i);
+    return ['single', ...this.pinoy.map((l) => l.map), 'serbisyo', 'metro'].filter((m, i, a) => MAPS[m] && a.indexOf(m) === i);
+  }
+
+  /** Chill endless (no game over, AUTO lights) on a map. Metro Manila starts with every light on AUTO. */
+  chillOn(mapId) {
+    const id = MAPS[mapId] ? mapId : 'single';
+    let lvl = this._chillByMap.get(id);
+    if (!lvl) {
+      const base = this.endlessOn(id);
+      lvl = { ...base, ...CHILL, id: 'chill', map: id === 'single' ? base.map : id, name: `Chill · ${MAPS[id].name}`, autoLights: id === 'metro' };
+      this._chillByMap.set(id, lvl);
+    }
+    return lvl;
   }
 
   /** Endless on a given map (the default map when id is missing or unknown). */
@@ -35,7 +50,7 @@ export class LevelManager {
     if (!lvl) {
       const { layout, ...rest } = this.endless;
       // Traffic pattern from that map's Pinoy Roads level, starting lighter and then ramping up.
-      const src = this.pinoy.find((l) => l.map === mapId);
+      const src = this.pinoy.find((l) => l.map === mapId) || SPECIAL_TRAFFIC[mapId];
       const demand = Object.fromEntries(Object.entries(src?.demand || rest.demand).map(([a, d]) => [a, Math.round(d * 0.7 * 10) / 10]));
       lvl = makeLevel({
         ...rest,

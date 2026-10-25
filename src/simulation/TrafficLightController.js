@@ -70,10 +70,10 @@ export class TrafficLightController {
     for (const m of this.managers.values()) m.update(dt);
   }
 
-  /** Safety invariant: never more than one green group per intersection. */
+  /** Safety invariant: one green road per node, or a pair of opposite roads with no left turns. */
   conflictingGreens() {
     let bad = 0;
-    for (const m of this.managers.values()) if (m.greenGroups().length > 1) bad++;
+    for (const m of this.managers.values()) if (m.conflicting()) bad++;
     return bad;
   }
 }

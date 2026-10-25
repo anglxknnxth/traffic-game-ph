@@ -95,6 +95,8 @@ export class CollisionAvoidance {
     for (let i = 0; i < out.length; i++) {
       const n = out[i];
       if (n === v) continue;
+      // Different levels (an expressway above, a tunnel below) never interact.
+      if (Math.abs((n.layer || 0) - (v.layer || 0)) >= 1) continue;
       const dx = n.x - v.x;
       const dy = n.y - v.y;
       const r = reach + n.radius;
@@ -208,6 +210,7 @@ export class CollisionAvoidance {
       hash.query(v.x, v.y, v.radius + MAX_VEHICLE_RADIUS + 1, out, `audit${stamp}`);
       for (const n of out) {
         if (n === v) continue;
+        if (Math.abs((n.layer || 0) - (v.layer || 0)) >= 1) continue;
         const key = v.id < n.id ? `${v.id}:${n.id}` : `${n.id}:${v.id}`;
         if (seen.has(key)) continue;
         seen.add(key);

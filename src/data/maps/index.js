@@ -1,9 +1,10 @@
 // Map registry. Levels name a map with `map` (or the legacy `layout` key).
 
 import { single, double, corridor, grid } from './generic.js';
-import { edsa, commonwealth, taft, espana, poblacion, likoliko, tulay } from './philippines.js';
+import { edsa, commonwealth, taft, espana, poblacion, likoliko, tulay, serbisyo } from './philippines.js';
+import { metro } from './metro.js';
 
-export const MAPS = { single, double, corridor, grid, edsa, commonwealth, taft, espana, poblacion, likoliko, tulay };
+export const MAPS = { single, double, corridor, grid, edsa, commonwealth, taft, espana, poblacion, likoliko, tulay, serbisyo, metro };
 
 export function getMap(id = 'single') {
   const map = MAPS[id];

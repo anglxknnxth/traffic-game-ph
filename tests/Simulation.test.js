@@ -40,6 +40,8 @@ const base = (over) =>
   makeLevel({
     prewarm: 0,
     demandWave: 0,
+    demandScale: 1,
+    cornerStops: 0,
     mix: { car: 1 },
     personalities: { patient: 1 },
     turns: { left: 0, right: 0 },
@@ -116,6 +118,7 @@ describe('Vehicle behaviour', () => {
   it('patient drivers never enter a box whose exit is blocked', () => {
     const lvl = base({
       demand: { N: 0, S: 22, E: 0, W: 0 },
+      initialGroups: { A: 'S' },
       blockages: [{ exit: 'A:N', lanes: [0, 1], s: 12, start: 0, end: 999, label: 'TEST' }],
     });
     const sim = new TrafficSimulator(lvl, { seed: 2 });
@@ -137,6 +140,7 @@ describe('Gridlock', () => {
       demand: { N: 0, S: 24, E: 12, W: 12 },
       personalities: { aggressive: 1 },
       boxBlockFactor: 2,
+      initialGroups: { A: 'S' },
       blockages: [{ exit: 'A:N', lanes: [0, 1], s: 3, start: 0, end: 80, label: 'TEST' }],
     });
 
@@ -146,7 +150,7 @@ describe('Gridlock', () => {
     let crossWaitingForBox = false;
     runChecked(sim, 75, {
       onStep: (s, i) => {
-        if (i === 45 * 60) s.requestPhase('A', 'EW');
+        if (i === 45 * 60) s.requestPhase('A', 'E');
         if (s.vehicles.some((v) => v.state === AI_STATE.BLOCKED_IN_INTERSECTION)) sawBlocked = true;
         if (s.lights.signal('A', 'E') === 'green' && s.vehicles.some((v) => v.route.entries[0].seg.arm !== 'S' && v.blockReason === 'box')) crossWaitingForBox = true;
       },
@@ -157,7 +161,9 @@ describe('Gridlock', () => {
   });
 
   it('honking increases during prolonged delays', () => {
+    // North and South share one green (a pair), so that traffic flows freely.
     const free = new TrafficSimulator(base({ demand: { N: 10, S: 10, E: 0, W: 0 }, personalities: { impatient: 1 } }), { seed: 6 });
+    free.requestPhase('A', 'S');
     runChecked(free, 60, { auditEvery: 4 });
     const jam = new TrafficSimulator(base({ demand: { N: 10, S: 10, E: 0, W: 0 }, personalities: { impatient: 1 }, initialGroups: { A: 'EW' } }), { seed: 6 });
     runChecked(jam, 60, { auditEvery: 4 });
@@ -182,13 +188,16 @@ describe('Gridlock', () => {
 
   it('recovers once the blocked exit reopens (no teleporting or deleting)', () => {
     const sim = new TrafficSimulator(jamLevel(), { seed: 4 });
-    runChecked(sim, 75, { onStep: (s, i) => i === 45 * 60 && s.requestPhase('A', 'EW') });
+    runChecked(sim, 75, { onStep: (s, i) => i === 45 * 60 && s.requestPhase('A', 'E') });
     const processedDuringJam = sim.stats.processed;
     // blockage ends at t=80; alternate phases so everyone gets a turn
     runChecked(sim, 120, {
       auditEvery: 2,
       onStep: (s, i) => {
-        if (i % (15 * 60) === 0) s.requestPhase('A', s.lights.manager('A').activeGroup === 'NS' ? 'EW' : 'NS');
+        // every road in turn, paired with its opposite: N+S, then E+W
+        const t = Math.floor(i / (15 * 60)) % 2;
+        if (i % (15 * 60) === 0) s.requestPhase('A', t ? 'E' : 'S');
+        if (i % (15 * 60) === 150) s.requestPhase('A', t ? 'W' : 'N');
       },
     });
     expect(sim.stats.processed).toBeGreaterThan(processedDuringJam + 20);
@@ -242,14 +251,17 @@ describe('Game systems', () => {
 
   it('signal requests act immediately with no penalty and never change the signal unsafely', () => {
     const sim = new TrafficSimulator(base({ demand: { N: 5, S: 5, E: 5, W: 5 } }), { seed: 1 });
-    sim.requestPhase('A', 'EW');
+    sim.requestPhase('A', 'EW'); // old paired id: the first road of that axis
     runChecked(sim, 3);
-    expect(sim.lights.manager('A').activeGroup).toBe('EW');
-    const res = sim.requestPhase('A', 'NS');
+    expect(sim.lights.manager('A').activeGroup).toBe('E');
+    const res = sim.requestPhase('A', 'S');
     expect(res.status).toBe('accepted');
     expect(res.early).toBe(false);
     runChecked(sim, 3);
-    expect(sim.lights.manager('A').activeGroup).toBe('NS');
+    expect(sim.lights.manager('A').activeGroup).toBe('S');
+    sim.requestPhase('A', 'N'); // the opposite road joins: N + S together, no left turns
+    runChecked(sim, 3);
+    expect(sim.lights.manager('A').greenGroups()).toEqual(['N', 'S']);
     expect(sim.stats.earlyRequests).toBe(0);
   });
 });
@@ -271,7 +283,8 @@ describe('Soak: every level stays collision-free', () => {
           }
         },
       });
-      expect(sim.stats.processed).toBeGreaterThan(10);
+      // Endless maps are big (roads run to the screen edge), so fewer vehicles finish in 100 s.
+      expect(sim.stats.processed).toBeGreaterThan(lvl.mode === 'endless' ? 5 : 10);
       // nothing permanently wedged in a box
       for (const v of sim.vehicles) if (v.segment.kind === 'connector') expect(v.boxTime).toBeLessThan(90);
     });

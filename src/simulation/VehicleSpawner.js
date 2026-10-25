@@ -47,7 +47,7 @@ export class VehicleSpawner {
     const amp = this.level.demandWave || 0;
     const phase = this.wavePhase.get(key) || 0;
     const wave = 1 + amp * Math.sin((t / 55) * Math.PI * 2 + phase) * 0.8 + amp * 0.4 * Math.sin((t / 23) * Math.PI * 2 + phase * 1.7);
-    const scale = this.level.demandScale ?? 1;
+    const scale = (this.level.demandScale ?? 1) * (this.sim.demandMul ?? 1);
     return Math.max(0, (perMin / 60) * scale * ramp * Math.max(0.2, wave) * this.sim.env.demandFactor);
   }
 

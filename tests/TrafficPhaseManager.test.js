@@ -129,26 +129,80 @@ describe('TrafficPhaseManager', () => {
     expect(m.greenGroups()).toEqual(['E']);
   });
 
+  it('pairs opposite roads: the left turn clears first, then both run straight and right only', () => {
+    const m = new TrafficPhaseManager({ initialGroup: 'N', yellow: 1.2, allRed: 0.8 });
+    expect(m.requestPhase('S').reason).toBe('Pairing');
+    expect(m.signalForArm('N', 'straight')).toBe('green');
+    expect(m.signalForArm('N', 'left')).toBe('yellow');
+    expect(m.signalForArm('S', 'straight')).toBe('red');
+    run(m, 1.3);
+    expect(m.signalForArm('N', 'left')).toBe('red');
+    expect(m.signalForArm('S', 'straight')).toBe('red');
+    run(m, 0.8);
+    expect(m.greenGroups()).toEqual(['N', 'S']);
+    for (const arm of ['N', 'S']) {
+      expect(m.signalForArm(arm, 'straight')).toBe('green');
+      expect(m.signalForArm(arm, 'right')).toBe('green');
+      expect(m.signalForArm(arm, 'left')).toBe('red');
+    }
+    expect(m.conflicting()).toBe(false);
+    // A cross road: both go yellow, then all-red, then West alone.
+    m.requestPhase('W');
+    expect(m.signalForArm('N')).toBe('yellow');
+    expect(m.signalForArm('S')).toBe('yellow');
+    run(m, 2.05);
+    expect(m.greenGroups()).toEqual(['W']);
+    expect(m.signalForArm('W', 'left')).toBe('green');
+  });
+
+  it('picking one road of a pair drops the other through yellow and gives the left turn back', () => {
+    const m = new TrafficPhaseManager({ initialGroup: 'E', yellow: 1.2, allRed: 0.8 });
+    m.requestPhase('W');
+    run(m, 2.1);
+    expect(m.greenGroups()).toEqual(['E', 'W']);
+    m.requestPhase('W'); // keep West only
+    expect(m.signalForArm('E')).toBe('yellow');
+    expect(m.signalForArm('W')).toBe('green');
+    expect(m.signalForArm('W', 'left')).toBe('red');
+    run(m, 1.3);
+    expect(m.signalForArm('E')).toBe('red');
+    run(m, 0.8);
+    expect(m.paired).toBe(false);
+    expect(m.greenGroups()).toEqual(['W']);
+    expect(m.signalForArm('W', 'left')).toBe('green');
+  });
+
   it('never shows conflicting greens under random request sequences', () => {
     const rng = new Rng(9);
     const m = new TrafficPhaseManager();
     let lastGreen = 'N';
     let sawYellow = false;
     let sawAllRed = false;
+    let sawPair = false;
     for (let i = 0; i < 60 * 60 * 10; i++) {
       if (rng.chance(0.02)) {
-        const g = rng.pick(['N', 'E', 'S', 'W', 'XX', 'flash']);
+        const g = rng.pick(['N', 'E', 'S', 'W', 'XX', 'flash', 'opp', 'opp']);
         if (g === 'flash') m.requestFlash();
+        else if (g === 'opp' && m.oppositeOf(m.activeGroup)) m.requestPhase(m.oppositeOf(m.activeGroup));
         else m.requestPhase(g);
       }
       m.update(DT);
       const greens = m.greenGroups();
-      expect(greens.length).toBeLessThanOrEqual(1);
+      expect(m.conflicting()).toBe(false);
+      expect(greens.length).toBeLessThanOrEqual(2);
+      if (greens.length === 2) {
+        // only ever the two opposite roads, with their left turns on red
+        expect(m.oppositeOf(greens[0])).toBe(greens[1]);
+        for (const g of greens) expect(m.signalForArm(g, 'left')).toBe('red');
+      }
       if (m.state === PHASE.YELLOW) sawYellow = true;
       if (m.state === PHASE.ALL_RED) sawAllRed = true;
-      if (greens.length === 1 && greens[0] !== lastGreen) {
-        // Every change of green must have passed through all-red (and yellow, unless it came from flash).
-        expect(sawAllRed).toBe(true);
+      if (m.paired) sawPair = true;
+      if (greens.length === 1 && greens[0] !== lastGreen && !m.paired) {
+        // Every change of green must have passed through all-red (and yellow, unless it came from
+        // flash), or be the road kept when a pair was dropped (the other one went yellow and red).
+        expect(sawAllRed || sawPair).toBe(true);
+        sawPair = false;
         lastGreen = greens[0];
         sawYellow = false;
         sawAllRed = false;

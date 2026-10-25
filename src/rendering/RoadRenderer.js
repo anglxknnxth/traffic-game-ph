@@ -1,6 +1,9 @@
 // Static world: ground, sidewalks, asphalt, medians, markings and roadside scenery (drawn once per
 // camera change), dynamic road overlays (signal stop-line bars, downstream gates, blockages) and
 // elevated structures drawn over traffic (MRT/LRT guideways, footbridges).
+// Grade separation: nodes on level 1 (an elevated expressway) are left out of the ground layer and
+// drawn by drawElevated over ground traffic; their shadow falls on the ground. Tunnel lanes under an
+// underpass node are drawn as a walled trench that disappears under the junction.
 //
 // Everything is driven by the network geometry: each arm has its own road half-width, median,
 // stop line and lane types, so wide avenues, T-junctions and U-turn slots draw correctly. Roads are
@@ -9,7 +12,7 @@
 import { Rng, makeObb, setObb, obbOverlap } from '../utils/math.js';
 import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
 import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
-import { rightOf, leftOf } from '../simulation/LaneManager.js';
+import { rightOf, leftOf, SLOT_KINDS } from '../simulation/LaneManager.js';
 import { drawRiverStatic, drawRiverDynamic, drawBridgeShadows, drawBridgeRails, findBridges, bankPlants, drawBankPlants } from './RiverRenderer.js';
 
 const SW = SIDEWALK_WIDTH;
@@ -157,6 +160,7 @@ export class RoadRenderer {
   _armBands() {
     const out = [];
     for (const I of this.network.intersections) {
+      if (this._elevated(I)) continue; // the expressway spans the river on its own deck
       for (const arm of this._arms(I)) out.push({ g: this._g(I, arm), len: armLength(this.network, I, arm), half: I.arms[arm].half });
     }
     return out;
@@ -184,13 +188,28 @@ export class RoadRenderer {
     return ARMS.filter((a) => I.arms[a].type !== 'none');
   }
 
+  /** Node on the expressway level (drawn by drawElevated). */
+  _elevated(I) {
+    return I.layer >= 1;
+  }
+
+  /** Arm of a ground node that is a ramp up to the expressway (no sidewalks, low walls). */
+  _ramp(I, arm) {
+    const A = I.arms[arm];
+    return A.type === 'link' && this.network.byId.get(A.other).layer >= 1 && !this._elevated(I);
+  }
+
+  get hasElevated() {
+    return this.network.intersections.some((I) => this._elevated(I));
+  }
+
   /** Half-width of the road crossing arm `arm` at node I (where corners and frontage begin). */
   _cross(I, arm) {
     return arm === 'N' || arm === 'S' ? I.hy : I.hx;
   }
 
   _hasCorner(I, adjacent) {
-    return I.kind !== 'uturn' && adjacent && I.arms[adjacent].type !== 'none';
+    return !SLOT_KINDS.has(I.kind) && adjacent && I.arms[adjacent].type !== 'none';
   }
 
   /** Centre line of an arm, oriented outward from I. */
@@ -242,11 +261,13 @@ export class RoadRenderer {
 
     // Frontage buildings along every arm (both sides), shops near intersections.
     for (const I of net.intersections) {
+      if (this._elevated(I)) continue;
       for (const arm of this._arms(I)) {
+        if (this._ramp(I, arm)) continue;
         const A = I.arms[arm];
         const g = this._g(I, arm);
         const len = Math.min(armLength(net, I, arm), (A.length || 120) + 40);
-        const start = I.kind === 'uturn' ? 0.5 : this._cross(I, arm) + SW + 1.2;
+        const start = SLOT_KINDS.has(I.kind) ? 0.5 : this._cross(I, arm) + SW + 1.2;
         for (const sgn of [-1, 1]) {
           let t = start;
           while (t < len) {
@@ -322,17 +343,23 @@ export class RoadRenderer {
       drawBridgeShadows(ctx, this.bridges, SW);
     }
 
-    const eachArm = (fn) => {
+    // Ground level only (the expressway is drawn by drawElevated); ramps have no sidewalks.
+    const eachArm = (fn, sidewalks = false) => {
       for (const I of net.intersections) {
-        for (const arm of this._arms(I)) fn(I, arm, I.arms[arm], armLength(net, I, arm), this._g(I, arm));
+        if (this._elevated(I)) continue;
+        for (const arm of this._arms(I)) {
+          if (sidewalks && this._ramp(I, arm)) continue;
+          fn(I, arm, I.arms[arm], armLength(net, I, arm), this._g(I, arm));
+        }
       }
     };
     const p1 = {};
     const p2 = {};
+    this._drawElevatedShadows(ctx);
 
     // Sidewalks
     ctx.fillStyle = COLORS.sidewalk;
-    eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -(A.half + SW), A.half + SW));
+    eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -(A.half + SW), A.half + SW), true);
     // Sidewalk paving joints
     ctx.strokeStyle = 'rgba(0,0,0,0.07)';
     ctx.lineWidth = 0.08;
@@ -348,13 +375,22 @@ export class RoadRenderer {
         }
       }
       ctx.stroke();
-    });
+    }, true);
+    // Ramps: low concrete walls instead of sidewalks
+    ctx.fillStyle = '#b9b5ad';
+    for (const I of net.intersections) {
+      for (const arm of this._arms(I)) {
+        if (!this._ramp(I, arm)) continue;
+        const A = I.arms[arm];
+        strip(ctx, this._g(I, arm), this._cross(I, arm) + 2, armLength(net, I, arm), -(A.half + 0.7), A.half + 0.7);
+      }
+    }
     // Asphalt
     ctx.fillStyle = COLORS.asphalt;
     eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -A.half, A.half));
     // Rounded curbs where two roads meet
     for (const I of net.intersections) {
-      if (I.kind === 'uturn') continue;
+      if (SLOT_KINDS.has(I.kind) || this._elevated(I)) continue;
       for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
           if (I.arms[sx > 0 ? 'E' : 'W'].type === 'none' || I.arms[sy > 0 ? 'S' : 'N'].type === 'none') continue;
@@ -391,6 +427,7 @@ export class RoadRenderer {
     const rng = new Rng(77);
     ctx.fillStyle = 'rgba(0,0,0,0.06)';
     for (const I of net.intersections) {
+      if (this._elevated(I)) continue;
       for (let i = 0; i < 40; i++) {
         const arm = rng.pick(ARMS);
         const A = I.arms[arm];
@@ -410,13 +447,214 @@ export class RoadRenderer {
     // Medians
     eachArm((I, arm, A, len, g) => this._drawMedian(ctx, I, A, len, g));
 
-    for (const I of net.intersections) this._drawNodeMarkings(ctx, I);
+    for (const I of net.intersections) if (!this._elevated(I)) this._drawNodeMarkings(ctx, I);
+    this._drawTunnels(ctx);
+    this._drawLaneDrops(ctx);
     if (net.river) drawBridgeRails(ctx, this.bridges, SW, net.river.name);
     this._drawScenery(ctx);
   }
 
+  /** Shadow of the expressway and its ramps on the ground (sun from the upper left), with piers. */
+  _drawElevatedShadows(ctx) {
+    const net = this.network;
+    const sx = 2.6;
+    const sy = 3.4;
+    for (const I of net.intersections) {
+      if (!this._elevated(I)) continue;
+      for (const arm of this._arms(I)) {
+        const A = I.arms[arm];
+        const g = this._g(I, arm);
+        const len = armLength(net, I, arm);
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        strip(ctx, g, 0, len, -(A.half + 0.7), A.half + 0.7);
+        ctx.restore();
+        // Piers every 30 m along the centre line
+        ctx.fillStyle = '#9b978f';
+        for (let u = 12; u < len; u += 30) {
+          const q = at(g, u, 0);
+          ctx.fillRect(q.x - 1.1 + sx * 0.5, q.y - 1.1 + sy * 0.5, 2.2, 2.2);
+        }
+      }
+    }
+  }
+
+  /** The expressway level: decks, parapets, markings, toll booths (drawn over ground traffic). */
+  drawElevated(ctx) {
+    const net = this.network;
+    const nodes = net.intersections.filter((I) => this._elevated(I));
+    if (!nodes.length) return;
+    for (const I of nodes) {
+      for (const arm of this._arms(I)) {
+        const A = I.arms[arm];
+        const g = this._g(I, arm);
+        const len = armLength(net, I, arm);
+        ctx.fillStyle = '#c9c5bc'; // parapet
+        strip(ctx, g, 0, len, -(A.half + 0.75), A.half + 0.75);
+        ctx.fillStyle = '#44474d'; // deck asphalt
+        strip(ctx, g, 0, len, -A.half, A.half);
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        strip(ctx, g, 0, len, A.half, A.half + 0.2);
+        strip(ctx, g, 0, len, -A.half - 0.2, -A.half);
+        // Expansion joints
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        for (let u = 20; u < len; u += 40) strip(ctx, g, u, u + 0.25, -A.half, A.half);
+        this._drawMedian(ctx, I, A, len, g);
+      }
+      this._drawNodeMarkings(ctx, I);
+    }
+  }
+
+  /**
+   * Underpass: the tunnel lanes of each arm run down a walled trench from the portal to the
+   * junction, then under it (the junction box covers them).
+   */
+  _drawTunnels(ctx) {
+    for (const I of this.network.intersections) {
+      if (!I.def.underpass) continue;
+      for (const arm of this._arms(I)) {
+        const band = this._tunnelBand(I, arm);
+        if (!band) continue;
+        const { g, u0, u1, y } = band;
+        // Trench floor, darker toward the covered part
+        const n = 8;
+        for (let i = 0; i < n; i++) {
+          const a = u0 + ((u1 - u0) * i) / n;
+          const b = u0 + ((u1 - u0) * (i + 1)) / n;
+          ctx.fillStyle = 'rgba(10,12,16,' + (0.55 - (0.4 * i) / n).toFixed(3) + ')';
+          strip(ctx, g, a, b, -y, y);
+        }
+        // Walls on both sides and down the middle
+        ctx.fillStyle = '#cfcac0';
+        strip(ctx, g, u0, u1, y - 0.15, y + 0.45);
+        strip(ctx, g, u0, u1, -y - 0.45, -y + 0.15);
+        strip(ctx, g, u0, u1, -0.3, 0.3);
+        // Portal: the tunnel mouth under the junction
+        ctx.fillStyle = '#0b0d10';
+        strip(ctx, g, u0 - 1.5, u0 + 1.2, -y, y);
+        ctx.fillStyle = '#e5e1d8';
+        strip(ctx, g, u0 + 1.2, u0 + 1.7, -y - 0.45, y + 0.45);
+        const q = at(g, u0 + 6, -y / 2);
+        worldText(ctx, 'UNDERPASS', q.x, q.y, 1.1, 'rgba(242,194,48,0.9)', q.angle + Math.PI / 2);
+        const q2 = at(g, u0 + 6, y / 2);
+        worldText(ctx, 'UNDERPASS', q2.x, q2.y, 1.1, 'rgba(242,194,48,0.9)', q2.angle - Math.PI / 2);
+      }
+    }
+  }
+
+  /** Arm-local band of the tunnel lanes at an underpass node: { g, u0, u1, y } or null. */
+  _tunnelBand(I, arm) {
+    const A = I.arms[arm];
+    const lanes = (I.approachLanes[arm] || []).filter((l) => l.type === 'tunnel');
+    if (!lanes.length) return null;
+    const y = Math.max(...lanes.map((l) => l.offset + l.width / 2));
+    const u0 = A.exitStop + 0.5;
+    const u1 = Math.min(armLength(this.network, I, arm), A.exitStop + 70);
+    return { g: this._g(I, arm), u0, u1, y };
+  }
+
+  /** Darken traffic down in the trench (drawn over vehicles). */
+  drawTrenchShade(ctx) {
+    for (const I of this.network.intersections) {
+      if (!I.def.underpass) continue;
+      for (const arm of this._arms(I)) {
+        const band = this._tunnelBand(I, arm);
+        if (!band) continue;
+        const { g, u0, u1, y } = band;
+        const n = 6;
+        for (let i = 0; i < n; i++) {
+          const a = u0 + ((u1 - u0) * i) / n;
+          const b = u0 + ((u1 - u0) * (i + 1)) / n;
+          ctx.fillStyle = 'rgba(5,6,8,' + (0.42 - (0.36 * i) / n).toFixed(3) + ')';
+          strip(ctx, g, a, b, -y + 0.15, y - 0.15);
+        }
+      }
+    }
+  }
+
+  /** Outline of a stretch of a lane (from s0 to s1 along it, w wide) as a closed path. */
+  _laneStrip(ctx, lane, s0, s1, w) {
+    const P = lane.path;
+    const pt = { x: 0, y: 0, dx: 0, dy: 0 };
+    const left = [];
+    const right = [];
+    for (let s = s0; s <= s1 + 1e-6; s += Math.max(0.5, Math.min(2, (s1 - s0) / 8))) {
+      P.pointAt(Math.min(s, s1), pt);
+      left.push([pt.x - pt.dy * (w / 2), pt.y + pt.dx * (w / 2)]);
+      right.push([pt.x + pt.dy * (w / 2), pt.y - pt.dx * (w / 2)]);
+    }
+    ctx.beginPath();
+    left.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i][0], right[i][1]);
+    ctx.closePath();
+  }
+
+  /** Lane drops: hatched gore where the lane has ended, "LANE ENDS" and merge arrows before it. */
+  _drawLaneDrops(ctx) {
+    const pt = { x: 0, y: 0, dx: 0, dy: 0 };
+    for (const d of this.network.laneDrops || []) {
+      const lane = d.lane;
+      const s0 = d.s;
+      const s1 = lane.length;
+      // The dead stretch: painted over with chevrons (it is no longer a lane).
+      ctx.save();
+      this._laneStrip(ctx, lane, s0, s1, lane.width - 0.3);
+      ctx.fillStyle = '#34373c';
+      ctx.fill();
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(240,240,236,0.8)';
+      ctx.lineWidth = 0.22;
+      const side = lane.laneIndex > 0 ? -1 : 1; // the lane it merges into is toward the median
+      for (let s = s0 + 1; s < s1 + 4; s += 2.6) {
+        lane.path.pointAt(Math.min(s, s1), pt);
+        ctx.beginPath();
+        ctx.moveTo(pt.x - pt.dy * 2 * side + pt.dx * 0, pt.y + pt.dx * 2 * side);
+        ctx.lineTo(pt.x + pt.dy * 2 * side + pt.dx * 2.4, pt.y - pt.dx * 2 * side + pt.dy * 2.4);
+        ctx.stroke();
+      }
+      ctx.restore();
+      // Taper line from the lane edge to the end point
+      lane.path.pointAt(s0, pt);
+      ctx.strokeStyle = COLORS.white;
+      ctx.lineWidth = 0.18;
+      this._laneStrip(ctx, lane, s0, s1, lane.width - 0.3);
+      ctx.stroke();
+      // Legend and merge arrows before the end
+      for (const back of [12, 34, 58]) {
+        const s = s0 - back;
+        if (s < 4) continue;
+        lane.path.pointAt(s, pt);
+        const ang = Math.atan2(pt.dy, pt.dx);
+        if (back === 12) {
+          worldText(ctx, 'LANE ENDS', pt.x, pt.y, 1.15, 'rgba(242,194,48,0.95)', ang - Math.PI / 2);
+          continue;
+        }
+        ctx.save();
+        ctx.translate(pt.x, pt.y);
+        ctx.rotate(ang);
+        ctx.fillStyle = 'rgba(240,240,236,0.85)';
+        // A bent arrow: forward, then over into the next lane (toward local -y = left of travel)
+        ctx.fillRect(-2.2, -0.12, 2.4, 0.24);
+        ctx.beginPath();
+        ctx.moveTo(0.2, -0.12);
+        ctx.lineTo(1.4, side * 1.2 - 0.12);
+        ctx.lineTo(1.4, side * 1.2 + 0.12);
+        ctx.lineTo(0.2, 0.12);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(2.1, side * 1.9);
+        ctx.lineTo(0.9, side * 1.6);
+        ctx.lineTo(1.8, side * 0.8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
   _medianStart(I, A) {
-    if (I.kind === 'uturn') return A.stop;
+    if (SLOT_KINDS.has(I.kind)) return A.stop;
     return A.cwStart + CROSSWALK_WIDTH + 0.4;
   }
 
@@ -494,6 +732,7 @@ export class RoadRenderer {
       }
     }
     if (I.kind === 'uturn') worldText(ctx, 'U-TURN SLOT', I.x, I.y, 1.3, 'rgba(242,194,48,0.9)', Math.abs(DIRS[this._arms(I)[0]].x) > 0 ? 0 : Math.PI / 2);
+    if (I.kind === 'toll') worldText(ctx, 'TOLL PLAZA', I.x, I.y, 1.5, 'rgba(242,194,48,0.95)', Math.abs(DIRS[this._arms(I)[0]].x) > 0 ? 0 : Math.PI / 2);
 
     const q = {};
     for (const arm of this._arms(I)) {
@@ -522,7 +761,7 @@ export class RoadRenderer {
         [exits, 1],
       ]) {
         for (const lane of list) {
-          if (lane.type === 'general') continue;
+          if (lane.type === 'general' || lane.type === 'tunnel') continue;
           const k = lane.laneIndex;
           const ya = sign * outer(k);
           const yb = sign * (outer(k) - p.widths[k]);
@@ -572,7 +811,7 @@ export class RoadRenderer {
       ctx.save();
       armFrame(ctx, I, arm);
       // Through-lane guides across a U-turn slot
-      if (I.kind === 'uturn') {
+      if (SLOT_KINDS.has(I.kind)) {
         ctx.fillStyle = 'rgba(240,240,236,0.5)';
         for (let k = 0; k < p.lanes - 1; k++) {
           for (const y of [-outer(k), outer(k)]) for (let x = 0.5; x < A.stop; x += 3) ctx.fillRect(x, y - 0.05, 1.4, 0.1);
@@ -581,10 +820,36 @@ export class RoadRenderer {
 
       const minor = I.kind === 'yield' && !I.major.has(arm);
       // Stop line across approach lanes (none for through traffic at U-turn slots or on a major road)
-      if (I.kind === 'signal' || minor) {
+      if (minor && I.def.rolling) {
+        // A merge: give-way triangles and YIELD, no stop needed
+        ctx.fillStyle = COLORS.white;
+        for (let y = -h + 0.4; y < -m / 2 - 0.4; y += 0.9) {
+          ctx.beginPath();
+          ctx.moveTo(A.stop + 0.9, y);
+          ctx.lineTo(A.stop, y + 0.35);
+          ctx.lineTo(A.stop + 0.9, y + 0.7);
+          ctx.closePath();
+          ctx.fill();
+        }
+        worldText(ctx, 'YIELD', A.stop + 3.4, -(m / 2 + (h - m / 2) / 2), 1.4, COLORS.white, Math.PI / 2);
+      } else if (I.kind === 'signal' || minor || I.kind === 'toll') {
         ctx.fillStyle = COLORS.white;
         ctx.fillRect(A.stop, -h + 0.2, 0.45, h - m / 2 - 0.45);
         if (minor) worldText(ctx, 'STOP', A.stop + 3.2, -(m / 2 + (h - m / 2) / 2), 1.6, COLORS.white, Math.PI / 2);
+      }
+      // Toll booths: an island with a booth between each pair of lanes, ETC by the median
+      if (I.kind === 'toll' && lanes.length) {
+        for (let k = 0; k <= lanes.length; k++) {
+          const yEdge = k === 0 ? -(m / 2) : -(lanes[k - 1].offset + lanes[k - 1].width / 2);
+          ctx.fillStyle = '#d6d0c4';
+          ctx.fillRect(A.stop - 0.2, yEdge - 0.35, 6, 0.7);
+          ctx.fillStyle = k % 2 ? '#1d4ed8' : '#dc2626';
+          ctx.fillRect(A.stop + 1.2, yEdge - 0.55, 2.2, 1.1);
+          ctx.fillStyle = 'rgba(255,255,255,0.7)';
+          ctx.fillRect(A.stop + 1.4, yEdge - 0.4, 0.5, 0.8);
+        }
+        worldText(ctx, 'ETC', A.stop + 8, -lanes[0].offset, 1.1, 'rgba(250,204,21,0.95)', Math.PI / 2);
+        for (let k = 1; k < lanes.length; k++) worldText(ctx, 'CASH', A.stop + 8, -lanes[k].offset, 1.0, 'rgba(255,255,255,0.85)', Math.PI / 2);
       }
       // Zebra crossing
       if (A.cwStart != null) {
@@ -828,7 +1093,7 @@ export class RoadRenderer {
     }
     // Blockages: cones + barrier + label
     for (const b of sim.blockages) {
-      if (!b.active || b.kind === 'ped') continue;
+      if (!b.active || b.kind === 'ped' || b.kind === 'laneEnd') continue;
       for (const lane of b.laneObjs) {
         const A = lane.startInt.arms[lane.startArm];
         withFrame(ctx, this._g(lane.startInt, lane.startArm), A.exitStop + b.s, lane.offset, () => {

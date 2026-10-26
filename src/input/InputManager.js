@@ -62,6 +62,38 @@ export class InputManager {
     return sim.vehicleAt(w.x, w.y, Math.max(0.6, 10 / cam.scale));
   }
 
+  hitJaywalker(x, y) {
+    const sim = this.game.sim;
+    if (!sim?.peds?.enabled) return null;
+    const r = Math.max(1.5, 12 / this.game.camera.scale);
+    let best = null;
+    let bestD = r;
+    for (const p of sim.peds.peds) {
+      if (p.state !== 'jaywait') continue;
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < bestD) {
+        best = p;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  hitBlockage(x, y) {
+    const sim = this.game.sim;
+    if (!sim) return null;
+    const q = { x: 0, y: 0, dx: 0, dy: 0 };
+    for (const b of sim.blockages) {
+      if (!b.active || ['ped', 'laneEnd', 'cf'].includes(b.kind)) continue;
+      for (const lane of b.laneObjs) {
+        const s = b.sOf ? b.sOf.get(lane) : b.s;
+        lane.path.pointAt(Math.min(lane.length, s + 4), q);
+        if (Math.hypot(q.x - x, q.y - y) < 7) return b;
+      }
+    }
+    return null;
+  }
+
   hitBox(px, py) {
     const sim = this.game.sim;
     if (!sim) return null;
@@ -87,8 +119,9 @@ export class InputManager {
         const h = this.hitHead(p.x, p.y);
         this.game.setHover(h);
         const v = h ? null : this.hitVehicle(p.x, p.y);
-        const stuck = v && this.game.sim.isStuck(v);
-        this.canvas.style.cursor = h || stuck || this.hitBox(p.x, p.y) ? 'pointer' : 'grab';
+        const sim = this.game.sim;
+        const stuck = v && (sim.isStuck(v) || sim.enforcement.violationOf(v));
+        this.canvas.style.cursor = this.game.state.tool ? 'crosshair' : h || stuck || this.hitBox(p.x, p.y) ? 'pointer' : 'grab';
       }
       return;
     }
@@ -130,10 +163,23 @@ export class InputManager {
       this.game.requestPhase(head.intersectionId, head.group, 'light');
       return;
     }
-    // A stuck vehicle: wave it through (clicking is optional, everything also clears by itself).
+    const g = this.game;
+    const w = g.camera.screenToWorld(p.x, p.y);
+    // A tool picked in the HUD (station an enforcer, cone a contraflow lane)
+    if (g.state.tool && g.toolAt(w.x, w.y)) return;
+    // A vehicle: HULI! a violator, wave a stuck one through, padaanin at an enforcer's junction,
+    // or follow it in watch mode. Clicking is always optional: everything also clears by itself.
     const v = this.hitVehicle(p.x, p.y);
-    if (v && this.game.wavePass(v)) return;
-    if (v && this.game.followVehicle?.(v)) return;
+    if (v && g.sim.enforcement.violationOf(v) && g.catchVehicle(v)) return;
+    if (v && g.wavePass(v)) return;
+    if (v && g.waveThrough(v)) return;
+    if (v && g.followVehicle?.(v)) return;
+    // A jaywalker waiting at the curb: saway
+    const ped = this.hitJaywalker(w.x, w.y);
+    if (ped && g.saway(ped)) return;
+    // A stalled vehicle or road works: call a tow truck
+    const blk = this.hitBlockage(w.x, w.y);
+    if (blk && g.tow(blk)) return;
     const I = this.hitBox(p.x, p.y);
     if (I) {
       const m = this.game.sim.lights.manager(I.id);

@@ -13,6 +13,7 @@ import { loadSave, writeSave, clearSave } from '../utils/storage.js';
 import { CAREER_COUNT, PINOY_COUNT } from '../data/levels.js';
 import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
 import { Director } from './Director.js';
+import { Network } from '../simulation/LaneManager.js';
 
 export class Game {
   constructor(root) {
@@ -86,15 +87,25 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ sessions
+  /** Rain / people on or off (from the next game started). */
+  setWorldOption(key, on) {
+    this.save.settings[key] = on;
+    writeSave(this.save);
+  }
+
+  _options() {
+    return { rain: this.save.settings.rain !== false, people: this.save.settings.people !== false };
+  }
+
   startDemo() {
-    const sim = this.levels.createSim(this.levels.demo, 4242);
+    const sim = this.levels.createSim(this.levels.withOptions(this.levels.demo, this._options()), 4242);
     this.demo = { sim };
     if (!this.session) this.applyNetwork(sim);
   }
 
   startSession(mode, id) {
     this.audio.unlock();
-    const level = this.levels.get(mode, id);
+    const level = this.levels.withOptions(this.levels.get(mode, id), this._options());
     const sim = this.levels.createSim(level);
     this.session = {
       mode,
@@ -110,6 +121,7 @@ export class Game {
     this.state.screen = SCREEN.PLAYING;
     this.state.paused = false;
     this.state.watch = false;
+    this.state.tool = null;
     this.director.reset();
     this.loop.setPaused(false);
     this.loop.speed = this.state.speed;
@@ -168,6 +180,11 @@ export class Game {
   }
 
   onEscape() {
+    if (this.state.tool) {
+      this.state.tool = null;
+      this.hud.syncControls();
+      return;
+    }
     if (this.director.follow) {
       this.director.follow = null;
       this.director.shot = null;
@@ -339,6 +356,110 @@ export class Game {
     }
   }
 
+  /** Tool picked in the HUD: 'enforcer' (station / move enforcers) or 'contraflow' (cone a lane). */
+  setTool(tool) {
+    this.state.tool = this.state.tool === tool ? null : tool;
+    this.hud.syncControls();
+    if (this.state.tool === 'enforcer') this.hud.toast('👮 Tap a junction to station an enforcer there (tap again to take them off)', 'info');
+    if (this.state.tool === 'contraflow') this.hud.toast('🚧 Tap an undivided road near a junction to cone off a contraflow lane for 60 s', 'info');
+  }
+
+  /** The player tapped the map with a tool, or tapped something the enforcer deals with. */
+  toolAt(x, y) {
+    const sim = this.session?.sim;
+    if (!sim || this.session.ended || this.state.paused) return false;
+    const t = this.state.tool;
+    if (t === 'enforcer') {
+      const I = sim.network.intersections.find((n) => n.layer === 0 && n.kind !== 'uturn' && Network.inCore(n, x, y, 8));
+      if (!I) return false;
+      const r = sim.enforcement.toggle(I.id);
+      this.hud.toast(r.text, r.ok ? 'ok' : 'info');
+      this.hud.buildPanels(sim);
+      if (r.ok) this.audio.whistle(0);
+      if (!sim.enforcement.available) this.state.tool = null;
+      this.hud.syncControls();
+      return true;
+    }
+    if (t === 'contraflow') {
+      const lane = this._laneAt(sim, x, y);
+      if (!lane) return false;
+      const z = sim.counterflow.openZone(lane);
+      this.hud.toast(typeof z === 'string' ? z : '🚧 Contraflow: cones going up, the lane opens once it is clear', typeof z === 'string' ? 'info' : 'ok');
+      this.state.tool = null;
+      this.hud.syncControls();
+      return true;
+    }
+    return false;
+  }
+
+  /** The inner approach lane nearest to (x, y) (within 5 m), for the contraflow tool. */
+  _laneAt(sim, x, y) {
+    let best = null;
+    let bestD = 5;
+    const p = { x: 0, y: 0, dx: 0, dy: 0 };
+    for (const lane of sim.network.lanes) {
+      if ((lane.role !== 'approach' && lane.role !== 'link') || !lane.endInt) continue;
+      const opp = sim.counterflow.oppOf(lane);
+      if (!opp) continue;
+      for (let s = 0; s < lane.length; s += 2) {
+        lane.path.pointAt(s, p);
+        // the tap may land on either inner lane: the borrowed one or the queue's own
+        const d = Math.min(Math.hypot(p.x - x, p.y - y), Math.hypot(p.x - p.dy * (lane.offset + opp.offset) - x, p.y + p.dx * (lane.offset + opp.offset) - y));
+        if (d < bestD) {
+          bestD = d;
+          best = lane;
+        }
+      }
+    }
+    return best;
+  }
+
+  /** HULI! Catch a violator (red-! vehicle). */
+  catchVehicle(v) {
+    if (!this.session || this.session.ended || this.state.paused) return false;
+    const ok = this.session.sim.enforcement.catchVehicle(v);
+    if (ok) {
+      this.audio.whistle(0);
+      this.hud.toast('🚨 HULI! Ticket issued', 'ok');
+    }
+    return ok;
+  }
+
+  /** Padaanin: wave the front vehicle of a red lane through (needs an enforcer at that junction). */
+  waveThrough(v) {
+    if (!this.session || this.session.ended || this.state.paused) return false;
+    const ok = this.session.sim.enforcement.waveThrough(v);
+    if (ok) this.audio.whistle(0);
+    return ok;
+  }
+
+  /** Saway: send a jaywalker to the crosswalk. */
+  saway(p) {
+    if (!this.session || this.session.ended || this.state.paused) return false;
+    const ok = this.session.sim.enforcement.saway(p);
+    if (ok) {
+      this.audio.whistle(0);
+      this.hud.toast('Bawal tumawid dito! Sa tawiran po.', 'ok');
+    }
+    return ok;
+  }
+
+  /** Call a tow truck for a stalled vehicle / clear road works. */
+  tow(b) {
+    if (!this.session || this.session.ended || this.state.paused) return false;
+    const ok = this.session.sim.enforcement.tow(b);
+    if (ok) this.hud.toast('🚚 Tow truck called: clear in 8 s', 'ok');
+    return ok;
+  }
+
+  /** Patawid at junction id (needs an enforcer there). */
+  patawid(id) {
+    if (!this.session || this.session.ended || this.state.paused) return;
+    const r = this.session.sim.enforcement.patawid(id);
+    this.hud.toast(r.text, r.ok ? 'ok' : 'info');
+    if (r.ok) this.audio.whistle(0);
+  }
+
   /** AUTO lights: one signal, or every signal (id null). */
   setAuto(intersectionId, on) {
     const sim = this.session?.sim;
@@ -452,6 +573,7 @@ export class Game {
       dt: dtReal,
       interactive: playing,
       overlay: this.state.overlay,
+      tool: this.state.tool,
       emergencyInfo: playing && !this.state.watch ? (v) => this.emergencyInfo(v) : null,
     });
     const events = sim.drainEvents();

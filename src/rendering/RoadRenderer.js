@@ -751,6 +751,44 @@ export class RoadRenderer {
     }
   }
 
+  /** A contraflow lane: orange cones, a CONTRAFLOW sign and a blinking arrow board. */
+  _drawZone(ctx, z, time) {
+    const n = Math.min(z.placed, z.cones.length);
+    for (let i = 0; i < n; i++) {
+      const c = z.cones[i];
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.arc(c.x + 0.15, c.y + 0.2, 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 0.42, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (n < 2) return;
+    const a = z.cones[0];
+    const b = z.cones[Math.min(n - 1, 5)];
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    ctx.fillStyle = '#111827';
+    ctx.save();
+    ctx.translate(a.x, a.y);
+    ctx.rotate(ang);
+    ctx.fillRect(-4.5, -1.1, 3.4, 2.2);
+    const on = Math.floor(time * 2) % 2 === 0;
+    ctx.fillStyle = on ? '#fbbf24' : '#3f3f46';
+    for (let k = 0; k < 3; k++) ctx.fillRect(-4.2 + k * 1, -0.2, 0.6, 0.4);
+    ctx.restore();
+    worldText(ctx, z.state === 'open' ? 'CONTRAFLOW' : z.state === 'closing' ? 'CLOSING' : 'CONES…', a.x, a.y - 2.4, 1.1, '#fbbf24');
+  }
+
   /** Outline of a stretch of a lane (from s0 to s1 along it, w wide) as a closed path. */
   _laneStrip(ctx, lane, s0, s1, w) {
     const P = lane.path;
@@ -1285,9 +1323,11 @@ export class RoadRenderer {
         worldText(ctx, 'NEXT JUNCTION', q.x, q.y, 1.2, 'rgba(255,255,255,0.85)', q.angle + Math.PI / 2);
       }
     }
+    // Contraflow lanes: the cones (going up one by one), the sign and a flashing arrow board
+    for (const z of sim.counterflow?.zones || []) this._drawZone(ctx, z, time);
     // Blockages: cones + barrier + label
     for (const b of sim.blockages) {
-      if (!b.active || b.kind === 'ped' || b.kind === 'laneEnd') continue;
+      if (!b.active || b.kind === 'ped' || b.kind === 'laneEnd' || b.kind === 'cf') continue;
       for (const lane of b.laneObjs) {
         const A = lane.startInt.arms[lane.startArm];
         withFrame(ctx, this._g(lane.startInt, lane.startArm), A.exitStop + b.s, lane.offset, () => {
@@ -1302,6 +1342,19 @@ export class RoadRenderer {
           ctx.fillStyle = blink ? '#fbbf24' : '#92400e';
           ctx.fillRect(1.4, -1.2, 0.4, 0.4);
           ctx.fillRect(1.4, 0.8, 0.4, 0.4);
+          if (b.towing !== undefined) {
+            // tow truck backed up to the wreck
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            ctx.fillRect(8.8, -1.0, 6.6, 2.3);
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(8.6, -1.15, 6.4, 2.3);
+            ctx.fillStyle = '#1f2937';
+            ctx.fillRect(12.6, -1.0, 2.2, 2.0);
+            ctx.fillStyle = '#9ca3af';
+            ctx.fillRect(7.8, -0.12, 1.2, 0.24);
+            ctx.fillStyle = blink ? '#f97316' : '#fde68a';
+            ctx.fillRect(13.6, -1.15, 0.5, 2.3);
+          }
           for (let k = -1; k <= 1; k++) {
             ctx.fillStyle = '#f97316';
             ctx.beginPath();

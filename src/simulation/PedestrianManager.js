@@ -216,6 +216,8 @@ export class PedestrianManager {
     const m = this.sim.lights.manager(c.I.id);
     if (!m) return 'walk';
     if (m.state === PHASE.FLASH) return 'gap';
+    // Patawid: the enforcer holds all traffic, every crosswalk walks
+    if (m.pedHold) return m.pedHoldLeft > 3 ? 'walk' : 'flash';
     if (m.state === PHASE.ALL_RED) return 'stop';
     // Only the crosswalk on the right of a green road walks: its straight and left traffic never
     // drives over it, and its right turners give way to people (the shared conflict grid).

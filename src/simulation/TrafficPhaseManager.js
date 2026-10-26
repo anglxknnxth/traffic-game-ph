@@ -215,6 +215,7 @@ export class TrafficPhaseManager {
     if (group === this.nextGroup) return { status: 'ignored', reason: 'Already changing', early: false, wait: this.remaining() };
     // Picking the current group during yellow cancels the change: it simply stays green.
     if (this.state === PHASE.YELLOW && group === this.activeGroup) {
+      this.hold = null;
       this.state = PHASE.GREEN;
       this.nextGroup = null;
       this.timer = 0;
@@ -224,6 +225,29 @@ export class TrafficPhaseManager {
     // Otherwise the transition in progress is redirected to the new group.
     this.nextGroup = group;
     return { status: 'accepted', reason: 'Redirected', early: false, wait: this.remaining() };
+  }
+
+  /**
+   * Patawid: hold every road on red for `secs` so people can cross (an enforcer's call), then give
+   * the green back to the road that had it. Returns false when already holding.
+   */
+  holdForPeople(secs = 12) {
+    if (this.hold || this.state === PHASE.FLASH) return false;
+    const resume = this.state === PHASE.GREEN ? this.activeGroup : this.nextGroup || this.activeGroup;
+    this.hold = { secs, resume };
+    if (this.state === PHASE.GREEN) this._beginYellow(resume);
+    else this.nextGroup = resume;
+    return true;
+  }
+
+  /** True while every road is held for people crossing (after the clearance). */
+  get pedHold() {
+    return !!this.hold && this.state === PHASE.ALL_RED && this.timer >= this.allRed;
+  }
+
+  /** Seconds left of a people hold. */
+  get pedHoldLeft() {
+    return this.hold ? Math.max(0, this.allRed + this.hold.secs - (this.state === PHASE.ALL_RED ? this.timer : 0)) : 0;
   }
 
   /** Change to flashing yellow (through the normal yellow and all-red clearance). */
@@ -282,7 +306,11 @@ export class TrafficPhaseManager {
         }
         break;
       case PHASE.ALL_RED:
-        if (this.timer >= this.allRed) {
+        if (this.timer >= this.allRed + (this.hold ? this.hold.secs : 0)) {
+          if (this.hold) {
+            if (this.nextGroup !== FLASH_GROUP && !this.byId.has(this.nextGroup)) this.nextGroup = this.hold.resume;
+            this.hold = null;
+          }
           this.timer = 0;
           if (this.nextGroup === FLASH_GROUP) {
             this.state = PHASE.FLASH;

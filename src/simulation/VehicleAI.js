@@ -59,8 +59,9 @@ export class VehicleAI {
     v.signal = null;
     const front = v.s + v.hl;
 
-    // 1. Car following
-    const lead = sim.findLeader(v, Math.max(55, v.v * 5));
+    // 1. Car following (out in the oncoming lane the queue beside us is no leader)
+    const cfRun = v.cf && v.cf.phase !== 'in';
+    const lead = cfRun ? null : sim.findLeader(v, Math.max(55, v.v * 5));
     if (lead) {
       v.leaderId = lead.vehicle.id;
       let s0 = P.minGap * env.gapFactor;
@@ -115,9 +116,19 @@ export class VehicleAI {
       }
     }
 
+    // 1b. Counterflow: drive up to the chosen spot (or stop where caught)
+    const cfLim = sim.counterflow.frontLimit(v);
+    if (cfLim !== null) {
+      const aCf = idmStop(v.v, cfLim - front, v0, aMax, b);
+      if (aCf < acc) {
+        acc = aCf;
+        constraint = 'counterflow';
+      }
+    }
+
     // 2. Intersection entry (tunnel lanes simply drive on under an underpass)
     const ce = v.nextConnEntry();
-    if (ce && !ce.seg.under) {
+    if (ce && !ce.seg.under && !(v.cf && !v.cf.emergency)) {
       const conn = ce.seg;
       const I = conn.intersection;
       const distToStop = ce.start - front;
@@ -142,11 +153,13 @@ export class VehicleAI {
         let want = false;
         let duringYellow = false;
         if (distToStop <= reqDist) {
-          if (sig === 'green' || sig === 'flash' || sirens || rtor) want = true;
+          if (sig === 'green' || sig === 'flash' || sirens || rtor || v.waved > sim.time) want = true;
           else if (sig === 'yellow') {
             const stopNeed = (v.v * v.v) / (2 * b);
             const t = distToStop / Math.max(v.v, 0.1);
-            want = stopNeed > distToStop - 0.3 || (v.v > 4 && t < P.yellowRunTime);
+            // Nobody pushes a late yellow in front of an enforcer.
+            const runTime = sim.enforcement.near(I) ? P.yellowRunTime * 0.3 : P.yellowRunTime;
+            want = stopNeed > distToStop - 0.3 || (v.v > 4 && t < runTime);
             duringYellow = want;
           }
         }
@@ -338,6 +351,7 @@ export class VehicleAI {
     if (!CORNER_STOP_TYPES.has(v.type) || I.kind !== 'signal' || v.boxBlocker || v.cornerStopAt === I.id) return;
     if (conn.movement !== 'straight' && conn.movement !== 'right') return;
     if (conn.toLane.type !== 'general' || sim.emergencyClaimFor(v, I, conn)) return;
+    if (sim.enforcement.near(I)) return; // BAWAL MAGBABA: not with an enforcer watching
     if (!sim.rng.chance(sim.cornerStopRate)) return;
     v.cornerStopAt = I.id;
     v.cornerStop = { I, conn, s: connStart + conn.length - 0.6, duration: sim.rng.range(3, 7), timer: 0, state: 'pending' };
@@ -395,6 +409,10 @@ export class VehicleAI {
       if (v.cornerStop.timer <= 0) v.cornerStop.state = 'done';
     }
     if (v.sayTimer > 0) v.sayTimer -= dt;
+    // Pulling over for a siren coming up the wrong side (drawing only)
+    const pt = v.pullTo || 0;
+    v.pullTo = 0;
+    v.pull = (v.pull || 0) + (pt - (v.pull || 0)) * Math.min(1, dt * 2);
 
     v.state = this.classify(v, sim);
     if (!v.emergency) this.horn(v, sim);

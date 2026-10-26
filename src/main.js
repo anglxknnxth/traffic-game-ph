@@ -16,6 +16,18 @@ if (play) {
   // Dev server only: &ff=60 fast-forwards the simulation, &zoom=2&x=0&y=-80 frames the camera.
   if (import.meta.env.DEV && game.session) {
     const q = new URLSearchParams(location.search);
+    // &enf=A stations an enforcer at A; &cone=A:N cones off a contraflow lane beside A's North road.
+    const sim = game.session.sim;
+    if (q.get('enf')) for (const id of q.get('enf').split(',')) sim.enforcement.toggle(id);
+    if (q.get('cone')) {
+      const [cid, arm] = q.get('cone').split(':');
+      const lane = sim.network.byId.get(cid)?.approachLanes[arm]?.[0];
+      if (lane) sim.counterflow.openZone(lane);
+    }
+    if (q.get('enf') || q.get('cone')) {
+      game.hud.buildPanels(sim);
+      game.hud.syncControls();
+    }
     const ff = Number(q.get('ff')) || 0;
     for (let i = 0; i < ff * 60; i++) game.update(1 / 60);
     if (q.get('zoom')) {

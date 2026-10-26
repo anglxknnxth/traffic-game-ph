@@ -74,6 +74,8 @@ export class HUD {
           <button class="icon-btn" data-act="metrics" title="Toggle metrics">${ICONS.stats}</button>
           <button class="icon-btn mon-btn" data-act="monitor" title="Monitor: queues, throughput, green timeline (T)">📡</button>
           <button class="icon-btn heat-btn" data-act="heat" title="Speed heatmap and queue counts on the map (O)">🌡️</button>
+          <button class="icon-btn tool-btn" data-act="enforcer" title="Station a traffic enforcer at a junction" hidden>👮<small class="tool-n"></small></button>
+          <button class="icon-btn tool-btn" data-act="contraflow" title="Cone off a contraflow lane (60 s)" hidden>🚧</button>
           <button class="icon-btn watch-btn" data-act="watch" title="Watch mode: hide the controls and let the camera find the action (H)">👁</button>
           <button class="icon-btn auto-all" data-act="autoall" title="AUTO LAHAT: every light runs itself (click a light to take it over)" hidden>AUTO</button>
         </div>
@@ -110,6 +112,8 @@ export class HUD {
       ticker: root.querySelector('.tk-text'),
       monitor: root.querySelector('.hud-monitor'),
       monBtn: root.querySelector('[data-act="monitor"]'),
+      enfBtn: root.querySelector('[data-act="enforcer"]'),
+      cfBtn: root.querySelector('[data-act="contraflow"]'),
       heatBtn: root.querySelector('[data-act="heat"]'),
     };
     this.monitor = new Monitor(this.el.monitor);
@@ -175,7 +179,7 @@ export class HUD {
         ${multi || auto ? `<div class="sig-title">${multi ? `Intersection ${id}${tabbed ? ` · ${this._junctionName(sim, id)}` : ''}` : ''}${auto}</div>` : ''}
         <div class="sig-row">
           ${left}
-          <div class="phase"><b class="phase-label"></b><span class="phase-count"></span><button class="flash-btn" data-flash="${id}" title="Flashing yellow: every road stops, then goes when clear (Y)">⚠ Flash</button></div>
+          <div class="phase"><b class="phase-label"></b><span class="phase-count"></span><button class="flash-btn" data-flash="${id}" title="Flashing yellow: every road stops, then goes when clear (Y)">⚠ Flash</button>${sim.enforcement.near(sim.network.byId.get(id)) ? `<button class="flash-btn patawid-btn" data-patawid="${id}" title="The enforcer stops all traffic so people can cross (12 s)">🚸 Patawid</button>` : ''}</div>
           ${right}
         </div>
       </div>`;
@@ -245,6 +249,13 @@ export class HUD {
     this.el.monBtn.classList.toggle('active', !!g.state.showMonitor);
     this.el.heatBtn.classList.toggle('active', g.state.overlay === 'heat');
     this.root.classList.toggle('watch', !!g.state.watch);
+    const sim = this.session?.sim;
+    const enf = sim?.enforcement;
+    this.el.enfBtn.hidden = !enf || enf.max <= 0;
+    this.el.cfBtn.hidden = !enf || enf.max <= 0;
+    if (enf) this.el.enfBtn.querySelector('.tool-n').textContent = `${enf.available}`;
+    this.el.enfBtn.classList.toggle('active', g.state.tool === 'enforcer');
+    this.el.cfBtn.classList.toggle('active', g.state.tool === 'contraflow');
     this.root.querySelector('[data-act="watch"]').classList.toggle('active', !!g.state.watch);
     this.root.classList.toggle('metrics-hidden', !g.state.showMetrics);
   }
@@ -260,6 +271,11 @@ export class HUD {
     const tab = e.target.closest('[data-tab]');
     if (tab) {
       this.select(tab.dataset.tab);
+      return;
+    }
+    const pw = e.target.closest('[data-patawid]');
+    if (pw) {
+      g.patawid(pw.dataset.patawid);
       return;
     }
     const auto = e.target.closest('[data-auto]');
@@ -316,6 +332,12 @@ export class HUD {
         break;
       case 'heat':
         g.toggleOverlay();
+        break;
+      case 'enforcer':
+        g.setTool('enforcer');
+        break;
+      case 'contraflow':
+        g.setTool('contraflow');
         break;
       case 'watch':
         g.toggleWatch();

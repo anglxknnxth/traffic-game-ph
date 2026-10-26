@@ -13,6 +13,9 @@ export function settingsMarkup(save, confirmReset = false) {
         <div class="seg">${[1, 2, 3].map((n) => `<button data-set="speed" data-value="${n}" class="${s.speed === n ? 'active' : ''}">${n}x</button>`).join('')}</div>
       </div>
       <label class="field check"><input type="checkbox" ${s.showMetrics ? 'checked' : ''} data-set="showMetrics" /><span>Show traffic metrics panel</span></label>
+      <label class="field check"><input type="checkbox" ${s.rain !== false ? 'checked' : ''} data-set="rain" /><span>🌧️ Ulan (rain showers)</span></label>
+      <label class="field check"><input type="checkbox" ${s.people !== false ? 'checked' : ''} data-set="people" /><span>🚶 Mga tao (pedestrians)</span></label>
+      <p class="muted small">Rain and people changes apply from the next game you start (or Restart).</p>
       <label class="field check"><input type="checkbox" ${s.debug ? 'checked' : ''} data-set="debug" /><span>Show intersection reservations (debug)</span></label>
       <div class="field danger-zone">
         ${confirmReset ? '<span>Erase all progress and scores?</span><div class="row-btns"><button class="btn danger" data-set="reset-confirm">Yes, erase</button><button class="btn" data-set="reset-cancel">Cancel</button></div>' : '<button class="btn ghost" data-set="reset">Reset progress…</button>'}
@@ -32,6 +35,7 @@ export function bindSettings(root, game, rerender) {
         if (key === 'musicOn') game.setMusicOn(el.checked);
         if (key === 'showMetrics') game.setShowMetrics(el.checked);
         if (key === 'debug') game.setDebug(el.checked);
+        if (key === 'rain' || key === 'people') game.setWorldOption(key, el.checked);
       });
     } else {
       el.addEventListener('click', () => {

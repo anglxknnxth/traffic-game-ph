@@ -25,6 +25,8 @@ export const DEFAULT_SAVE = Object.freeze({
     speed: 1,
     debug: false,
     showMetrics: true,
+    rain: true, // rain showers in every mode
+    people: true, // pedestrians in every mode
   },
 });
 
@@ -93,6 +95,8 @@ export function validateSave(raw) {
     if ([1, 2, 3].includes(s.speed)) d.settings.speed = s.speed;
     if (typeof s.debug === 'boolean') d.settings.debug = s.debug;
     if (typeof s.showMetrics === 'boolean') d.settings.showMetrics = s.showMetrics;
+    if (typeof s.rain === 'boolean') d.settings.rain = s.rain;
+    if (typeof s.people === 'boolean') d.settings.people = s.people;
   }
   return d;
 }

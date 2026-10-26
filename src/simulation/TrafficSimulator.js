@@ -26,6 +26,8 @@ import { PedestrianManager } from './PedestrianManager.js';
 import { SignalAutopilot } from './Autopilot.js';
 import { EventScheduler } from './EventScheduler.js';
 import { CityGrowth } from './CityGrowth.js';
+import { CounterflowManager } from './Counterflow.js';
+import { Enforcement } from './Enforcement.js';
 
 const METRIC_INTERVAL = 0.25;
 const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's stop lines
@@ -98,6 +100,8 @@ export class TrafficSimulator {
     this.openNodes = null;
     this.demandMul = 1;
     this.growth = level.growth ? new CityGrowth(this, level.growth) : null;
+    this.enforcement = new Enforcement(this);
+    this.counterflow = new CounterflowManager(this);
   }
 
   resetStats() {
@@ -169,6 +173,8 @@ export class TrafficSimulator {
     this._updateMergers();
     this.laneChanger.update();
     this.collision.rebuild(vehicles);
+    this.counterflow.update(dt);
+    this.enforcement.update(dt);
     for (let i = 0; i < vehicles.length; i++) this.ai.decide(vehicles[i]);
     for (let i = 0; i < vehicles.length; i++) this.move(vehicles[i], dt);
     this.postMove();
@@ -220,6 +226,8 @@ export class TrafficSimulator {
     if (v.cornerStop && v.cornerStop.state === 'stopped') lim = Math.min(lim, v.front);
     const sh = this.sharedFrontLimit(v);
     if (sh !== null && sh < lim) lim = sh;
+    const cf = this.counterflow.frontLimit(v);
+    if (cf !== null && cf < lim) lim = cf;
     return lim;
   }
 
@@ -297,6 +305,7 @@ export class TrafficSimulator {
       const ce = v.nextConnEntry();
       if (ce && v.front >= ce.start && (ce.seg.under || v.reservations.has(ce.seg.intersection.id))) {
         if (v.emergency && !v.emergencyDone) this._emergencyCleared(v, ce);
+        this._checkRedRun(v, ce.seg);
         ce.seg.fromLane.lastCross = this.time;
         v.nextConn++;
       }
@@ -347,6 +356,16 @@ export class TrafficSimulator {
       }
       for (let i = 0; i < list.length; i++) list[i].segOrder = i;
     }
+  }
+
+  /** Crossing the stop line on red (not a right turn on red, not waved through): a violation. */
+  _checkRedRun(v, conn) {
+    const I = conn.intersection;
+    if (v.emergency || conn.under || I.kind !== 'signal') return;
+    if (this.lights.signal(I.id, conn.arm, conn.movement) !== 'red') return;
+    if (conn.movement === 'right' || this.hasPass(v) || v.waved > this.time || this.isEscort(v, I)) return;
+    this.enforcement.mark(v, 'red', 10);
+    this.stats.redRuns = (this.stats.redRuns || 0) + 1;
   }
 
   _removeFromSeg(seg, v) {
@@ -405,8 +424,11 @@ export class TrafficSimulator {
     if (seg.ghosts && seg.ghosts.size) {
       for (const g of seg.ghosts) if (g !== v && g.localS > v.localS && (!ghost || g.localS < ghost.localS)) ghost = g;
     }
-    if (idx >= 0 && idx + 1 < list.length) {
-      const o = list[idx + 1];
+    // Someone out in the oncoming lane beside us is not our leader (until they cut back in).
+    let next = idx + 1;
+    while (next < list.length && list[next].cf && list[next].cf.phase !== 'in' && list[next].localS - list[next].hl - v.localS - v.hl < 0.5) next++;
+    if (idx >= 0 && next < list.length) {
+      const o = list[next];
       const lead = ghost && ghost.localS < o.localS ? ghost : o;
       return { vehicle: lead, gap: lead.localS - lead.hl - v.localS - v.hl };
     }
@@ -465,6 +487,7 @@ export class TrafficSimulator {
   isLaneHead(v, ce) {
     const E = v.route.entries;
     if (E[v.segIdx + 1] !== ce) return false;
+    if (v.cf?.emergency) return true; // it came up the oncoming lane, beside the queue
     const list = v.segment.vehicles;
     const id = ce.seg.intersection.id;
     let idx = v.segOrder;
@@ -659,7 +682,9 @@ export class TrafficSimulator {
       return false;
     }
     const sig = I.kind === 'signal' ? this.lights.signal(I.id, conn.arm, conn.movement) : 'green';
-    const onRed = sig === 'red' && !v.emergency && !this.isEscort(v, I);
+    // Padaanin: an enforcer waves this vehicle through its red when nothing crossing is coming.
+    const waved = sig === 'red' && v.waved > this.time && this.clearToRoll(v, conn, sig, false);
+    const onRed = sig === 'red' && !v.emergency && !this.isEscort(v, I) && !waved;
     if (onRed && conn.movement === 'right') {
       // Right turn on red: give way to everything the green releases across or into our path.
       const g = this.rightOnRedBlocker(v, conn);
@@ -703,8 +728,10 @@ export class TrafficSimulator {
       // Patient drivers never enter without exit space.
       if (v.p.tightAccept > 0 && v.greenWait > v.p.patience) p += space === 'tight' ? 0.2 : 0.08;
       p *= this.level.boxBlockFactor ?? 1;
+      if (this.enforcement.near(I)) p *= 0.2; // nobody squeezes in under an enforcer's nose
       if (!this.rng.chance(Math.min(0.95, p))) return false;
       v.boxBlocker = true;
+      this.enforcement.mark(v, 'box', 20);
       this.stats.boxBlockEntries++;
       this.scoring.onBoxBlock();
     }
@@ -746,10 +773,12 @@ export class TrafficSimulator {
       const ce = v.nextConnEntry();
       if (!ce || ce.seg.under) continue;
       const dist = ce.start - v.front;
-      if (dist > EMERGENCY_CLAIM_DIST) continue;
-      // Stuck far back in a queue that is not moving yet: cross traffic need not stop for it.
-      if (dist > 35 && v.v < 1) continue;
       const I = ce.seg.intersection;
+      // An enforcer at the junction stops cross traffic for it twice as far out (escort).
+      const reach = EMERGENCY_CLAIM_DIST * (this.enforcement.near(I) ? 2 : 1);
+      if (dist > reach) continue;
+      // Stuck far back in a queue that is not moving yet: cross traffic need not stop for it.
+      if (dist > 35 && v.v < 1 && !this.enforcement.near(I)) continue;
       const lane = v.segment.kind === 'lane' && v.segment.endInt === I ? v.segment : null;
       claims.push({ I, v, lane, dist, conn: ce.seg });
     }
@@ -869,7 +898,7 @@ export class TrafficSimulator {
 
   /** Is v stuck: stopped in or at the box for a while (and not just waiting at a red)? */
   isStuck(v) {
-    if (v.emergency || v.v > 0.5 || v.stoppedTime < 1.5) return false;
+    if (v.emergency || v.cf || v.v > 0.5 || v.stoppedTime < 1.5) return false;
     if (v.segment.kind === 'connector') return true;
     if (v.state === 'BLOCKED_IN_INTERSECTION') return true;
     const ce = v.nextConnEntry();
@@ -904,6 +933,7 @@ export class TrafficSimulator {
     v.say = lines[(v.seq + this.stats.cornerStops) % lines.length];
     v.sayTimer = 1.8;
     this.notify('CORNER_STOP', NOTIFY_TEXT.CORNER_STOP, 'info');
+    this.enforcement.mark(v, 'stop', C.duration + 3);
     this.peds.alight?.(v, C.I, C.conn.exitArm);
   }
 

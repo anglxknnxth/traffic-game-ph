@@ -114,7 +114,7 @@ export class LaneChanger {
 
   choose(v) {
     const seg = v.segment;
-    if (seg.kind !== 'lane' || v.reservations.size || v.broken || v.loading?.state === 'stopped') return null;
+    if (seg.kind !== 'lane' || v.cf || v.reservations.size || v.broken || v.loading?.state === 'stopped') return null;
     if (v.localS - v.hl < 1) return null; // still leaving the box
     const moto = v.type === 'motorcycle';
     const minSpeed = moto ? 0.3 : 1.2;

@@ -269,3 +269,72 @@ describe('Map layout', () => {
     }
   });
 });
+
+describe('Counterflow and enforcers', () => {
+  const cfLevel = (over = {}) =>
+    makeLevel({
+      map: 'poblacion',
+      prewarm: 0,
+      demandScale: 1,
+      demand: { N: 14, S: 6, E: 6, W: 6 },
+      mix: { car: 0.35, motorcycle: 0.35, tricycle: 0.1, jeepney: 0.1, suv: 0.1 },
+      personalities: { patient: 0.2, impatient: 0.4, aggressive: 0.4 },
+      turns: { left: 0.15, right: 0.15 },
+      counterflow: { moto: 0.6, car: 0.3, minWait: 6, minQueue: 3, emergency: true },
+      enforcer: { count: 2 },
+      emergency: { times: [30, 70] },
+      initialGroups: { A: 'E' },
+      ...over,
+    });
+
+  it('pasaway counterflow stays collision-free, and HULI! sends them back', () => {
+    const sim = new TrafficSimulator(cfLevel(), { seed: 9 });
+    let caught = 0;
+    run(sim, 180, (s, i) => {
+      if (i % (25 * 60) === 0) s.requestPhase('A', ['N', 'E', 'W'][(i / (25 * 60)) % 3]);
+      if (i % 600 === 300) for (const v of s.counterflow.active) if (s.enforcement.catchVehicle(v)) caught++;
+    });
+    expect(sim.stats.counterflows || 0).toBeGreaterThan(0);
+    expect(caught).toBeGreaterThan(0);
+    // caught vehicles never try again
+    for (const v of sim.vehicles) if (v.caught) expect(!v.cf || v.cf.forced).toBe(true);
+  });
+
+  it('a contraflow lane opens behind its cones, gets used, and nobody hits anything', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 16, S: 5, E: 5, W: 5 }, mix: { car: 0.6, motorcycle: 0.4 }, initialGroups: { A: 'E' }, enforcer: { count: 2 } }), { seed: 2 });
+    const lane = sim.network.byId.get('A').approachLanes.N[0];
+    const users = new Set();
+    run(sim, 120, (s, i) => {
+      if (i === 10 * 60) expect(typeof s.counterflow.openZone(lane)).toBe('object');
+      if (i === 60 * 60) s.requestPhase('A', 'N');
+      for (const v of s.counterflow.active) if (v.cf.legal) users.add(v.id);
+    });
+    expect(users.size).toBeGreaterThan(0);
+  });
+
+  it('an enforcer: patawid walks every crosswalk then gives the green back; padaanin needs one', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 8, S: 8, E: 8, W: 8 }, enforcer: { count: 1 }, pedestrians: { cross: 3, jaywalk: 0, strollers: 0 }, initialGroups: { A: 'E' } }), { seed: 3 });
+    expect(sim.enforcement.patawid('A').ok).toBe(false); // nobody stationed yet
+    expect(sim.enforcement.toggle('A').ok).toBe(true);
+    expect(sim.enforcement.toggle('A').ok).toBe(true); // off duty again
+    sim.enforcement.toggle('A');
+    expect(sim.enforcement.patawid('A').ok).toBe(true);
+    let allWalk = 0;
+    run(sim, 20, (s, i) => {
+      if (i % 30) return;
+      if (s.peds.crossings.every((c) => s.peds.walkState(c) === 'walk')) allWalk++;
+    });
+    expect(allWalk).toBeGreaterThan(5);
+    expect(sim.lights.manager('A').greenGroups()).toEqual(['E']);
+  });
+
+  it('world options: no rain, no people', () => {
+    const lvl = lm.withOptions(lm.get('pinoy', 'taft'), { rain: false, people: false });
+    expect(lvl.pedestrians).toBeNull();
+    expect(lvl.objectives.some((o) => o.type === 'pedCrossed')).toBe(false);
+    const sim = lm.createSim(lvl, 1);
+    expect(sim.peds.enabled).toBe(false);
+    expect(sim.env.weather).toBe('clear');
+    expect(sim.env.random).toBe(false);
+  });
+});

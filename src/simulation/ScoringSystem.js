@@ -22,6 +22,7 @@ export class ScoringSystem {
       emergencyPenalty: 0,
       peds: 0,
       pedWaiting: 0,
+      enforcement: 0,
     };
     this.safety = 100;
     this.counts = { processed: 0, earlyRequests: 0, boxBlocks: 0, emergencies: 0, slowEmergencies: 0, recoveries: 0 };
@@ -72,6 +73,22 @@ export class ScoringSystem {
     if (longWaiting > 0) this.b.pedWaiting -= Math.min(longWaiting, 20) * 0.05 * dt;
   }
 
+  /** HULI! A violator caught. */
+  onCatch() {
+    this.b.enforcement += 40;
+    this.safety = Math.min(100, this.safety + 0.5);
+  }
+
+  /** A jaywalker sent back to the crosswalk. */
+  onSaway() {
+    this.b.enforcement += 6;
+  }
+
+  /** A counterflowing vehicle is holding up oncoming traffic. */
+  onCounterflowBlock(dt) {
+    this.b.unsafe -= 2 * dt;
+  }
+
   onRecovery(fromLevel) {
     this.counts.recoveries++;
     this.b.recovery += fromLevel === CONGESTION.GRIDLOCK ? 60 : 25;
@@ -90,7 +107,7 @@ export class ScoringSystem {
 
   positive() {
     const b = this.b;
-    return b.flow + b.waitBonus + b.emergency + b.recovery + b.peds;
+    return b.flow + b.waitBonus + b.emergency + b.recovery + b.peds + b.enforcement;
   }
 
   negative() {
@@ -121,6 +138,7 @@ export class ScoringSystem {
             { label: 'Pedestrians kept waiting', value: r(this.b.pedWaiting) },
           ]
         : []),
+      ...(this.b.enforcement ? [{ label: 'Enforcement (HULI!)', value: r(this.b.enforcement) }] : []),
       { label: 'Safety rating', value: `${Math.round(this.safety)}%` },
     ];
   }

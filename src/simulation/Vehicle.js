@@ -169,8 +169,32 @@ export class Vehicle {
     this.updatePose();
   }
 
+  /** Sideways offset while out in the oncoming lane (counterflow), + = right of travel. */
+  _cfOff(s) {
+    const cf = this.cf;
+    if (!cf) return 0;
+    const d = cf.decay;
+    if (d) {
+      const t = (s - d.s0) / d.L;
+      if (t >= 1) return 0;
+      if (t <= 0) return d.off0;
+      return d.off0 * 0.5 * (1 + Math.cos(Math.PI * t));
+    }
+    return this.cfOff || 0;
+  }
+
   _pose(s) {
     this.route.sample(s, _p);
+    if (this.cf) {
+      const off = this._cfOff(s);
+      if (off !== 0) {
+        const c = Math.cos(_p.angle);
+        const sn = Math.sin(_p.angle);
+        _p.x += -sn * off;
+        _p.y += c * off;
+        _p.angle += this.cfYaw || 0;
+      }
+    }
     if (this.lc) {
       lateralAt(this.lc, s, _lat);
       if (_lat.off !== 0 || _lat.slope !== 0) {

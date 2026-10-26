@@ -36,6 +36,10 @@ const BASE = {
 const DETAILS = {
   pedestrians: { cross: 1.0, jaywalk: 0.4, strollers: 1.2 },
   env: { hour: 9.5, rate: 0.3, random: true },
+  // Pasaway counterflow on undivided roads (chance per try for a motorcycle / a private car or
+  // jeepney), emergency vehicles using the oncoming lane, and traffic enforcers to station.
+  counterflow: { moto: 0.25, car: 0.05, minWait: 10, minQueue: 4, emergency: true },
+  enforcer: { count: 2 },
 };
 
 function level(def) {
@@ -54,6 +58,7 @@ export const CAREER_LEVELS = [
     demand: { N: 6, S: 6, E: 5, W: 5 },
     pedestrians: { cross: 0.6, jaywalk: 0, strollers: 1.2 },
     env: { hour: 9, rate: 0.2 },
+    counterflow: { moto: 0, car: 0, emergency: true },
     turns: { left: 0.06, right: 0.1 },
     personalities: { patient: 0.9, impatient: 0.1, aggressive: 0 },
     mix: { car: 0.8, suv: 0.2 },
@@ -71,6 +76,7 @@ export const CAREER_LEVELS = [
     demand: { N: 10, S: 10, E: 8, W: 8 },
     pedestrians: { cross: 0.8, jaywalk: 0.2, strollers: 1.2 },
     env: { hour: 11, rate: 0.25 },
+    counterflow: { moto: 0, car: 0, emergency: true },
     mix: { car: 0.65, van: 0.15, suv: 0.12, pickup: 0.08 },
     objectives: [
       { type: 'processed', target: 60 },
@@ -84,7 +90,7 @@ export const CAREER_LEVELS = [
     name: 'Motor Everywhere',
     subtitle: 'Motorcycles and mixed speeds',
     description: 'Motorcycles accelerate fast; vans and cars are slower to clear the box.',
-    tip: 'Short, frequent phases help when vehicles discharge quickly.',
+    tip: 'Short, frequent phases help when vehicles discharge quickly. NEW: pasaway riders counterflow into the oncoming lane: tap one (red !) and HULI! it goes back. Station an 👮 enforcer at the junction and nobody tries it.',
     duration: 150,
     demand: { N: 11, S: 11, E: 9, W: 9 },
     mix: { car: 0.42, motorcycle: 0.38, van: 0.07, suv: 0.08, pickup: 0.05 },
@@ -151,7 +157,7 @@ export const CAREER_LEVELS = [
     loadingStops: 0.5,
     downstream: { rate: 0.45, variability: 0.4, exits: { 'A:E': { rate: 0.075, gateAt: 82 } } },
     objectives: [
-      { type: 'processed', target: 90 },
+      { type: 'processed', target: 80 },
       { type: 'avgWait', target: 38 },
     ],
     stars: [1700, 2100],
@@ -170,11 +176,11 @@ export const CAREER_LEVELS = [
     loadingStops: 0.55,
     downstream: { rate: 0.4, variability: 0.45, exits: { 'A:N': { rate: 0.06, gateAt: 74 }, 'A:W': { rate: 0.08, gateAt: 82 } } },
     objectives: [
-      { type: 'processed', target: 95 },
+      { type: 'processed', target: 80 },
       { type: 'maxGridlockTime', target: 60 },
     ],
     fail: { congestion: 0.95, time: 50 },
-    stars: [1600, 2000],
+    stars: [1350, 1750],
   }),
   level({
     id: 8,
@@ -191,10 +197,10 @@ export const CAREER_LEVELS = [
     downstream: { rate: 0.5, variability: 0.3, exits: { 'A:S': { rate: 0.08, gateAt: 80 } } },
     emergency: { times: [22, 70, 118, 160] },
     objectives: [
-      { type: 'processed', target: 90 },
-      { type: 'emergency', target: 30 },
+      { type: 'processed', target: 85 },
+      { type: 'emergency', target: 35 },
     ],
-    stars: [2000, 2450],
+    stars: [1700, 2150],
   }),
   level({
     id: 9,
@@ -234,12 +240,12 @@ export const CAREER_LEVELS = [
     blockages: [{ exit: 'A:S', lanes: [1], s: 24, start: 100, end: 130, label: 'STALLED BUS' }],
     emergency: { times: [40, 110, 170] },
     objectives: [
-      { type: 'processed', target: 115 },
-      { type: 'avgWait', target: 50 },
-      { type: 'emergency', target: 45 },
+      { type: 'processed', target: 90 },
+      { type: 'avgWait', target: 55 },
+      { type: 'emergency', target: 50 },
     ],
     fail: { congestion: 0.96, time: 55 },
-    stars: [1800, 2200],
+    stars: [1400, 1800],
   }),
 ];
 
@@ -293,7 +299,7 @@ export const PINOY_LEVELS = [
       { type: 'pedCrossed', target: 45 },
     ],
     fail: { congestion: 0.95, time: 50 },
-    stars: [2600, 3100],
+    stars: [2450, 2950],
   }),
   level({
     id: 'espana',
@@ -362,7 +368,7 @@ export const PINOY_LEVELS = [
     emergency: { times: [90, 170] },
     env: { hour: 17.8, rate: 0.4 },
     objectives: [
-      { type: 'processed', target: 140 },
+      { type: 'processed', target: 135 },
       { type: 'emergency', target: 40 },
     ],
     fail: { congestion: 0.96, time: 55 },
@@ -387,10 +393,10 @@ export const PINOY_LEVELS = [
     env: { hour: 14, rate: 0.3, weather: [{ t: 0, type: 'clear' }, { t: 90, type: 'rain' }] },
     objectives: [
       { type: 'processed', target: 75 },
-      { type: 'avgWait', target: 45 },
+      { type: 'avgWait', target: 50 },
     ],
     fail: { congestion: 0.95, time: 60 },
-    stars: [1900, 2300],
+    stars: [1750, 2150],
   }),
   level({
     id: 'corridor',
@@ -410,11 +416,11 @@ export const PINOY_LEVELS = [
     loadingStops: 0.35,
     env: { hour: 11, rate: 0.2 },
     objectives: [
-      { type: 'processed', target: 120 },
+      { type: 'processed', target: 110 },
       { type: 'avgWait', target: 45 },
     ],
     fail: { congestion: 0.95, time: 60 },
-    stars: [2900, 3400],
+    stars: [2550, 3000],
   }),
   level({
     id: 'tulay',
@@ -434,11 +440,11 @@ export const PINOY_LEVELS = [
     loadingStops: 0.45,
     env: { hour: 15, rate: 0.35, weather: [{ t: 0, type: 'clear' }, { t: 110, type: 'rain' }] },
     objectives: [
-      { type: 'processed', target: 90 },
+      { type: 'processed', target: 70 },
       { type: 'avgWait', target: 45 },
     ],
     fail: { congestion: 0.95, time: 60 },
-    stars: [2400, 2900],
+    stars: [1900, 2400],
   }),
   level({
     id: 'serbisyo',
@@ -458,11 +464,11 @@ export const PINOY_LEVELS = [
     loadingStops: 0.4,
     env: { hour: 16.5, rate: 0.4, weather: [{ t: 0, type: 'clear' }, { t: 120, type: 'rain' }] },
     objectives: [
-      { type: 'processed', target: 110 },
+      { type: 'processed', target: 90 },
       { type: 'avgWait', target: 45 },
     ],
     fail: { congestion: 0.95, time: 60 },
-    stars: [2600, 3100],
+    stars: [2000, 2500],
   }),
   level({
     id: 'grid',
@@ -481,10 +487,10 @@ export const PINOY_LEVELS = [
     loadingStops: 0.35,
     objectives: [
       { type: 'processed', target: 120 },
-      { type: 'avgWait', target: 50 },
+      { type: 'avgWait', target: 55 },
     ],
     fail: { congestion: 0.95, time: 60 },
-    stars: [3500, 4100],
+    stars: [3000, 3500],
   }),
 ];
 
@@ -595,14 +601,14 @@ export const CHALLENGES = [
     mode: 'challenge',
     name: 'Bilis-Bilis',
     subtitle: 'Keep average waiting time low',
-    description: 'Keep the rolling average wait under 18 seconds for the whole run.',
+    description: 'Keep the rolling average wait under 20 seconds for the whole run.',
     tip: 'Shorter phases mean shorter waits — but every switch costs 2 seconds of yellow and all-red.',
     duration: 150,
     demand: { N: 11, S: 11, E: 9, W: 9 },
     mix: { car: 0.55, motorcycle: 0.3, van: 0.15 },
     personalities: { patient: 0.6, impatient: 0.3, aggressive: 0.1 },
     objectives: [
-      { type: 'rollingWait', target: 18 },
+      { type: 'rollingWait', target: 20 },
       { type: 'processed', target: 70 },
     ],
     stars: [1400, 1700],
@@ -638,7 +644,7 @@ export const CHALLENGES = [
     personalities: { patient: 0.4, impatient: 0.4, aggressive: 0.2 },
     loadingStops: 0.4,
     downstream: { rate: 0.5, variability: 0.35, exits: { 'A:S': { rate: 0.08, gateAt: 80 } } },
-    objectives: [{ type: 'processed', target: 95 }],
+    objectives: [{ type: 'processed', target: 90 }],
     fail: { congestion: 0.75, time: 15 },
     stars: [1700, 2050],
   }),

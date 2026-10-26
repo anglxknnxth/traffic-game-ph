@@ -113,6 +113,11 @@ export class Renderer {
       const s = v.ps === undefined ? v.s : v.ps + (v.s - v.ps) * alpha;
       v.displayPose(s, dp);
       saved.push(v, v.x, v.y, v.angle);
+      if (v.pull > 0.02) {
+        // pulled over to the curb for a siren (drawing only)
+        dp.x += -Math.sin(dp.angle) * v.pull;
+        dp.y += Math.cos(dp.angle) * v.pull;
+      }
       v.x = dp.x;
       v.y = dp.y;
       v.angle = dp.angle;
@@ -153,7 +158,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, emergencyInfo = null, interactive = false, overlay = null } = {}) {
+  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, emergencyInfo = null, interactive = false, overlay = null, tool = null } = {}) {
     const ctx = this.ctx;
     const cam = this.camera;
     this.setNetwork(sim.network);
@@ -199,6 +204,7 @@ export class Renderer {
     for (const v of ground) drawVehicle(ctx, v, time);
     this.effects.drawOver(ctx, ground, time);
     this.effects.drawSmoke(ctx, visible, time);
+    if (sim.enforcement?.posts.size) this.effects.drawEnforcers(ctx, sim, time, tool === 'enforcer');
     if (interactive) this.effects.drawStuck(ctx, sim, ground, time);
     if (sim.network.layered) this.road.drawTrenchShade(ctx);
     if (this.road.hasElevated) {

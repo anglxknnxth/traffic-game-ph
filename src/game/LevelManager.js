@@ -67,6 +67,21 @@ export class LevelManager {
     return lvl;
   }
 
+  /**
+   * The level with the player's world options applied: no rain (clear skies only), and/or no
+   * people (no pedestrians, and no pedestrian objectives).
+   */
+  withOptions(level, { rain = true, people = true } = {}) {
+    if (rain && people) return level;
+    const out = { ...level };
+    if (!rain && level.env) out.env = { ...level.env, weather: [], random: false, start: 'clear' };
+    if (!people) {
+      out.pedestrians = null;
+      out.objectives = (level.objectives || []).filter((o) => o.type !== 'pedCrossed' && o.type !== 'pedWait');
+    }
+    return out;
+  }
+
   /** Build a simulation for a level, including scenario warm-up (real simulated traffic). */
   createSim(level, seed = (Math.random() * 1e9) >>> 0) {
     const sim = new TrafficSimulator(level, { seed });

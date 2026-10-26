@@ -119,17 +119,74 @@ export class EffectsRenderer {
   drawStuck(ctx, sim, vehicles, time) {
     for (const v of vehicles) {
       const pass = sim.hasPass(v);
-      if (!pass && !(v.stoppedTime > 3 && sim.isStuck(v))) continue;
+      // A violator the player can catch (HULI!) gets a red badge
+      const bad = sim.enforcement.violationOf(v);
+      if (!pass && !bad && !(v.stoppedTime > 3 && sim.isStuck(v))) continue;
       const y = v.y - v.hl - 1.6;
       const pulse = 0.5 + 0.5 * Math.sin(time * 5 + v.seq);
-      ctx.fillStyle = pass ? 'rgba(34,197,94,0.95)' : `rgba(245,158,11,${0.75 + 0.25 * pulse})`;
+      ctx.fillStyle = bad ? `rgba(220,38,38,${0.8 + 0.2 * pulse})` : pass ? 'rgba(34,197,94,0.95)' : `rgba(245,158,11,${0.75 + 0.25 * pulse})`;
       ctx.beginPath();
       ctx.arc(v.x, y, 1.05 + (pass ? 0 : 0.15 * pulse), 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = 'rgba(17,24,39,0.8)';
       ctx.lineWidth = 0.14;
       ctx.stroke();
-      worldText(ctx, pass ? 'GO' : '!', v.x, y + 0.04, pass ? 0.85 : 1.3, '#111827');
+      worldText(ctx, bad ? '!' : pass ? 'GO' : '!', v.x, y + 0.04, pass && !bad ? 0.85 : 1.3, bad ? '#ffffff' : '#111827');
+    }
+  }
+
+  /** Traffic enforcers at their posts: blue uniform, white cap, an arm waving traffic on. */
+  drawEnforcers(ctx, sim, time, showReach) {
+    for (const p of sim.enforcement.posts.values()) {
+      if (showReach) {
+        ctx.strokeStyle = 'rgba(59,130,246,0.55)';
+        ctx.lineWidth = 0.3;
+        ctx.setLineDash([1.5, 1.2]);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 40, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const wave = p.wave > 0 ? Math.sin(time * 14) * 0.9 : Math.sin(time * 2.2) * 0.35;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      // a white disc so the officer stands out on the sidewalk
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.arc(0, 0, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#1d4ed8';
+      ctx.lineWidth = 0.25;
+      ctx.stroke();
+      ctx.scale(2.4, 2.4);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.ellipse(0.12, 0.15, 0.45, 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // arm with the white glove
+      ctx.strokeStyle = '#1e3a8a';
+      ctx.lineWidth = 0.16;
+      ctx.beginPath();
+      ctx.moveTo(0.2, 0);
+      ctx.lineTo(0.2 + Math.cos(wave) * 0.55, Math.sin(wave) * 0.55);
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0.2 + Math.cos(wave) * 0.6, Math.sin(wave) * 0.6, 0.09, 0, Math.PI * 2);
+      ctx.fill();
+      // body (blue uniform, reflective vest stripe) and white cap
+      ctx.fillStyle = '#1d4ed8';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 0.32, 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#d9f99d';
+      ctx.fillRect(-0.06, -0.22, 0.12, 0.44);
+      ctx.fillStyle = '#f8fafc';
+      ctx.beginPath();
+      ctx.arc(0, 0, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      worldText(ctx, '👮', p.x, p.y - 2.2, 1.6, '#fff');
     }
   }
 

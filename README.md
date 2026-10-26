@@ -27,8 +27,10 @@ npm test           # run the simulation test suite (Vitest)
 ```
 
 Deep links for quick testing: `?play=career:7`, `?play=pinoy:taft`, `?play=challenge:c1`,
-`?play=endless` or `?play=endless:edsa` (Endless on a given map). On the dev server, `&ff=60`
-fast-forwards 60 s and `&zoom=2&x=0&y=-46` frames the camera.
+`?play=endless` or `?play=endless:edsa` (Endless on a given map), `?play=chill:metro` (Chill /
+Metro Manila sandbox) or `?play=growing` (Lumalaking Lungsod). On the dev server, `&ff=60`
+fast-forwards 60 s, `&zoom=2&x=0&y=-46` frames the camera, `&enf=A` stations an enforcer at A and
+`&cone=A:S` cones off a contraflow lane beside A's South road.
 
 ## How to play
 
@@ -36,19 +38,27 @@ Every road into a junction has **its own green**: when the North road is green, 
 (and everything else) is red. A green road releases all of its movements (straight, left and
 right). Request a change and the light runs **GREEN → YELLOW (1.2 s) → ALL-RED (0.8 s) → next
 GREEN** straight away, 2 seconds in all. A change in progress can be redirected to another road, or
-cancelled during yellow. Clicks can never skip yellow or all-red, and only one road is ever green.
+cancelled during yellow. Clicks can never skip yellow or all-red.
+
+**Paired greens.** While one road is green, tap the road **opposite** it and both go together:
+the green road's left turn goes yellow, then red, and 2 s later the opposite road turns green for
+straight and right only. While paired, nobody turns left (left turners wait at the head of their
+lane). Tap one of the pair again to keep only that road (the other goes yellow, and the left turn
+comes back). Tap a cross road and both turn yellow, then red, then the cross road gets its green.
 
 **Right turn on red is always allowed** ("right turn anytime with care"): a driver turning right
-at a red light stops at the line, then turns when the traffic that has green leaves a gap. They
-never squeeze into the box without exit space.
+at a red light stops at the line, then turns when the traffic that has green leaves a gap (about
+3 s). They never squeeze into the box without exit space. Drivers going straight keep out of the
+curb lane where they can, so the right turners behind them are not stuck.
 
 **Flashing yellow** (the `⚠ Flash` button or `Y`) turns every light at a junction to blinking
 amber: each driver stops at the line, then goes in arrival order when the way is clear, like an
 all-way stop. It suits light traffic and quiet nights; at rush hour it is slow. Pick any road's
 button to go back to normal greens (after a short all-red).
 
-Pedestrians cross the roads that are **not** moving: every crosswalk except the one across the
-green road gets its walk light. Turning vehicles wait for people on the crosswalk. Switch too soon
+Pedestrians get the walk light only on the crosswalk to the **right** of a green road (North
+green: the West crosswalk; North and South green: West and East). The green road's straight and
+left traffic never drives over a crosswalk that shows WALK; its right turners wait for the people. Switch too soon
 after a walk light and the late walkers are still on the crosswalk when your new green starts. Keep
 people waiting too long and some cross on red anyway. Under flashing yellow people cross in gaps,
 taking turns with the drivers stopped at the lines.
@@ -56,12 +66,23 @@ taking turns with the drivers stopped at the lines.
 | Action | Mouse / touch | Keyboard |
 | --- | --- | --- |
 | Green for one road | its button, or its signal head | `1` … `4` (N, E, S, W) or the arrow keys |
-| Other intersections | their own buttons | `5` … `9`, in button order |
+| Pair with the opposite road | tap the opposite road's button or light | its number key |
+| Other intersections | their own buttons (a tab per junction when there are many) | `5` … `9`, or the junction shown |
+| Wave a stuck vehicle through | tap a vehicle with an orange **!** | |
+| AUTO lights (Chill, Metro, growing city) | `AUTO` per junction, `AUTO` all | |
+| Watch mode / follow a vehicle | 👁 button, then tap a vehicle | `H`, `Esc` to stop |
+| Monitor panel / speed heatmap | 📡 / 🌡️ buttons | `T` / `O` |
+| HULI! a violator | tap a vehicle with a red **!** | |
+| Station / move an enforcer | 👮 button, then tap a junction | `Esc` cancels the tool |
+| Cone off a contraflow lane | 🚧 button, then tap an undivided road | |
+| Patawid (all traffic stops for people) | `🚸 Patawid` on that junction's panel (enforcer needed) | |
+| Padaanin (wave a red lane's front vehicle through) | tap it, at a junction with an enforcer | |
+| Saway a jaywalker / call a tow truck | tap the person waiting at the curb / the stalled vehicle | |
 | Next road | tap the yellow box in the middle | |
 | Flashing yellow on / off | `⚠ Flash` button | `Y` (junction under the cursor, or the first) |
 | Pause / resume | pause button | `Space` / `P` / `Esc` |
 | Restart | restart button | `R` |
-| Speed 1x / 2x / 3x | speed buttons | `F` (cycles) |
+| Speed 1x – 4x | speed buttons | `F` (cycles) |
 | Mute | speaker button | `M` |
 | Music on / off | `♫` button, Settings | |
 | Zoom / pan | wheel, pinch, `+ / −` buttons, drag | `+` / `-` / `0` (reset) |
@@ -76,9 +97,15 @@ What you'll see on the map:
 - Cones and a grey wreck mean an exit is blocked (stalled truck, road works).
 - A white line with a small red/green light on an exit is the next (off-map) junction. When it is
   red, that road is backed up.
-- A blue pulsing ring around a signal means an emergency vehicle is coming on that phase. Emergency
-  vehicles go through on red (after slowing down) and everyone else at that junction gives way, but
-  a green for them still gets them through faster.
+- A blue pulsing ring around a signal means an emergency vehicle is coming on that phase. A callout
+  points at the vehicle ("Give EDSA ↓ the green"), or an arrow on the screen edge when it is off
+  screen. Emergency vehicles go through on red from an empty stop line (after slowing down), and
+  only traffic whose path crosses theirs gives way. Drivers in front of them never run the red: they
+  move over if they can, and a queue at a red needs your green.
+- An orange **!** over a vehicle means it is stuck in or at the box. Tap it and it goes ahead (the
+  path is cleared for it for 10 s); you can also leave it, it clears on its own.
+- Signal heads have a Manila-style LED countdown: seconds of green so far, or the count to the
+  change.
 - Small walk / don't-walk lights stand at each crosswalk; they blink orange during yellow and
   flashing yellow.
 - A jeepney or tricycle with its hazards on and a "PARA PO!" bubble has stopped right at the
@@ -86,7 +113,29 @@ What you'll see on the map:
   pulls away (3–7 s).
 - Rivers run under bridges (parapets, a name plaque), with bangka boats passing underneath.
 - "PASAWAY!" and a whistle mean someone is crossing where (or when) they shouldn't.
-- Rain, dusk and night change how drivers behave: longer gaps, gentler braking, slower starts.
+- Rain, dusk and night change how drivers behave: longer gaps, gentler braking, slower starts. At
+  night headlights throw beams and windows light up; on wet roads the signals reflect.
+- Blue MMDA street-name signs, "BAWAL MAGBABA DITO" signs, tangled overhead wires, jeepney route
+  boards and diesel smoke.
+- A "LANE ENDS" lane drop: the curb lane is hatched off, and drivers zipper into the next lane.
+- **Counterflow** ("singit sa kontra") on roads with no median: an aggressive rider (now and then a
+  private car or a jeepney) swings into the oncoming lane to overtake a few vehicles, then cuts back
+  in. Oncoming traffic stops for it. It gets a red **!**: tap it (HULI!) and it goes straight back
+  into its own lane. An ambulance or fire truck stuck behind a queue also uses the oncoming lane
+  (legally), and oncoming drivers pull over.
+- **Traffic enforcers** (👮, two per level): stationed at a junction, drivers within 40 m behave (no
+  counterflow, no jeepney stops inside the box, hardly any box blocking or late yellow runs) and an
+  emergency vehicle is given way twice as far out. With an enforcer there you can call **Patawid**
+  (every crosswalk walks for 12 s, then the green comes back) or wave the front vehicle of a red
+  lane through when nothing crossing is coming. Anywhere you can HULI! violators (counterflow,
+  beating the red, blocking the box, unloading inside the junction), send a waiting jaywalker to
+  the crosswalk, and call a tow truck for a stalled vehicle (cleared in 8 s).
+- **Contraflow lane** (🚧): the enforcers cone off the oncoming inner lane beside a queue for 60 s.
+  The cones go up one by one; once the lane is clear, queued drivers use it to reach the front and
+  cut back in before the junction. When time is up nobody new goes in, the last ones finish, and
+  the cones come down.
+- Notices come over the radio, a news ticker runs along the bottom, and commuters post about the
+  roads you are running.
 
 ### Modes
 
@@ -99,9 +148,26 @@ What you'll see on the map:
   signals, lots of students), España in the rain, Commonwealth (motorcycle lane and a U-turn slot),
   EDSA (Carousel busway, MRT-3, dusk into night), Liko-Liko (a mountain S-bend over a river),
   Tatlong Kanto (three signals: build a green wave), Dalawang Pampang (a signal on each bank of a
-  city river, one short bridge between them) and Grid ng Maynila (four signals).
+  city river, one short bridge between them), Sa Highway (side streets that join MacArthur Highway
+  with no light, and a lane that ends) and Grid ng Maynila (four signals).
+- Every mode has the same street life: people crossing at the lights and the odd jaywalker, a
+  clock and changing weather (lighter in the first career levels).
 - **Endless:** demand grows every minute through the afternoon rush into the night, with passing
-  rain. Pick any map. The run ends when congestion stays at 85% or more for 30 s.
+  rain, and anything can happen: breakdowns and road works, emergencies, school letting out, waves
+  of jeepneys stopping at the corners. Pick any map. The run ends when congestion stays at 85% or
+  more for 30 s.
+- **Chill Endless:** the same, but there is no game over, even in gridlock. Any signal can be handed
+  to AUTO (a queue-balancing controller that also pairs opposite roads and answers emergencies);
+  tap a light to take it back (MANUAL). Watch mode hides the controls and lets the camera find the
+  action.
+- **Metro Manila (sandbox):** the big map, about 1.2 × 0.8 km, with every light on AUTO to start:
+  EDSA (busway, MRT-3, U-turn slot), the Quezon Ave underpass under EDSA, Taft under the LRT-1, the
+  elevated Skyway with its toll plaza and ramps down to Aurora and Shaw, the Pasig river, barangay
+  streets with no lights and a lane drop on Shaw.
+- **Lumalaking Lungsod:** the Metro Manila map opens district by district. You start with one
+  junction; at 60, 160 and 300 vehicles through the next district opens (EDSA corridor, Taft, the
+  Skyway) and more traffic arrives. Junctions not yet open run on AUTO under a construction haze.
+  No game over.
 - **Challenges:** five scenarios: clear an existing gridlock, keep waits low, handle ambulances,
   sustain flow under heavy demand, and recover from a blocked exit.
 - **Tutorial:** a guided first run of Level 1.
@@ -114,8 +180,10 @@ blocked, excessive waits, box-blocking entries, slow emergency response, people 
 the crosswalk for more than 45 s, and people who gave up and crossed on red. Safety carries the most weight:
 the base score is multiplied by the safety rating, and the safety rating adds a bonus of up to 400.
 
-Progress, best scores, stars, completed challenges and audio settings (sound-effect and music
-volume, music on/off) are saved in `localStorage`.
+Progress, best scores, stars, completed challenges and settings (sound-effect and music volume,
+music on/off, rain and pedestrians on/off) are saved in `localStorage`. **Settings → Ulan / Mga
+tao** turn off the rain showers and the pedestrians in every mode (from the next game started);
+pedestrian objectives are then dropped.
 Saves from before Pinoy Roads existed carry over: progress on the old career levels 11–16 moves to
 the matching Pinoy Roads levels.
 The game still works when storage is unavailable; progress then lasts only for the session.
@@ -144,8 +212,44 @@ All simulation code is DOM-free (`src/simulation`) and runs headless in the test
 - **Weather and time of day** (`Environment`). Rain lowers braking and speed and lengthens gaps;
   night slows reactions; a rush-hour curve can drive demand.
 - **Emergency vehicles** go through on red after slowing down. They still need a free path through
-  the box, and while one is within 60 m every other driver at that junction holds back, unless it is
-  too late to stop or it is queued in front of the ambulance (it goes through to clear the way).
+  the box. While one is within 60 m (and moving, or close), drivers whose paths cross or merge into
+  its path hold back; everyone else keeps going. Drivers queued ahead of it never run the red; they
+  move into another lane if they can, and the emergency vehicle looks for a clearer lane too.
+- **Paired greens** (`TrafficPhaseManager`). The green is one road, or two opposite roads with
+  their left turns (and U-turns) on red. Adding the opposite road clears the left turn first
+  (yellow, then red); dropping one road of a pair takes it through yellow and red before the other
+  gets its left turn back. Conflicting greens are checked on every test step.
+- **AUTO lights** (`Autopilot`). Per signal: it compares the queues every second, switches when
+  another road (or pair) needs it clearly more or the green has run long, gives any road waiting
+  45 s its turn, pairs opposite roads only when no left turner is waiting at the front, and gives an
+  emergency vehicle its green. It asks for changes through the normal requests, so yellow and
+  all-red always run.
+- **Grade separation.** A node can sit on another level (the Skyway is level 1); a link between
+  levels is a ramp (0.5); lanes of type `tunnel` pass under a node marked `underpass` (a walled
+  trench at -0.5, under the junction at -1). The collision gate only compares vehicles whose levels
+  differ by less than 1. Under the junction the tunnel lanes need no light and no box reservation.
+- **Merges, toll plaza, lane drops.** Ramp junctions are rolling yields (give way, no full stop). At
+  a `toll` node every driver stops at a booth (shorter in the ETC lane by the median). A map
+  `laneDrops` entry ends a lane before a junction: drivers merge well before the end, and the
+  driver right behind a waiting merger lets them in (zipper).
+- **Stuck vehicles.** Clicking a vehicle stuck in or at the box gives it a 10 s pass: it may enter
+  without the usual exit-space courtesy, crossing traffic gives way to its path, and the queue ahead
+  of it drains past the downstream gate. The collision gate still applies.
+- **Random events** (`EventScheduler`, endless modes): breakdowns and road works on random exit
+  lanes, school out (a rush at the crosswalks), jeepney waves.
+- **Counterflow** (`Counterflow`). The vehicle never leaves its own lane in the simulation: it
+  keeps its route coordinate and slides sideways into the oncoming inner lane, and every sideways
+  step must pass the collision gate. Before it swings out it reserves the stretch of the oncoming
+  lane it will use (a blockage oncoming traffic stops at), only when nothing is in that stretch or
+  too close to stop. It only goes for a real gap in the queue ahead, at least 18 m before the stop
+  line; the driver it ends up in front of sees it as their leader and holds back, and it slides
+  back once the space beside it is clear. Caught (HULI!) or out there for 15 s, it stops advancing
+  and slides back as soon as it fits. One at a time on a stretch of road. Emergency vehicles run
+  up to the stop line and ease back across the box once their whole body is past the line.
+- **Enforcement** (`Enforcement`): violations are recorded as they happen (counterflow, red-light
+  runs at the stop line, box-blocking squeezes, corner stops inside the box) and stay catchable
+  for a few seconds. Patawid holds the signal in all-red for 12 s (crosswalks show walk), then
+  returns the green to the road that had it.
 - **Zero-collision gate** (`CollisionAvoidance`). Every proposed move is swept in ≤ 0.2 m
   samples. The oriented-bounding-box distance to every nearby vehicle must stay at least 0.45 m.
   If it would not, the move is shortened by bisection, down to zero if needed. No personality can
@@ -209,35 +313,38 @@ All simulation code is DOM-free (`src/simulation`) and runs headless in the test
   RECOVERY. An approach counts as blocked only when its light is **green** and nothing has crossed
   its stop line for 6 s. Queues at a red light, and drivers giving way to oncoming traffic, an
   emergency vehicle or people on the crosswalk, are never treated as gridlock.
-- **Congestion sources:** curbside jeepney and bus loading stops, scripted blockages, and a
-  per-exit downstream discharge rate (the next junction off-map) that can back a road up into the
-  box.
+- **Congestion sources:** curbside jeepney and bus loading stops, scripted and random blockages,
+  and a downstream discharge rate on exits that show a "NEXT JUNCTION" gate (the next junction
+  off-map), which can back a road up into the box. Every other exit drains freely off the map.
 
 ## Project structure
 
 ```
 src/
   main.js, styles.css
-  game/        Game (shell), GameLoop, GameState, Camera, LevelManager
-  simulation/  TrafficSimulator, TrafficPhaseManager, TrafficLightController, Vehicle, VehicleAI,
-               VehicleSpawner, LaneManager, RoadGeometry, River, LaneChange, IntersectionManager,
-               CollisionAvoidance, GridlockDetector, PedestrianManager, Environment, ScoringSystem
-  rendering/   Renderer, RoadRenderer (+ roadShapes), RiverRenderer, VehicleRenderer,
+  game/        Game (shell), GameLoop, GameState, Camera, LevelManager, Director (watch mode)
+  simulation/  TrafficSimulator, TrafficPhaseManager, TrafficLightController, Autopilot, Vehicle,
+               VehicleAI, VehicleSpawner, LaneManager, RoadGeometry, River, LaneChange,
+               IntersectionManager, CollisionAvoidance, GridlockDetector, PedestrianManager,
+               Environment, EventScheduler, CityGrowth, Counterflow, Enforcement, ScoringSystem
+  rendering/   Renderer, RoadRenderer (+ roadShapes), TextureBank, RiverRenderer, VehicleRenderer,
                PedestrianRenderer, TrafficLightRenderer, EffectsRenderer, WeatherRenderer
   input/       InputManager
   audio/       AudioManager (procedural Web Audio horns, sirens, whistle, engine rumble and diesel
                chug; separate sound-effect and music buses), MusicPlayer (procedural lo-fi music)
-  ui/          HUD, Menu, Settings, ResultsScreen
+  ui/          HUD, Monitor, Menu, Settings, ResultsScreen
   data/        config, vehicles, levels, maps/ (generic training maps and Philippine roads)
   utils/       math (RNG, paths, Bézier, OBB), storage (validated save data)
 tests/         phase manager, collision geometry/gate, gridlock detector, simulation integration,
                maps and road geometry, emergency vehicles, weather and lane changes, pedestrians,
-               game loop + save validation, and a collision-free soak run of every level
+               game loop + save validation, new features (walk lights, right on red, paired
+               greens, waving a stuck vehicle through, lane drops, the Metro levels, AUTO lights,
+               modes, map layout), and a collision-free soak run of every level
 ```
 
 ## Testing
 
-`npm test` runs over 130 tests, including:
+`npm test` runs 164 tests, including:
 
 - signal ordering, redirecting and cancelling changes, click spam, and a 10-minute random fuzz
   that never shows two greens;
@@ -255,6 +362,15 @@ tests/         phase manager, collision geometry/gate, gridlock detector, simula
 - pedestrians: never within reach of a vehicle (crowds, jaywalkers and aggressive drivers on every
   map), crossing only on walk unless pasaway, drivers stopping for jaywalkers without slamming the
   brakes, strollers staying off the lanes;
+- counterflow staying collision-free with HULI! sending riders back, a contraflow lane opening
+  behind its cones and getting used, patawid and padaanin needing an enforcer, and the rain /
+  people options;
+- walk lights never on a green road's straight or left path; right turns on red happening;
+  nobody turning left on a paired green; a waved-through vehicle getting moving;
+- the lane drop (nobody past the end of the lane), Metro Manila with traffic on every level (the
+  Skyway, the toll plaza, the ramps and the underpass), AUTO lights serving every road, Chill never
+  ending, the growing city opening districts, and no two roads on the same level running into each
+  other;
 - a 100-second soak of every career, Pinoy Roads, Endless (per map) and challenge level with random
   signal switching.
 
@@ -267,7 +383,6 @@ On every simulated step the soak and integration tests assert:
 
 ## Known limitations
 
-- One phase per approach; there is no way to pair compatible roads into one green.
 - Zooming out is limited to the area where roads still carry traffic.
 - Motorcycles don't lane-split.
 - Junctions are always square (four-way or T); only the roads between them bend.
@@ -282,5 +397,9 @@ On every simulated step the soak and integration tests assert:
 
 ## Assets
 
-All graphics are drawn procedurally on the canvas and all sounds are synthesized at runtime. No
-third-party art or audio is included.
+Graphics are drawn procedurally on the canvas (textures included) and all sounds are synthesized
+at runtime. The Metro Manila map also uses eight photo textures (asphalt, paving, grass, soil,
+corrugated roofing, clay tiles, concrete) from [ambientCG](https://ambientcg.com), released under
+CC0 1.0 (public domain); see `public/textures/metro/CREDITS.txt`. If they can't be loaded, the
+procedural textures are used. The HUD uses the Overpass font from Google Fonts (with a system font
+fallback).

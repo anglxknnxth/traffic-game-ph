@@ -108,6 +108,9 @@ export class Monitor {
       <div class="mon-row"><span>↪ Right turn on red</span><b>${st.rightOnRed || 0}</b></div>
       <div class="mon-row"><span>🚏 Corner stops</span><b>${st.cornerStops || 0}</b></div>
       <div class="mon-row"><span>👆 Waved through</span><b>${st.passes || 0}</b></div>
+      <div class="mon-row"><span>⚠ Counterflow</span><b>${st.counterflows || 0}</b></div>
+      <div class="mon-row"><span>🚨 HULI!</span><b>${st.caught || 0}</b></div>
+      <div class="mon-row"><span>🔴 Beat the red</span><b>${st.redRuns || 0}</b></div>
       <div class="mon-row"><span>📣 Horns (10 s)</span><b>${m.hornRate}</b></div>
       ${em}`;
   }

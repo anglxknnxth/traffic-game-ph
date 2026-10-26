@@ -2464,3 +2464,54 @@ summary {
     max-height: calc(100% - 46px - 70px - var(--safe-top) - var(--safe-bottom));
   }
 }
+
+/* ---- Vehicle badge tip: what an amber / red "!" means (hover, tap, long press) */
+#hud .veh-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 240px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--glass, rgba(10, 15, 24, 0.9));
+  border: 1px solid var(--glass-line, rgba(148, 163, 184, 0.25));
+  border-left: 4px solid var(--led-amber, #ffb020);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  color: #e5e7eb;
+  font-size: 11.5px;
+  line-height: 1.3;
+  pointer-events: none !important;
+  will-change: transform;
+}
+#hud .veh-tip[hidden] {
+  display: none;
+}
+#hud .veh-tip.bad {
+  border-left-color: var(--led-red, #ff3b30);
+}
+#hud .veh-tip.pass {
+  border-left-color: var(--led-green, #2bd96b);
+}
+#hud .veh-tip .vt-title {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+#hud .veh-tip.bad .vt-title {
+  color: #fca5a5;
+}
+#hud .veh-tip.stuck .vt-title {
+  color: #fcd34d;
+}
+#hud .veh-tip .vt-act {
+  font-style: normal;
+  font-weight: 700;
+  color: #93c5fd;
+}
+#hud .veh-tip .vt-act:empty {
+  display: none;
+}

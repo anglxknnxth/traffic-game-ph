@@ -513,10 +513,10 @@ export class TrafficSimulator {
     if (E[v.segIdx + 1] !== ce) return false;
     if (v.cf) return this.counterflow.atLine(v); // it came up the oncoming lane, beside the queue
     // Someone who came up beside the queue is still crossing the box out to the side: wait for them.
-    // (Or is at the line beside us: they go first.)
+    // (Or is at the line beside us: they go first, unless they are stuck there and cannot go.)
     for (const o of this.counterflow.active) {
       if (o === v || !o.cf || o.cf.lane !== v.segment || o.cf.phase === 'in') continue;
-      if (o.segment !== v.segment || o.reservations.size || this.counterflow.atLine(o)) return false;
+      if (o.segment !== v.segment || o.reservations.size || (this.counterflow.atLine(o) && o.stoppedTime < 2)) return false;
     }
     const list = v.segment.vehicles;
     const id = ce.seg.intersection.id;

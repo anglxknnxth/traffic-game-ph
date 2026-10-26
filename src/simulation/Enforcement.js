@@ -92,7 +92,7 @@ export class Enforcement {
     const label = { counterflow: 'COUNTERFLOW', red: 'BEATING THE RED', box: 'BLOCKING THE BOX', stop: 'BAWAL MAGBABA DITO' }[kind];
     sim.notify(`HULI_${v.id}`, `🚨 HULI! ${v.spec.label.toUpperCase()} · ${label}`, 'good');
     sim.events.push({ type: 'pasaway', x: v.x, y: v.y, huli: true });
-    if (kind === 'counterflow') sim.counterflow.forceReturn(v);
+    if (kind === 'counterflow') sim.counterflow.sendBack(v);
     if (kind === 'stop' && v.cornerStop?.state === 'stopped') v.cornerStop.timer = Math.min(v.cornerStop.timer, 0.5);
     this.log.push({ t: sim.time, kind, id: v.id });
     return true;

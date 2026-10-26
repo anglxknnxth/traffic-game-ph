@@ -28,18 +28,19 @@ export class EffectsRenderer {
       this.puffs.push({ x: v.x - c * (v.hl + 0.3) + s * 0.4, y: v.y - s * (v.hl + 0.3) - c * 0.4, t: 0, dark: v.type === 'jeepney' || v.type === 'dumptruck' });
     }
     if (this.puffs.length > 300) this.puffs.splice(0, this.puffs.length - 300);
-    const keep = [];
+    // (compacted in place: no new array every frame)
+    let n = 0;
     for (const p of this.puffs) {
       p.t += dt;
       if (p.t > 1.6) continue;
-      keep.push(p);
+      this.puffs[n++] = p;
       const k = p.t / 1.6;
       ctx.fillStyle = p.dark ? `rgba(40,40,40,${0.35 * (1 - k)})` : `rgba(120,120,120,${0.25 * (1 - k)})`;
       ctx.beginPath();
       ctx.arc(p.x + k * 0.8, p.y - k * 0.6, 0.35 + k * 1.3, 0, Math.PI * 2);
       ctx.fill();
     }
-    this.puffs = keep;
+    this.puffs.length = n;
   }
 
   drawUnder(ctx, vehicles, time) {

@@ -100,7 +100,9 @@ export class Camera {
 
   apply(ctx) {
     const s = this.scale * this.dpr;
-    ctx.setTransform(s, 0, 0, s, (this.screenCX - this.centerX * this.scale) * this.dpr, (this.screenCY - this.centerY * this.scale) * this.dpr);
+    // Whole device pixels, like the static tiles (StaticTiles rounds the same origin): traffic and
+    // road then move on one grid while panning, with no half-pixel shimmer between them.
+    ctx.setTransform(s, 0, 0, s, Math.round((this.screenCX - this.centerX * this.scale) * this.dpr), Math.round((this.screenCY - this.centerY * this.scale) * this.dpr));
   }
 
   screenToWorld(px, py) {

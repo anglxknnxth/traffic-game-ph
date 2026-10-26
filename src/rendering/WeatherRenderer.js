@@ -60,11 +60,21 @@ export class WeatherRenderer {
     return g;
   }
 
-  /** Lit windows of every building as one path (they are fixed per building), built once. */
-  _windowPath(buildings) {
-    if (this._windows?.buildings === buildings) return this._windows.path;
-    const path = new Path2D();
+  /**
+   * Lit windows of every building (fixed per building), built once as one path per 120 m cell so a
+   * frame fills only the cells on screen: [{ minX, minY, maxX, maxY, path }].
+   */
+  _windowCells(buildings) {
+    if (this._windows?.buildings === buildings) return this._windows.cells;
+    const CELL = 120;
+    const byKey = new Map();
     for (const b of buildings) {
+      const kx = Math.floor(b.cx / CELL);
+      const ky = Math.floor(b.cy / CELL);
+      const key = kx * 100003 + ky;
+      let cell = byKey.get(key);
+      if (!cell) byKey.set(key, (cell = { minX: kx * CELL - 30, minY: ky * CELL - 30, maxX: (kx + 1) * CELL + 30, maxY: (ky + 1) * CELL + 30, path: new Path2D() }));
+      const path = cell.path;
       const seed = Math.abs(Math.sin(b.cx * 12.9898 + b.cy * 78.233)) * 43758.5453;
       if (seed % 1 < 0.25) continue; // nobody home
       const n = 1 + Math.floor((seed * 7) % 4);
@@ -81,8 +91,9 @@ export class WeatherRenderer {
         path.closePath();
       }
     }
-    this._windows = { buildings, path };
-    return path;
+    const cells = [...byKey.values()];
+    this._windows = { buildings, cells };
+    return cells;
   }
 
   /** Cool wet sheen over the static road layer. Call in screen space, before traffic. */
@@ -130,10 +141,14 @@ export class WeatherRenderer {
   }
 
   _night(ctx, canvas, camera, sim, lamps, vehicles, dark, buildings) {
+    // The light map is soft by nature: drawn at half resolution (a quarter of the pixels in each
+    // of its passes) and scaled up onto the screen.
     const lc = this.light;
-    if (lc.width !== canvas.width || lc.height !== canvas.height) {
-      lc.width = canvas.width;
-      lc.height = canvas.height;
+    const lw = Math.ceil(canvas.width / 2);
+    const lh = Math.ceil(canvas.height / 2);
+    if (lc.width !== lw || lc.height !== lh) {
+      lc.width = lw;
+      lc.height = lh;
     }
     const l = lc.getContext('2d');
     l.setTransform(1, 0, 0, 1, 0, 0);
@@ -145,6 +160,8 @@ export class WeatherRenderer {
     // Cut light pools out of the darkness.
     l.globalCompositeOperation = 'destination-out';
     camera.apply(l);
+    const m = l.getTransform();
+    l.setTransform(m.a / 2, 0, 0, m.d / 2, m.e / 2, m.f / 2);
     const vr = camera.visibleRect(10);
     const black = this._sprite('0,0,0');
     const hole = (x, y, r, a) => {
@@ -191,7 +208,7 @@ export class WeatherRenderer {
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(lc, 0, 0);
+    ctx.drawImage(lc, 0, 0, canvas.width, canvas.height);
     ctx.restore();
 
     // Warm additive glow on top of the pools.
@@ -206,7 +223,7 @@ export class WeatherRenderer {
     // Lit windows: a few warm squares on most roofs (fixed per building)
     ctx.globalAlpha = 1;
     ctx.fillStyle = `rgba(255,214,140,${0.55 * dark})`;
-    ctx.fill(this._windowPath(buildings));
+    for (const c of this._windowCells(buildings)) if (c.maxX > vr.minX && c.minX < vr.maxX && c.maxY > vr.minY && c.minY < vr.maxY) ctx.fill(c.path);
     const head = this._sprite('255,244,210');
     const tail = this._sprite('255,40,40');
     for (const v of vehicles) {

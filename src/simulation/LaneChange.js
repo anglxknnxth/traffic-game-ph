@@ -114,6 +114,12 @@ export class LaneChanger {
     // A lane that ends: start merging well before the end, as drivers do.
     const lf = v.localS + v.hl;
     if (lane.dropAt !== undefined && lane.dropAt > lf - 0.5 && lane.dropAt - lf < 90) return true;
+    // Someone counterflowing up this lane ahead: the whole queue behind keeps right, not just the
+    // first driver (who may have no gap to move over and simply waits).
+    for (const o of cfm.active) {
+      const b = o.cf?.block;
+      if (b && b.active && o.cf.opp === lane && b.s > v.localS && b.s - v.localS - v.hl < 80) return true;
+    }
     const blk = this.sim.nextBlockage(v);
     return blk !== null && blk - v.front < 45;
   }

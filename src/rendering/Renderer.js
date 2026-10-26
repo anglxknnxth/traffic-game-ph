@@ -5,7 +5,7 @@
 // junction (in an underpass) are not drawn. The camera is strictly overhead (scale + translate).
 
 import { RoadRenderer } from './RoadRenderer.js';
-import { drawVehicle } from './VehicleRenderer.js';
+import { drawVehicle, beginVehicleFrame } from './VehicleRenderer.js';
 import { TrafficLightRenderer } from './TrafficLightRenderer.js';
 import { EffectsRenderer } from './EffectsRenderer.js';
 import { WeatherRenderer } from './WeatherRenderer.js';
@@ -17,7 +17,8 @@ const SETTLE_MS = 150; // the cached layers follow a zoom this long after the ca
 export class Renderer {
   constructor(canvas, camera) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    // Opaque: every frame paints the whole canvas, so the compositor need not blend it.
+    this.ctx = canvas.getContext('2d', { alpha: false });
     this.camera = camera;
     this.lights = new TrafficLightRenderer();
     this.effects = new EffectsRenderer();
@@ -76,7 +77,10 @@ export class Renderer {
     };
     // Vehicles: the route coordinate is interpolated, so the drawn body follows curves exactly.
     const dp = this._dp;
+    // (only near the screen: far away nothing is drawn, the simulated pose will do)
+    const near = this.camera.visibleRect(25);
     for (const v of sim.vehicles) {
+      if (!(v.x > near.minX && v.x < near.maxX && v.y > near.minY && v.y < near.maxY)) continue;
       const s = v.ps === undefined ? v.s : v.ps + (v.s - v.ps) * alpha;
       v.displayPose(s, dp);
       saved.push(v, v.x, v.y, v.angle);
@@ -138,8 +142,8 @@ export class Renderer {
     this.weather.drawWet(ctx, this.canvas, sim.env);
 
     cam.apply(ctx);
-    this.road.drawWater(ctx, time);
-    this.road.drawDynamic(ctx, sim, time);
+    this.road.drawWater(ctx, time, cam.visibleRect(4));
+    this.road.drawDynamic(ctx, sim, time, cam.visibleRect(4));
     if (debug) this.effects.drawReservations(ctx, sim);
     if (overlay === 'heat') this.effects.drawHeat(ctx, sim, dt);
 
@@ -162,6 +166,7 @@ export class Renderer {
       (L >= 0.5 ? high : ground).push(v);
     }
     const ppm = cam.scale * cam.dpr;
+    beginVehicleFrame();
     this.effects.drawUnder(ctx, ground, time);
     for (const v of ground) drawVehicle(ctx, v, time, ppm);
     this.effects.drawOver(ctx, ground, time);
@@ -180,13 +185,13 @@ export class Renderer {
     }
     if (overlay === 'heat') this.effects.drawQueueCounts(ctx, sim);
     this.road.drawOverlays(ctx, time);
-    this.lights.draw(ctx, sim, time, hoveredHead);
+    this.lights.draw(ctx, sim, time, hoveredHead, vr);
     if (sim.growth) this._drawFog(ctx, sim.growth.focusRect(), time);
     this.weather.drawAtmosphere(ctx, this.canvas, cam, sim, this.road.scenery.posts, visible, time, this.road.scenery.buildings);
-    // Signal heads stay readable at night: draw them over the darkness.
+    // Signal lamps and countdowns stay readable at night: draw them again over the darkness.
     if (sim.env?.darkness > 0.02) {
       cam.apply(ctx);
-      this.lights.draw(ctx, sim, time, hoveredHead);
+      this.lights.draw(ctx, sim, time, null, vr, true);
     }
     // Screen-space pass (CSS pixels): emergency pointers.
     if (emergencyInfo) {

@@ -536,6 +536,49 @@ export class Game {
     return ok;
   }
 
+  /**
+   * What a vehicle's badge means, for the tooltip: { kind: 'bad' | 'stuck' | 'pass', title, why,
+   * action }, or null for a vehicle without a badge.
+   */
+  vehicleInfo(v) {
+    const sim = this.session?.sim;
+    if (!sim || !v) return null;
+    const name = v.spec.label;
+    const bad = sim.enforcement.violationOf(v);
+    if (bad) {
+      const why = { counterflow: 'Nag-counterflow: nasa kabilang linya siya', red: 'Lumusot sa pula', box: 'Pumasok sa box kahit puno ang lalabasan', stop: 'Nagbaba / nagsakay sa loob ng intersection' }[bad];
+      return { kind: 'bad', title: `PASAWAY · ${name}`, why, action: bad === 'counterflow' ? 'Click: HULI! (babalik siya sa linya niya)' : 'Click: HULI!' };
+    }
+    if (sim.hasPass(v)) return { kind: 'pass', title: `PINADAAN · ${name}`, why: 'Inuuna na siya ngayon', action: '' };
+    if (!(v.stoppedTime > 3 && sim.isStuck(v))) return null;
+    return { kind: 'stuck', title: `NAIPIT · ${name}`, why: this._stuckWhy(sim, v), action: 'Click: padaanin (10 s)' };
+  }
+
+  _stuckWhy(sim, v) {
+    const find = (id) => (id === null || id === undefined ? null : sim.vehicles.find((o) => o.id === id) || null);
+    const who = (o) => (o ? `${o.spec.label.toLowerCase()}${o.cf && !o.cf.legal && !o.cf.emergency ? ' na nag-counterflow' : ''}` : null);
+    const blocker = find(v.blockerId);
+    switch (v.blockReason) {
+      case 'exit':
+        return 'Puno ang lalabasan niya';
+      case 'box':
+        return blocker ? `Hinaharangan ng ${who(blocker)} ang daan niya sa intersection` : 'May nakaharang sa daan niya sa intersection';
+      case 'queue':
+        return 'Naghihintay sa nauna sa linya';
+      case 'pedestrian':
+        return 'May tumatawid sa daan niya';
+      case 'yield':
+        return blocker ? `Nagbibigay-daan sa ${who(blocker)}` : 'Nagbibigay-daan sa paparating';
+      case 'emergency':
+        return 'Nagbibigay-daan sa ambulansya';
+      default:
+        break;
+    }
+    const lead = find(v.leaderId);
+    if (v.state === 'BLOCKED_IN_INTERSECTION' || v.segment.kind === 'connector') return lead ? `Naipit sa loob ng box, sa likod ng ${who(lead)}` : 'Naipit sa loob ng box';
+    return lead ? `Nakaharang ang ${who(lead)} sa harap niya` : 'Hindi makausad';
+  }
+
   /** Callout text for an emergency vehicle (emergency pointer). */
   emergencyInfo(v) {
     const sim = this.sim;
@@ -619,7 +662,8 @@ export class Game {
     this.uiTime += dtReal;
     const sim = this.sim;
     if (!sim) return;
-    sim.prefetch();
+    // Junction footprints built ahead of need, in a slice of the frame (not while zooming).
+    if (!this.camera.animating) sim.prefetch(Math.min(1.5, this.loop.frameMs * 0.1));
     const playing = !!this.session && !this.session.ended;
     const drawStart = this.perf ? performance.now() : 0;
     this.renderer.render(sim, {
@@ -650,7 +694,11 @@ export class Game {
           this.hud.notify(e);
         }
       }
-      if (playing) {
+      // Sound automation 30 times a second is plenty (the values glide); every frame at 144 Hz
+      // only floods the audio thread with events.
+      this._audioT = (this._audioT || 0) + dtReal;
+      if (playing && this._audioT >= 1 / 30) {
+        this._audioT = 0;
         const em = this._em;
         em.length = 0;
         let heavy = 0;
@@ -663,6 +711,7 @@ export class Game {
         this.audio.updateAmbient(Math.min(1, (sim.metrics.vehicles / 50) * (0.45 + moving)), sim.vehicles.length ? heavy / sim.vehicles.length : 0);
       }
       this.hud.update(dtReal);
+      this.hud.placeTip();
     }
   }
 

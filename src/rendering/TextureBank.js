@@ -14,11 +14,25 @@ const SIZE = 256; // px per procedural tile
 const METRES = { asphalt: 6, asphaltWorn: 6, sidewalk: 4, grass: 10, dirt: 10, yero: 4, tiles: 5, concrete: 6 };
 const PHOTO = { asphalt: 'asphalt', asphaltWorn: 'asphalt-worn', sidewalk: 'sidewalk', grass: 'grass', dirt: 'dirt', yero: 'yero', tiles: 'tiles', concrete: 'concrete' };
 
-function canvas(w, h) {
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  return c;
+/** A drawing surface: a page canvas, or an OffscreenCanvas inside a worker (tiles drawn off the main thread). */
+export function makeCanvas(w, h) {
+  if (typeof document !== 'undefined') {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    return c;
+  }
+  return typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : null;
+}
+const canvas = makeCanvas;
+
+/**
+ * A 2D context for a canvas from makeCanvas. In a worker (no page) it is kept on the CPU: the tile
+ * canvases there are CPU ones too, and a GPU texture used as their pattern would be read back from
+ * the GPU on every fill.
+ */
+export function context2d(c) {
+  return typeof document === 'undefined' ? c.getContext('2d', { willReadFrequently: true }) : c.getContext('2d');
 }
 
 /** Speckle noise: n dots of radius r in colours from `cols`, alpha a. */
@@ -135,38 +149,62 @@ const MAKERS = {
 };
 
 export class TextureBank {
-  constructor(set = null, onChange = null) {
+  /** `baseUrl`: where the photo sets live (a worker passes the page's, its own URL differs). */
+  constructor(set = null, onChange = null, { baseUrl = null } = {}) {
     this.tiles = {};
     this.patterns = new Map();
     this.version = 0;
     this.onChange = onChange;
-    if (typeof document === 'undefined') return;
+    this.loaded = Promise.resolve(); // settles once every photo has loaded or failed
+    if (typeof document === 'undefined' && typeof OffscreenCanvas === 'undefined') return;
     const rng = new Rng(4321);
     for (const [name, make] of Object.entries(MAKERS)) {
       const c = canvas(SIZE, SIZE);
-      make(c.getContext('2d'), rng);
+      make(context2d(c), rng);
       this.tiles[name] = { img: c, size: SIZE, photo: false };
     }
-    if (set) this._loadPhotos(set);
+    if (set) this.loaded = this._loadPhotos(set, baseUrl);
   }
 
   get ready() {
     return Object.keys(this.tiles).length > 0;
   }
 
-  _loadPhotos(set) {
-    const base = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) || '/';
-    for (const [name, file] of Object.entries(PHOTO)) {
-      const img = new Image();
-      img.onload = () => {
-        this.tiles[name] = { img, size: img.naturalWidth, photo: true };
-        this.patterns.clear();
-        this.version++;
-        this.onChange?.();
-      };
-      img.onerror = () => {}; // keep the procedural texture
-      img.src = `${base}textures/${set}/${file}.jpg`;
-    }
+  _loadPhotos(set, baseUrl) {
+    const base = baseUrl || `${(typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) || '/'}textures/`;
+    const loaded = (name, img, size) => {
+      this.tiles[name] = { img, size, photo: true };
+      this.patterns.clear();
+      this.version++;
+      this.onChange?.();
+    };
+    const jobs = Object.entries(PHOTO).map(([name, file]) => {
+      const url = `${base}${set}/${file}.jpg`;
+      // In a worker there is no Image: fetch and decode to an ImageBitmap instead.
+      if (typeof Image === 'undefined') {
+        return fetch(url)
+          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(r.status))))
+          .then((b) => createImageBitmap(b))
+          .then((bmp) => {
+            // (copied into a CPU canvas once, see context2d)
+            const c = makeCanvas(bmp.width, bmp.height);
+            context2d(c).drawImage(bmp, 0, 0);
+            bmp.close();
+            loaded(name, c, c.width);
+          })
+          .catch(() => {}); // keep the procedural texture
+      }
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          loaded(name, img, img.naturalWidth);
+          resolve();
+        };
+        img.onerror = () => resolve(); // keep the procedural texture
+        img.src = url;
+      });
+    });
+    return Promise.all(jobs);
   }
 
   /** A pattern for texture `name`, scaled so one tile covers its METRES in world units. */

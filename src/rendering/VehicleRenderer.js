@@ -677,10 +677,57 @@ function drawBody(ctx, v, time, vh, flip) {
 // zoom and then stamped. The lights on top stay live.
 
 const SPRITE_MARGIN = 0.5; // metres around the body (shadow, mirrors, rear step)
-const ZOOM_STEP = 2 ** 0.25; // sprite resolution steps (always at least the screen's)
-const MAX_SPRITES = 600;
-const sprites = new Map();
-let spriteRes = 0;
+const ZOOM_STEP = 2 ** 0.5; // sprite resolution steps (always at least the screen's)
+const MAX_SPRITES = 1500;
+const BUILD_MS = 1.0; // new sprites per frame; the rest wait a frame or two (drawn another way)
+// One cache per resolution, all kept: a zoom only adds sprites at the new resolution (a few per
+// frame), it never throws the others away, so zooming back finds them ready.
+const spriteLevels = new Map(); // res -> Map(key -> sprite)
+let spriteCount = 0;
+let buildUntil = 0;
+
+/** Start of a frame's vehicle drawing: opens this frame's sprite-building budget. */
+export function beginVehicleFrame() {
+  buildUntil = performance.now() + BUILD_MS;
+}
+
+/** A cached sprite of `key` at another resolution (the nearest, sharper ones first), or null. */
+function nearestSprite(key, res) {
+  let best = null;
+  let bestD = Infinity;
+  for (const [r, m] of spriteLevels) {
+    const s = m.get(key);
+    if (!s) continue;
+    const d = r >= res ? r / res : (res / r) * 2; // a softer one only when nothing sharper exists
+    if (d < bestD) {
+      best = s;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/** Too many sprites: drop whole resolutions, the ones furthest from the current one first. */
+function trimSprites(res) {
+  while (spriteCount > MAX_SPRITES && spriteLevels.size > 1) {
+    let worst = null;
+    let worstD = -1;
+    for (const r of spriteLevels.keys()) {
+      const d = Math.abs(Math.log(r / res));
+      if (d > worstD) {
+        worst = r;
+        worstD = d;
+      }
+    }
+    if (worst === res) break;
+    spriteCount -= spriteLevels.get(worst).size;
+    spriteLevels.delete(worst);
+  }
+  if (spriteCount > MAX_SPRITES) {
+    spriteLevels.clear();
+    spriteCount = 0;
+  }
+}
 
 /** What a sprite depends on besides type and paint: the variant bits each type actually reads. */
 function lookKey(v, vh) {
@@ -711,16 +758,19 @@ function lookKey(v, vh) {
 
 function bodySprite(v, time, vh, ppm) {
   const res = ZOOM_STEP ** Math.ceil(Math.log(Math.max(0.5, ppm)) / Math.log(ZOOM_STEP));
-  if (res !== spriteRes || sprites.size > MAX_SPRITES) {
-    sprites.clear();
-    spriteRes = res;
-  }
+  let sprites = spriteLevels.get(res);
+  if (!sprites) spriteLevels.set(res, (sprites = new Map()));
   const flip = v.type === 'jeepney' && Math.cos(v.angle) < -0.1;
   const strobe = v.type === 'ambulance' ? Math.floor(time * 6) % 2 : v.type === 'firetruck' ? Math.floor(time * 5) % 2 : 0;
-  if (v._look === undefined) v._look = `${v.type}|${v.color}|${lookKey(v, vh)}`;
-  const key = `${v._look}|${flip ? 1 : 0}${strobe}`;
+  if (v._look === undefined) {
+    v._look = `${v.type}|${v.color}|${lookKey(v, vh)}`;
+    v._keys = [`${v._look}|00`, `${v._look}|01`, `${v._look}|10`, `${v._look}|11`];
+  }
+  const key = v._keys[(flip ? 2 : 0) + strobe];
   let s = sprites.get(key);
   if (s) return s;
+  // Out of this frame's budget: the same look at another resolution, or (null) drawn directly.
+  if (performance.now() > buildUntil) return nearestSprite(key, res);
   const m = SPRITE_MARGIN;
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.ceil((v.spec.length + 2 * m) * res));
@@ -732,8 +782,21 @@ function bodySprite(v, time, vh, ppm) {
   drawBody(g, v, t + 1e-6, vh, flip);
   s = { canvas: c, w: c.width / res, h: c.height / res };
   sprites.set(key, s);
+  spriteCount++;
+  if (spriteCount > MAX_SPRITES) trimSprites(res);
   return s;
 }
+
+// Brake light colours, dim to bright, and the hard-braking halo, in 33 steps (no colour string is
+// built per vehicle per frame).
+const BRAKE_RGB = Array.from({ length: 33 }, (_, i) => {
+  const g = i / 32;
+  return `rgb(${Math.round(139 + 116 * g)},${Math.round(29 + 13 * g)},${Math.round(29 + 13 * g)})`;
+});
+const HALO_RGBA = Array.from({ length: 33 }, (_, i) => `rgba(255,40,40,${((0.25 * i) / 32).toFixed(3)})`);
+const BOTH_SIDES = [-1, 1];
+const LEFT = [-1];
+const RIGHT = [1];
 
 /**
  * Draw a vehicle. `ppm` is device pixels per metre: with it the body is stamped from a cached
@@ -748,10 +811,9 @@ export function drawVehicle(ctx, v, time, ppm = 0) {
   ctx.translate(v.x, v.y);
   ctx.rotate(v.angle);
   const vh = variantHash(v);
-  if (ppm > 0 && v.type !== 'bicycle' && typeof document !== 'undefined') {
-    const s = bodySprite(v, time, vh, ppm);
-    ctx.drawImage(s.canvas, -hl - SPRITE_MARGIN, -hw - SPRITE_MARGIN, s.w, s.h);
-  } else drawBody(ctx, v, time, vh, v.type === 'jeepney' && Math.cos(v.angle) < -0.1);
+  const s = ppm > 0 && v.type !== 'bicycle' && typeof document !== 'undefined' ? bodySprite(v, time, vh, ppm) : null;
+  if (s) ctx.drawImage(s.canvas, -hl - SPRITE_MARGIN, -hw - SPRITE_MARGIN, s.w, s.h);
+  else drawBody(ctx, v, time, vh, v.type === 'jeepney' && Math.cos(v.angle) < -0.1);
 
   // Lights: headlights, brake lights, indicators
   const twoWheel = v.type === 'motorcycle' || v.type === 'bicycle';
@@ -760,16 +822,25 @@ export function drawVehicle(ctx, v, time, ppm = 0) {
   const target = braking ? 1 : 0;
   v._brakeGlow = (v._brakeGlow ?? target) + (target - (v._brakeGlow ?? target)) * 0.3;
   const g = v._brakeGlow;
-  ctx.fillStyle = `rgb(${Math.round(139 + 116 * g)},${Math.round(29 + 13 * g)},${Math.round(29 + 13 * g)})`;
+  ctx.fillStyle = BRAKE_RGB[Math.round(g * 32)];
   if (twoWheel) ctx.fillRect(-hl - 0.02, -0.1, 0.14, 0.2);
   else {
     ctx.fillRect(-hl - 0.02, -hw + 0.12, 0.14, 0.38);
     ctx.fillRect(-hl - 0.02, hw - 0.5, 0.14, 0.38);
   }
+  // Backing up (a counterflower sent back): white reversing lights.
+  if (v.cf?.reverse) {
+    ctx.fillStyle = '#f8fafc';
+    if (twoWheel) ctx.fillRect(-hl - 0.04, -0.06, 0.1, 0.12);
+    else {
+      ctx.fillRect(-hl - 0.04, -hw + 0.52, 0.1, 0.24);
+      ctx.fillRect(-hl - 0.04, hw - 0.76, 0.1, 0.24);
+    }
+  }
   const hard = v.a < -0.6 ? 1 : 0;
   v._brakeHalo = (v._brakeHalo ?? 0) + (hard - (v._brakeHalo ?? 0)) * 0.25;
   if (v._brakeHalo > 0.03) {
-    ctx.fillStyle = `rgba(255,40,40,${(0.25 * v._brakeHalo).toFixed(3)})`;
+    ctx.fillStyle = HALO_RGBA[Math.round(Math.min(1, v._brakeHalo) * 32)];
     ctx.fillRect(-hl - 0.6, -hw, 0.6, W);
   }
   ctx.fillStyle = '#fff6c2';
@@ -786,7 +857,7 @@ export function drawVehicle(ctx, v, time, ppm = 0) {
     if (pulse > 0.02) {
       ctx.globalAlpha = Math.min(1, pulse * 1.4);
       ctx.fillStyle = '#ffb703';
-      for (const side of turn === 2 ? [-1, 1] : [turn]) {
+      for (const side of turn === 2 ? BOTH_SIDES : turn < 0 ? LEFT : RIGHT) {
         const y = side < 0 ? -hw - 0.05 : hw - 0.25;
         ctx.fillRect(hl - 0.45, y, 0.4, 0.3);
         ctx.fillRect(-hl + 0.05, y, 0.4, 0.3);

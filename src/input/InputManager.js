@@ -24,6 +24,7 @@ export class InputManager {
     canvas.addEventListener('pointercancel', (e) => this.onCancel(e));
     canvas.addEventListener('pointerleave', () => {
       if (!this.pointers.size) this.game.setHover(null);
+      if (this.game.hud.tip?.until === Infinity) this.game.hud.hideTip();
     });
     canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -31,7 +32,18 @@ export class InputManager {
   }
 
   _pos(e) {
-    const r = this.canvas.getBoundingClientRect();
+    // The canvas rect, read once and again only after a resize or scroll (a layout read on every
+    // pointer move can force a layout pass mid-frame).
+    if (!this._rect) {
+      this._rect = this.canvas.getBoundingClientRect();
+      if (!this._rectHooked) {
+        this._rectHooked = true;
+        const drop = () => (this._rect = null);
+        window.addEventListener('resize', drop);
+        window.addEventListener('scroll', drop, true);
+      }
+    }
+    const r = this._rect;
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
@@ -60,6 +72,22 @@ export class InputManager {
     const cam = this.game.camera;
     const w = cam.screenToWorld(px, py);
     return sim.vehicleAt(w.x, w.y, Math.max(0.6, 10 / cam.scale));
+  }
+
+  /** A vehicle under (px, py), or whose "!" badge (drawn just above it) is. */
+  hitBadged(px, py) {
+    const v = this.hitVehicle(px, py);
+    if (v) return v;
+    const g = this.game;
+    if (!g.sim || !g.session) return null;
+    const w = g.camera.screenToWorld(px, py);
+    const r = Math.max(1.4, 14 / g.camera.scale);
+    for (const o of g.sim.vehicles) {
+      const dx = o.x - w.x;
+      const dy = o.y - o.hl - 1.6 - w.y;
+      if (dx * dx + dy * dy < r * r && g.vehicleInfo(o)) return o;
+    }
+    return null;
   }
 
   hitJaywalker(x, y) {
@@ -111,8 +139,21 @@ export class InputManager {
   onDown(e) {
     this.game.audio.unlock();
     this.canvas.setPointerCapture?.(e.pointerId);
-    this.pointers.set(e.pointerId, this._pos(e));
+    const p = this._pos(e);
+    this.pointers.set(e.pointerId, p);
     this.dragDist = 0;
+    // Touch: press and hold a vehicle to read what its "!" means (no action).
+    clearTimeout(this._hold);
+    this.held = false;
+    if (e.pointerType !== 'mouse' && this.pointers.size === 1) {
+      this._hold = setTimeout(() => {
+        if (this.pointers.size !== 1 || this.dragDist > 6) return;
+        const v = this.hitBadged(p.x, p.y);
+        if (!v || !this.game.vehicleInfo(v)) return;
+        this.held = true;
+        this.game.hud.showTip(v, 3000);
+      }, 450);
+    }
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       this.pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
@@ -125,10 +166,14 @@ export class InputManager {
       if (e.pointerType === 'mouse') {
         const h = this.hitHead(p.x, p.y);
         this.game.setHover(h);
-        const v = h ? null : this.hitVehicle(p.x, p.y);
-        const sim = this.game.sim;
-        const stuck = v && (sim.isStuck(v) || sim.enforcement.violationOf(v));
-        this.canvas.style.cursor = this.game.state.tool ? 'crosshair' : h || stuck || this.hitBox(p.x, p.y) ? 'pointer' : 'grab';
+        const v = h ? null : this.hitBadged(p.x, p.y);
+        // Hovering a vehicle with a "!" explains it.
+        const info = v && this.game.vehicleInfo(v);
+        if (info) {
+          if (this.game.hud.tip?.v !== v) this.game.hud.showTip(v);
+        } else if (this.game.hud.tip) this.game.hud.hideTip();
+        const cursor = this.game.state.tool ? 'crosshair' : h || info || this.hitBox(p.x, p.y) ? 'pointer' : 'grab';
+        if (this.canvas.style.cursor !== cursor) this.canvas.style.cursor = cursor;
       }
       return;
     }
@@ -155,7 +200,7 @@ export class InputManager {
         this.game.director.timer = 12;
       }
       this.game.camera.panBy(dx, dy);
-      this.canvas.style.cursor = 'grabbing';
+      if (this.canvas.style.cursor !== 'grabbing') this.canvas.style.cursor = 'grabbing';
     }
   }
 
@@ -164,6 +209,11 @@ export class InputManager {
     const wasTap = this.pointers.size === 1 && this.dragDist <= 6;
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinchStart = null;
+    clearTimeout(this._hold);
+    if (this.held) {
+      this.held = false; // that was a long press: the tip shows, nothing else happens
+      return;
+    }
     if (!wasTap) return;
     const head = this.hitHead(p.x, p.y);
     if (head) {
@@ -176,9 +226,12 @@ export class InputManager {
     if (g.state.tool && g.toolAt(w.x, w.y)) return;
     // A vehicle: HULI! a violator, wave a stuck one through, padaanin at an enforcer's junction,
     // or follow it in watch mode. Clicking is always optional: everything also clears by itself.
-    const v = this.hitVehicle(p.x, p.y);
-    if (v && g.sim.enforcement.violationOf(v) && g.catchVehicle(v)) return;
-    if (v && g.wavePass(v)) return;
+    const v = this.hitBadged(p.x, p.y);
+    // On touch (no hover) the tip then says what the tap did.
+    const info = v && e.pointerType !== 'mouse' ? g.vehicleInfo(v) : null;
+    const done = (text) => info && g.hud.showTip(v, 2500, { ...info, action: `✓ ${text}` });
+    if (v && g.sim.enforcement.violationOf(v) && g.catchVehicle(v)) return done('HULI!');
+    if (v && g.wavePass(v)) return done('Pinadaan!');
     if (v && g.waveThrough(v)) return;
     if (v && g.followVehicle?.(v)) return;
     // Contraflow cones: tap them to take them away

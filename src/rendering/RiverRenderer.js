@@ -211,11 +211,37 @@ function drawBangka(ctx, x, y, angle, color, rower) {
   ctx.restore();
 }
 
+const RIPPLE_ROWS = [-0.28, 0, 0.22]; // across the river, as a share of its width
+
+/** World bounding box of the river (with its banks), measured once. */
+function riverBox(river) {
+  if (river._box) return river._box;
+  const b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  const p = {};
+  for (let s = 0; s <= river.length; s += 4) {
+    for (const d of [-river.width, river.width]) {
+      river.pointAt(Math.min(s, river.length), d, p);
+      b.minX = Math.min(b.minX, p.x);
+      b.minY = Math.min(b.minY, p.y);
+      b.maxX = Math.max(b.maxX, p.x);
+      b.maxY = Math.max(b.maxY, p.y);
+    }
+  }
+  river._box = b;
+  return b;
+}
+
 const BOAT_COLORS = ['#1d4ed8', '#dc2626', '#f8fafc', '#16a34a', '#f59e0b'];
 
 /** Ripples drifting downstream and boats (dynamic layer, under traffic). */
-export function drawRiverDynamic(ctx, river, spans, sw, time) {
+export function drawRiverDynamic(ctx, river, spans, sw, time, vr = null) {
   const w = river.width;
+  // Nothing of the river on screen: nothing to draw (its box is measured once).
+  if (vr) {
+    const b = riverBox(river);
+    if (b.maxX < vr.minX || b.minX > vr.maxX || b.maxY < vr.minY || b.minY > vr.maxY) return;
+  }
+  const out = (p, r) => vr && (p.x < vr.minX - r || p.x > vr.maxX + r || p.y < vr.minY - r || p.y > vr.maxY + r);
   ctx.save();
   clipOutBridges(ctx, spans, sw);
   // ripples: short light strokes moving with the current
@@ -224,10 +250,12 @@ export function drawRiverDynamic(ctx, river, spans, sw, time) {
   ctx.beginPath();
   const flow = (time * 1.2) % 9;
   for (let s = flow; s < river.length; s += 9) {
-    for (const d of [-w * 0.28, 0, w * 0.22]) {
+    for (const k of RIPPLE_ROWS) {
+      const d = k * w;
       const ss = s + (d > 0 ? 3 : d < 0 ? 5.5 : 0);
       if (ss > river.length - 2) continue;
       river.pointAt(ss, d, _p);
+      if (out(_p, 3)) continue;
       river.pointAt(ss + 1.8, d, _q);
       ctx.moveTo(_p.x, _p.y);
       ctx.lineTo(_q.x, _q.y);
@@ -242,6 +270,7 @@ export function drawRiverDynamic(ctx, river, spans, sw, time) {
     let s = ((time * speed + i * 137) % span) - 20;
     if (dir < 0) s = river.length - s;
     river.pointAt(s, (dir > 0 ? 1 : -1) * w * 0.22, _p);
+    if (out(_p, 4)) continue;
     const bob = Math.sin(time * 2 + i) * 0.04;
     drawBangka(ctx, _p.x, _p.y, _p.angle + (dir < 0 ? Math.PI : 0) + bob, BOAT_COLORS[i % BOAT_COLORS.length], true);
   }

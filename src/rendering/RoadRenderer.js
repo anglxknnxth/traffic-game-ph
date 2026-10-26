@@ -13,7 +13,7 @@ import { Rng, makeObb, setObb, obbOverlap } from '../utils/math.js';
 import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
 import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
 import { rightOf, leftOf, SLOT_KINDS } from '../simulation/LaneManager.js';
-import { TextureBank } from './TextureBank.js';
+import { TextureBank, makeCanvas, context2d } from './TextureBank.js';
 import { drawLandmark, landmarkFootprints } from './LandmarkRenderer.js';
 import { drawRiverStatic, drawRiverDynamic, drawBridgeShadows, drawBridgeRails, findBridges, bankPlants, drawBankPlants } from './RiverRenderer.js';
 
@@ -133,6 +133,42 @@ function armFrame(ctx, I, arm) {
   ctx.rotate(Math.atan2(o.y, o.x));
 }
 
+// Labels are stamped from cached images, one per (text, colour, weight, pixel size). Pixel sizes
+// come in √2 steps at or above the screen's, so a label is never drawn soft, and while zooming
+// the glyphs are not rasterised afresh every frame (only once per step, per label).
+const TEXT_FONT = 'system-ui, "Segoe UI", Roboto, sans-serif';
+const TEXT_MAX = 800;
+const textSprites = new Map();
+
+function textSprite(text, px, color, weight) {
+  const key = `${px}|${weight}|${color}|${text}`;
+  let s = textSprites.get(key);
+  if (s) {
+    textSprites.delete(key); // keep the most recently used last (LRU order)
+    textSprites.set(key, s);
+    return s;
+  }
+  const font = `${weight} ${px}px ${TEXT_FONT}`;
+  const probe = makeCanvas(1, 1);
+  if (!probe) return null;
+  const pg = context2d(probe);
+  pg.font = font;
+  const pad = Math.ceil(px * 0.15) + 1;
+  const w = Math.ceil(pg.measureText(text).width) + 2 * pad;
+  const h = Math.ceil(px * 1.35) + 2 * pad;
+  const c = makeCanvas(w, h);
+  const g = context2d(c);
+  g.font = font;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = color;
+  g.fillText(text, w / 2, h / 2);
+  s = { c, w, h, pad };
+  textSprites.set(key, s);
+  if (textSprites.size > TEXT_MAX) textSprites.delete(textSprites.keys().next().value);
+  return s;
+}
+
 export function worldText(ctx, text, x, y, size, color, angle = 0, align = 'center', weight = 700) {
   ctx.save();
   ctx.translate(x, y);
@@ -140,13 +176,22 @@ export function worldText(ctx, text, x, y, size, color, angle = 0, align = 'cent
   const t = ctx.getTransform();
   if (Math.cos(Math.atan2(t.b, t.a) + angle) < -0.1) angle += Math.PI;
   if (angle) ctx.rotate(angle);
-  const k = size / 20;
-  ctx.scale(k, k);
-  ctx.font = `${weight} 20px system-ui, "Segoe UI", Roboto, sans-serif`;
-  ctx.textAlign = align;
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = color;
-  ctx.fillText(text, 0, 0);
+  const want = size * Math.hypot(t.a, t.b); // device px of the em
+  const px = want >= 2 ? Math.min(256, Math.max(6, 2 ** (Math.ceil(Math.log2(want) * 2) / 2))) : 0;
+  const s = px ? textSprite(text, Math.round(px), color, weight) : null;
+  if (s) {
+    const k = size / Math.round(px); // world units per sprite pixel
+    const x0 = align === 'left' ? -s.pad : align === 'right' ? -(s.w - s.pad) : -s.w / 2;
+    ctx.drawImage(s.c, x0 * k, (-s.h / 2) * k, s.w * k, s.h * k);
+  } else if (px) {
+    const k = size / 20;
+    ctx.scale(k, k);
+    ctx.font = `${weight} 20px ${TEXT_FONT}`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.fillText(text, 0, 0);
+  }
   ctx.restore();
 }
 
@@ -208,7 +253,8 @@ function drawTree(ctx, t) {
 }
 
 export class RoadRenderer {
-  constructor(network) {
+  /** `textureBase`: URL of the photo texture sets (given by a tile worker, see tileWorker.js). */
+  constructor(network, { textureBase = null } = {}) {
     this.network = network;
     this.theme = THEMES[network.map.theme] || THEMES.default;
     this.bridges = network.river ? findBridges(network.river, this._armBands()) : [];
@@ -216,7 +262,7 @@ export class RoadRenderer {
     // Surface textures (procedural; photo textures on maps that have a set). The static layer is
     // re-rendered when photos finish loading (version is part of the renderer's cache key).
     this.version = 0;
-    this.tex = new TextureBank(network.map.textures || 'metro', () => this.version++); // CC0 photo set on every map
+    this.tex = new TextureBank(network.map.textures || 'metro', () => this.version++, { baseUrl: textureBase }); // CC0 photo set on every map
   }
 
   /** Every drawn arm as { g, len, half } (for bridge detection). */
@@ -243,8 +289,8 @@ export class RoadRenderer {
   }
 
   /** Water ripples and boats, under traffic. */
-  drawWater(ctx, time) {
-    if (this.network.river) drawRiverDynamic(ctx, this.network.river, this.bridges, SW, time);
+  drawWater(ctx, time, vr = null) {
+    if (this.network.river) drawRiverDynamic(ctx, this.network.river, this.bridges, SW, time, vr);
   }
 
   _arms(I) {
@@ -1225,10 +1271,9 @@ export class RoadRenderer {
     if (set[kind] !== undefined) return set[kind];
     const base = kind === 'yellow' ? '#e9b934' : '#ebe8dd';
     let style = base;
-    if (typeof document !== 'undefined') {
-      const c = document.createElement('canvas');
-      c.width = c.height = 64;
-      const k = c.getContext('2d');
+    const c = makeCanvas(64, 64);
+    if (c) {
+      const k = context2d(c);
       k.fillStyle = base;
       k.fillRect(0, 0, 64, 64);
       const rng = new Rng(kind === 'yellow' ? 71 : 37);
@@ -1563,11 +1608,12 @@ export class RoadRenderer {
   }
 
   // ------------------------------------------------------------------ dynamic overlays
-  drawDynamic(ctx, sim, time) {
+  drawDynamic(ctx, sim, time, vr = null) {
     const net = this.network;
+    const off = (x, y, r) => vr && (x < vr.minX - r || x > vr.maxX + r || y < vr.minY - r || y > vr.maxY + r);
     // Signal colour on each stop line
     for (const I of net.intersections) {
-      if (I.kind !== 'signal') continue;
+      if (I.kind !== 'signal' || off(I.x, I.y, (I.maxStop || 30) + 10)) continue;
       for (const arm of ARMS) {
         if (!I.approachLanes[arm]) continue;
         const A = I.arms[arm];
@@ -1585,6 +1631,7 @@ export class RoadRenderer {
       if (!lane.gateVisible) continue;
       const I = lane.startInt;
       const A = I.arms[lane.startArm];
+      if (off(I.x, I.y, A.exitStop + lane.gateLocal + 12)) continue;
       const g = this._g(I, lane.startArm);
       const x = A.exitStop + lane.gateLocal + 0.3;
       const open = lane.gate.tokens >= 1;

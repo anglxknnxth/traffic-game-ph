@@ -9,9 +9,21 @@ const LAMP = {
   green: ['#30d158', '#123d1d'],
 };
 
+// lamps: red farthest from the box (toward -x is toward the intersection)
+const ORDER = [
+  ['red', 1.05],
+  ['yellow', 0],
+  ['green', -1.05],
+];
+
 export class TrafficLightRenderer {
-  draw(ctx, sim, time, hovered) {
+  /**
+   * Draw the heads inside `vr` (world rect; all when null). `lampsOnly`: just the lit lamps and the
+   * countdowns (the pass drawn again over the night darkness).
+   */
+  draw(ctx, sim, time, hovered, vr = null, lampsOnly = false) {
     for (const h of sim.lights.heads) {
+      if (vr && (h.x < vr.minX - 4 || h.x > vr.maxX + 4 || h.y < vr.minY - 4 || h.y > vr.maxY + 4)) continue;
       const mgr = sim.lights.manager(h.intersectionId);
       let sig = mgr.signalForGroup(h.group);
       // Flashing yellow: the amber lamp blinks on every head.
@@ -37,22 +49,19 @@ export class TrafficLightRenderer {
       }
 
       ctx.rotate(h.angle);
-      // pole shadow + pole
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fillRect(-1.55, -0.55, 3.3, 1.3);
-      ctx.fillStyle = '#1f2937';
-      ctx.fillRect(-1.7, -0.62, 3.4, 1.24);
-      ctx.strokeStyle = '#9ca3af';
-      ctx.lineWidth = 0.08;
-      ctx.strokeRect(-1.7, -0.62, 3.4, 1.24);
-      // lamps: red farthest from the box (toward -x is toward the intersection)
-      const order = [
-        ['red', 1.05],
-        ['yellow', 0],
-        ['green', -1.05],
-      ];
-      for (const [name, x] of order) {
+      if (!lampsOnly) {
+        // pole shadow + pole
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(-1.55, -0.55, 3.3, 1.3);
+        ctx.fillStyle = '#1f2937';
+        ctx.fillRect(-1.7, -0.62, 3.4, 1.24);
+        ctx.strokeStyle = '#9ca3af';
+        ctx.lineWidth = 0.08;
+        ctx.strokeRect(-1.7, -0.62, 3.4, 1.24);
+      }
+      for (const [name, x] of ORDER) {
         const on = sig === name;
+        if (lampsOnly && !on) continue;
         const [lit, dim] = LAMP[name];
         if (on) {
           ctx.globalAlpha = 0.35;
@@ -83,7 +92,7 @@ export class TrafficLightRenderer {
       } else if (real === 'yellow') {
         digits = Math.ceil(left);
         colour = '#ffd60a';
-      } else if (real === 'red' && (mgr.nextGroup === h.group || mgr.pair?.stage === 'adding' && mgr.pair.other === h.group) && left > 0.05) {
+      } else if (real === 'red' && (mgr.nextGroup === h.group || (mgr.pair?.stage === 'adding' && mgr.pair.other === h.group)) && left > 0.05) {
         digits = Math.ceil(left);
       }
       if (real !== 'flash') {
@@ -92,11 +101,13 @@ export class TrafficLightRenderer {
         // Beside the housing, on the side away from the road
         const bx = h.x - sn * 2.0 - c * 0.2;
         const by = h.y + c * 2.0 - sn * 0.2;
-        ctx.fillStyle = '#05070a';
-        ctx.fillRect(bx - 1.05, by - 0.65, 2.1, 1.3);
-        ctx.strokeStyle = '#374151';
-        ctx.lineWidth = 0.06;
-        ctx.strokeRect(bx - 1.05, by - 0.65, 2.1, 1.3);
+        if (!lampsOnly) {
+          ctx.fillStyle = '#05070a';
+          ctx.fillRect(bx - 1.05, by - 0.65, 2.1, 1.3);
+          ctx.strokeStyle = '#374151';
+          ctx.lineWidth = 0.06;
+          ctx.strokeRect(bx - 1.05, by - 0.65, 2.1, 1.3);
+        } else if (digits === null) continue;
         const txt = digits === null ? '--' : String(digits).padStart(2, '0');
         worldText(ctx, txt, bx, by + 0.04, 1.15, digits === null ? '#3a1414' : colour, 0, 'center', 800);
       }

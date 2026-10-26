@@ -108,6 +108,7 @@ export class HUD {
         </div>
       </nav>
       <div class="hud-toast"></div>
+      <div class="veh-tip" hidden><b class="vt-title"></b><span class="vt-why"></span><i class="vt-act"></i></div>
       <div class="hud-ticker"><span class="tk-tag">TRAFFIC UPDATE</span><div class="tk-wrap"><span class="tk-text"></span></div></div>
       <div class="hud-coach" hidden></div>
     `;
@@ -133,6 +134,7 @@ export class HUD {
       music: root.querySelector('[data-act="music"]'),
       bottom: root.querySelector('.hud-bottom'),
       rail: root.querySelector('.hud-rail'),
+      tip: root.querySelector('.veh-tip'),
       railBtn: root.querySelector('[data-act="rail"]'),
       top: root.querySelector('.hud-top'),
       side: root.querySelector('.hud-side'),
@@ -148,6 +150,11 @@ export class HUD {
       heatBtn: root.querySelector('[data-act="heat"]'),
     };
     this.monitor = new Monitor(this.el.monitor);
+    if (typeof ResizeObserver !== 'undefined') {
+      this._ro = new ResizeObserver(() => (this._layoutDirty = true));
+      this._ro.observe(this.el.bottom);
+      this._ro.observe(this.root);
+    }
     this.root.addEventListener('click', (e) => this.onClick(e));
     this.el.volume.addEventListener('input', () => game.setVolume(this.el.volume.value / 100));
     this.hide();
@@ -174,6 +181,7 @@ export class HUD {
   hide() {
     this.root.hidden = true;
     this.session = null;
+    this.hideTip();
   }
 
   buildPanels(sim) {
@@ -419,6 +427,52 @@ export class HUD {
     b.classList.add('show');
   }
 
+  /**
+   * Explain a vehicle's "!" badge in a small card above it. `ms`: how long it stays (0: until
+   * hideTip, for a mouse hover). `fixed`: show this info instead of the live one (after a tap acted).
+   */
+  showTip(v, ms = 0, fixed = null) {
+    this.tip = { v, until: ms ? performance.now() + ms : Infinity, fixed };
+    this.placeTip();
+  }
+
+  hideTip() {
+    this.tip = null;
+    this.el.tip.hidden = true;
+  }
+
+  /** Keep the tip on its vehicle (every frame while one is shown). */
+  placeTip() {
+    const t = this.tip;
+    if (!t) return;
+    const g = this.game;
+    const v = t.v;
+    const info = t.fixed || g.vehicleInfo(v);
+    if (!info || v._remove || !g.sim?.vehicles.includes(v) || performance.now() > t.until) {
+      this.hideTip();
+      return;
+    }
+    const el = this.el.tip;
+    el.hidden = false;
+    set(el, 'className', `veh-tip ${info.kind}`);
+    set(el.firstChild, 'textContent', info.title);
+    set(el.children[1], 'textContent', info.why);
+    set(el.children[2], 'textContent', info.action);
+    const p = g.camera.worldToScreen(v.x, v.y - v.hl - 2.4);
+    el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -100%)`;
+  }
+
+  /** First badge of a session: say once what the colours mean. */
+  _badgeHint(sim) {
+    if (this._badgeHinted === this.session) return;
+    for (const v of sim.vehicles) {
+      if (!this.game.vehicleInfo(v)) continue;
+      this._badgeHinted = this.session;
+      this.notify({ severity: 'info', text: '❗ dilaw = naipit · ❗ pula = pasaway · hover (o pindutin nang matagal) ang sasakyan para sa detalye' });
+      return;
+    }
+  }
+
   toast(text, kind = 'info') {
     const t = this.el.toast;
     t.textContent = text;
@@ -454,19 +508,27 @@ export class HUD {
     const sim = s.sim;
     const m = sim.metrics;
     const lvl = s.level;
-    // The side column stops above the stack of panels and controls at the bottom-left. (Measured
-    // before anything below writes to the page, so reading the layout costs nothing.)
-    const sideTop = this.el.side.getBoundingClientRect().top;
-    const room = Math.round(this.el.bottom.getBoundingClientRect().top - sideTop - 8);
-    if (room > 0 && room !== this._sideRoom) {
-      this._sideRoom = room;
-      this.el.side.style.maxHeight = `${room}px`;
+    // The side column stops above the stack of panels at the bottom-left. Measured only when the
+    // layout changed (a resize, panels rebuilt: see the ResizeObserver) or once a second, never
+    // every update: a layout read in a busy frame can force a whole style and layout pass.
+    this._layoutN = (this._layoutN || 0) + 1;
+    if (this._layoutDirty !== false || this._layoutN % 8 === 0 || force) {
+      this._layoutDirty = false;
+      const sideTop = this.el.side.getBoundingClientRect().top;
+      const room = Math.round(this.el.bottom.getBoundingClientRect().top - sideTop - 8);
+      if (room > 0 && room !== this._sideRoom) {
+        this._sideRoom = room;
+        this.el.side.style.maxHeight = `${room}px`;
+      }
     }
     this._street(sim);
     this._live(sim);
+    this._badgeHint(sim);
     this.monitor.sample(sim, Math.max(0, sim.time - this._simT));
     this._simT = sim.time;
-    if (this.game.state.showMonitor) this.monitor.render(sim);
+    // The monitor rebuilds a whole panel of markup: twice a second is enough to read it.
+    this._monT = (this._monT || 0) + 1;
+    if (this.game.state.showMonitor && (this._monT % 4 === 0 || force)) this.monitor.render(sim);
     set(this.el.time, 'textContent', lvl.duration ? formatTime(Math.max(0, lvl.duration - s.elapsed)) : formatTime(s.elapsed));
     set(this.el.score, 'textContent', sim.scoring.total().toLocaleString());
     // Clock and weather (levels with an environment only)

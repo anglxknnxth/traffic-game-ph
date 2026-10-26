@@ -157,6 +157,9 @@ export class CounterflowManager {
     // No gap to cut into: run up the oncoming lane as far as it is clear, toward the stop line.
     // Only on its own green: nobody waits out there for the light to change.
     if (this._ownSignal(v) !== 'green') return;
+    // ... and never up the only lane out while the other side may drive into it: head-on at the
+    // line, nobody could move (with a lane beside it, that traffic keeps right instead).
+    if (!this._hasAlt(opp) && this._oppBusy(opp)) return;
     // One at a time per junction: two of them on opposite roads would each block the other's exit.
     if (this.active.some((o) => o.cf && o.cf.front && !o.cf.legal && !o.cf.emergency && o.cf.lane.endInt === lane.endInt)) return;
     // Only the really fed-up go all the way.
@@ -170,6 +173,76 @@ export class CounterflowManager {
     const lane = v.cf ? v.cf.lane : v.segment;
     if (!lane.endInt) return 'green';
     return this.sim.lights.signal(lane.endInt.id, lane.endArm, v.nextConnEntry()?.seg.movement);
+  }
+
+  /** Does the road beyond have a second lane out (so traffic can keep right round `opp`)? */
+  _hasAlt(opp) {
+    return opp.startInt.exitLanes[opp.startArm].some((l) => l !== opp && l.type === 'general');
+  }
+
+  /** May traffic drive into `opp` from the junction right now (a light for it, or someone turning in)? */
+  _oppBusy(opp) {
+    const I = opp.startInt;
+    for (const c of I.connectors) {
+      if (c.toLane !== opp) continue;
+      if (c.vehicles.length) return true;
+      const s = this.sim.lights.signal(I.id, c.arm, c.movement);
+      if (s === 'green' || s === 'yellow' || s === 'flash') return true;
+    }
+    return false;
+  }
+
+  /** The nearest vehicle out in the same oncoming stretch behind v, and the gap to it. */
+  _cfBehind(v) {
+    const cf = v.cf;
+    const at = this._along(v, cf.lane);
+    let best = null;
+    for (const o of this.active) {
+      if (o === v || !o.cf || o.cf.lane !== cf.lane || o.cf.phase === 'in' || o.cf.phase === 'signal') continue;
+      const p = this._along(o, cf.lane);
+      if (p === null || p >= at) continue;
+      const gap = at - v.hl - p - o.hl;
+      if (!best || gap < best.gap) best = { vehicle: o, gap };
+    }
+    return best;
+  }
+
+  /**
+   * Caught (HULI!) and nowhere to get back in: back up along the queue, through the collision
+   * gate, until there is a gap beside it, then slide in. Only ever after a catch.
+   */
+  _reverse(v, dt) {
+    const sim = this.sim;
+    const cf = v.cf;
+    if (this._cutIn(v)) {
+      cf.reverse = false;
+      cf.revV = 0;
+      return;
+    }
+    cf.reverse = true;
+    cf.revV = Math.min(MOTO.has(v.type) ? 2.0 : 1.2, (cf.revV || 0) + 1.5 * dt);
+    let ds = cf.revV * dt;
+    // A chain backs up rearmost first: keep a metre to whoever is out there behind.
+    const back = this._cfBehind(v);
+    if (back) ds = Math.min(ds, Math.max(0, back.gap - 1));
+    // Never back out of the lane it is in.
+    ds = Math.min(ds, v.localS - v.hl - 0.5);
+    if (!(ds > 1e-4)) {
+      cf.revV = 0;
+      return;
+    }
+    const tmp = this._tmp || (this._tmp = makeObb());
+    v.poseAt(v.s - ds, tmp);
+    if (!sim.collision.isClear(tmp, sim.collision.neighbors(v, ds + 1.2))) {
+      cf.revV = 0;
+      return;
+    }
+    v.s -= ds;
+    v.localS -= ds;
+    v.updatePose();
+    cf.target = v.localS + v.hl;
+    // The oncoming lane frees up behind it as it goes.
+    if (cf.block) cf.block.s = Math.max(cf.block.s, Math.max(0.5, Math.min(this.oppS(cf.lane, cf.opp, cf.target + 3), this.oppS(cf.lane, cf.opp, v.localS - v.hl - 1))));
   }
 
   /** An emergency vehicle just behind v in its lane, too close behind v to swing out itself. */
@@ -393,7 +466,8 @@ export class CounterflowManager {
     // Room for the whole curve ahead (its front limit sits a little past the end, so it is driven
     // to the very end), or half of it when the vehicle ahead is pulling away.
     const room = end - Math.max(1.5, v.p.minGap) - 0.5 - v.localS - v.hl;
-    if (room < (A && A.v > 0.8 && A.a > -0.5 ? 0.5 * L : L)) return false;
+    // (Sent back with no room ahead for the curve, e.g. at the stop line: straight sideways instead.)
+    if (room < (A && A.v > 0.8 && A.a > -0.5 ? 0.5 * L : L)) return cf.forced ? this._squeezeIn(v, A, F, lane) : false;
     if (F) {
       const gapBack = v.localS - v.hl - F.localS - F.hl;
       // A driver who has stopped (or is holding back for us) lets the tail start in a little early:
@@ -404,6 +478,23 @@ export class CounterflowManager {
     }
     if (!this._extend(v, v.localS + v.hl + L + 0.5)) return false;
     this._sweep(v, 0, L);
+    cf.phase = 'in';
+    cf.stuckIn = 0;
+    return true;
+  }
+
+  /**
+   * Sent back with no forward room for the curve: slide straight sideways into the slot beside it,
+   * if the vehicle ahead and the one behind (holding still) leave one. False when there is none.
+   */
+  _squeezeIn(v, A, F, lane) {
+    const pad = MOTO.has(v.type) ? 0.3 : 0.4;
+    const ahead = (A ? A.localS - A.hl : lane.length + 0.5) - (v.localS + v.hl);
+    const behind = F ? v.localS - v.hl - (F.localS + F.hl) : Infinity;
+    if (ahead < pad || behind < pad) return false;
+    if (F && F.v > 0.5 && F.leaderId !== v.id) return false;
+    const cf = v.cf;
+    cf.sweep = null;
     cf.phase = 'in';
     cf.stuckIn = 0;
     return true;
@@ -496,6 +587,11 @@ export class CounterflowManager {
     // Running up to the line, but the light is no longer (or not yet) its own green before it got
     // in: back into the queue rather than waiting out there.
     if (cf.front && !cf.legal && !cf.forced && cf.phase === 'run' && !v.reservations.size && this._ownSignal(v) !== 'green') this.forceReturn(v);
+    // ... or the other side may now drive into the only lane out it is standing in: give way.
+    if (cf.front && !cf.legal && !cf.forced && cf.phase === 'run' && !v.reservations.size && !this._hasAlt(cf.opp) && this._oppBusy(cf.opp)) this.forceReturn(v);
+    // Caught (HULI!) and still no way in after a moment: back up along the queue to a gap.
+    if (cf.caught && cf.forced && cf.phase === 'run' && sim.time >= cf.backAt) this._reverse(v, dt);
+    else if (cf.reverse) cf.reverse = false;
     if (cf.merge) {
       // Cones lifted: wait beside the queue (no running ahead of it) until there is a gap to zip into.
       if (cf.phase === 'run') {
@@ -527,7 +623,7 @@ export class CounterflowManager {
     // (On a red it waits out there for a gap; traffic heading into that lane keeps right.)
     if (cf.forced && cf.phase === 'run') {
       cf.noRoomT = (cf.noRoomT || 0) + dt;
-      if (cf.noRoomT > 5 && (cf.legal || this._ownSignal(v) === 'green')) {
+      if (cf.noRoomT > 5 && !cf.caught && (cf.legal || (this._ownSignal(v) === 'green' && (this._hasAlt(cf.opp) || !this._oppBusy(cf.opp))))) {
         cf.forced = false;
         cf.front = true;
         cf.noStuck = true;
@@ -554,7 +650,11 @@ export class CounterflowManager {
         // Someone took the space while it was cutting back in: swing back out and carry on (or,
         // when the cones are coming up, wait out there for the next gap).
         cf.stuckIn = v.cfOff === before ? (cf.stuckIn || 0) + dt : 0;
-        if (cf.stuckIn > 3 && cf.opp && !cf.zone?.state?.startsWith('gon')) {
+        if (cf.stuckIn > 3 && cf.opp && cf.caught) {
+          // Caught: back out to the side and keep looking for a way in (backing up if it must).
+          cf.stuckIn = 0;
+          cf.phase = 'out';
+        } else if (cf.stuckIn > 3 && cf.opp && !cf.zone?.state?.startsWith('gon')) {
           cf.stuckIn = 0;
           cf.phase = 'out';
           cf.forced = false;
@@ -587,8 +687,25 @@ export class CounterflowManager {
     return true;
   }
 
-  /** HULI!, or stuck too long: stop advancing and swing back in beside the nearest vehicle behind. */
-  forceReturn(v) {
+  /**
+   * HULI! on a counterflower: it, and every one out in the same stretch behind it (they would be
+   * in its way), goes back into its own lane, backing up to a gap if it has to.
+   */
+  sendBack(v) {
+    const lane = v.cf?.lane;
+    const at = lane ? this._along(v, lane) : null;
+    for (const o of [...this.active]) {
+      if (!o.cf || o.cf.legal || o.cf.emergency) continue;
+      if (o !== v && (o.cf.lane !== lane || at === null || (this._along(o, lane) ?? Infinity) >= at)) continue;
+      this.forceReturn(o, { reverse: true });
+    }
+  }
+
+  /**
+   * Stuck too long, give way, or HULI!: stop advancing and swing back in beside the nearest vehicle
+   * behind. `reverse`: caught, so it may back up to a gap if there is none (see _reverse).
+   */
+  forceReturn(v, { reverse = false } = {}) {
     const cf = v.cf;
     if (!cf || cf.emergency) return;
     // Caught before it even pulled out, or already on its way back in.
@@ -597,6 +714,10 @@ export class CounterflowManager {
       return;
     }
     v.cfDone = true;
+    if (reverse && !cf.caught) {
+      cf.caught = true;
+      cf.backAt = this.sim.time + 1;
+    }
     if (cf.phase === 'in') return;
     cf.forced = true;
     cf.target = Math.min(cf.target, v.localS + v.hl); // stop here (or just past whoever is beside us)

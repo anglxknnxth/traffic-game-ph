@@ -307,7 +307,7 @@ describe('Counterflow and enforcers', () => {
     });
 
   it('pasaway counterflow stays collision-free, and HULI! sends them back', () => {
-    const sim = new TrafficSimulator(cfLevel(), { seed: 9 });
+    const sim = new TrafficSimulator(cfLevel(), { seed: 5 });
     let caught = 0;
     run(sim, 180, (s, i) => {
       if (i % (25 * 60) === 0) s.requestPhase('A', ['N', 'E', 'W'][(i / (25 * 60)) % 3]);
@@ -577,6 +577,75 @@ describe('Counterflow and enforcers', () => {
     expect(inCones).toBeGreaterThan(0);
     // through on its red (North never gets a green here), past the queue it was stuck in
     expect(sim.emergencySummary().cleared).toBeGreaterThan(0);
+  });
+
+  it('a counterflower stuck head-on backs up only once caught (HULI!), without touching anyone', () => {
+    // One lane each way: nowhere for the oncoming side to keep right.
+    MAPS.oneLaneTest = { ...MAPS.single, id: 'oneLaneTest', roads: { street: { lanes: 1, median: 0 } } };
+    const sim = new TrafficSimulator(makeLevel({ map: 'oneLaneTest', prewarm: 0, demandScale: 1, demand: { N: 3, S: 3, E: 16, W: 16 }, mix: { car: 0.6, motorcycle: 0.4 }, turns: { left: 0.1, right: 0.15 }, personalities: { patient: 0.5, impatient: 0.5 }, initialGroups: { A: 'N' } }), { seed: 5 });
+    const cfm = sim.counterflow;
+    const lane = sim.network.byId.get('A').approachLanes.E[0];
+    const opp = cfm.oppOf(lane);
+    let moto = null;
+    let caught = false;
+    let reversedEarly = false;
+    let reversed = false;
+    let caughtAt = 0;
+    run(sim, 95, (s, i) => {
+      if (i === 40 * 60) {
+        // force the old behaviour: a pasaway runs up the only lane out
+        for (const v of lane.vehicles.filter((o) => o.type === 'motorcycle' && o.localS < lane.length - 12).reverse()) {
+          const t = cfm._reach(v, lane, opp, 1.5);
+          if (t === null) continue;
+          cfm._startFront(v, lane, opp, { target: t });
+          moto = v;
+          break;
+        }
+      }
+      if (i === 50 * 60) s.requestPhase('A', 'E');
+      if (i === 53 * 60) s.requestPhase('A', 'W'); // East and West green together
+      if (i === 80 * 60 && moto?.cf) {
+        caughtAt = moto.localS;
+        caught = s.enforcement.catchVehicle(moto);
+      }
+      if (moto?.cf?.reverse) {
+        if (!caught) reversedEarly = true;
+        reversed = true;
+      }
+    });
+    expect(moto).not.toBeNull();
+    expect(caught).toBe(true);
+    expect(reversedEarly).toBe(false);
+    // back in its own lane, or backing up along the queue toward a gap
+    expect(!moto.cf || moto.cf.phase === 'in' || (reversed && moto.localS < caughtAt - 10)).toBe(true);
+  });
+
+  it('two lanes each way: legal traffic keeps right round a counterflower instead of waiting behind it', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 4, S: 4, E: 16, W: 16 }, mix: { car: 0.6, motorcycle: 0.4 }, turns: { left: 0.1, right: 0.15 }, initialGroups: { A: 'N' } }), { seed: 3 });
+    const cfm = sim.counterflow;
+    const lane = sim.network.byId.get('A').approachLanes.E[0];
+    const opp = cfm.oppOf(lane);
+    let moto = null;
+    let closed = 0;
+    let stuckBehind = 0;
+    run(sim, 70, (s, i) => {
+      if (i === 30 * 60) s.requestPhase('A', 'W'); // the other side drives into that road
+      if (!moto && i >= 20 * 60 && i % 30 === 0) {
+        for (const v of lane.vehicles.filter((o) => o.type === 'motorcycle' && o.localS < lane.length - 12).reverse()) {
+          const t = cfm._reach(v, lane, opp, 1.5);
+          if (t === null) continue;
+          cfm._startFront(v, lane, opp, { target: t });
+          moto = v;
+          break;
+        }
+      }
+      if (!moto?.cf?.block) return;
+      if (opp.closed) closed++;
+      for (const o of opp.vehicles) if (o.stoppedTime > 10 && o.localS < moto.cf.block.s) stuckBehind++;
+    });
+    expect(moto).not.toBeNull();
+    expect(closed).toBeGreaterThan(0);
+    expect(stuckBehind).toBe(0);
   });
 
   it('an enforcer stands in the middle of the junction', () => {

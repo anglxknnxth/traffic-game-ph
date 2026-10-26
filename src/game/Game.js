@@ -11,7 +11,7 @@ import { HUD } from '../ui/HUD.js';
 import { Menu } from '../ui/Menu.js';
 import { loadSave, writeSave, clearSave } from '../utils/storage.js';
 import { CAREER_COUNT, PINOY_COUNT } from '../data/levels.js';
-import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
+import { FLASH_GROUP, playerPhaseRequest } from '../simulation/TrafficPhaseManager.js';
 import { Director } from './Director.js';
 import { Network } from '../simulation/LaneManager.js';
 
@@ -338,15 +338,21 @@ export class Game {
     // The player took this signal over: it leaves AUTO.
     const wasAuto = sim.autopilot.isAuto(intersectionId);
     sim.autopilot.onPlayerInput(intersectionId);
-    const res = sim.requestPhase(intersectionId, group);
+    const m = sim.lights.manager(intersectionId);
     const multi = sim.lights.managers.size > 1;
     const where = multi ? ` (${intersectionId})` : '';
-    const m = sim.lights.manager(intersectionId);
+    const ask = m ? playerPhaseRequest(m, group) : group;
+    if (ask === null) {
+      if (wasAuto) this.hud.toast(`MANUAL${where}: you have the lights · ↺ AUTO to hand back`, 'info');
+      return; // tapping the only green does nothing
+    }
+    const res = sim.requestPhase(intersectionId, ask);
     const label = m?.labelOf(group) || group;
     if (wasAuto) this.hud.toast(`MANUAL${where}: you have the lights · ↺ AUTO to hand back`, 'info');
     else if (res.status === 'accepted') {
       this.audio.click();
-      if (res.reason === 'Change cancelled') this.hud.toast(`${label}${where} stays green`, 'ok');
+      if (ask !== group) this.hud.toast(`${label}${where} red · ${m.labelOf(ask)} stays green`, 'ok');
+      else if (res.reason === 'Change cancelled') this.hud.toast(`${label}${where} stays green`, 'ok');
       else if (res.reason === 'Pairing') this.hud.toast(`+ ${label}${where}: both roads go together · no left turn`, 'ok');
       else if (res.reason === 'Dropping pair') this.hud.toast(`Only ${label}${where} now · left turns back in ${res.wait.toFixed(1)}s`, 'ok');
       else if (res.reason === 'Pair kept') this.hud.toast(`Both roads stay green${where}`, 'ok');

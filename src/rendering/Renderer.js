@@ -11,6 +11,9 @@ import { EffectsRenderer } from './EffectsRenderer.js';
 import { WeatherRenderer } from './WeatherRenderer.js';
 import { drawPedestrians, drawPedSignals } from './PedestrianRenderer.js';
 
+const MAX_CACHE = 4096; // px per side of a cached layer
+const SETTLE_MS = 150; // re-render the cached layers this long after the camera stops
+
 export class Renderer {
   constructor(canvas, camera) {
     this.canvas = canvas;
@@ -25,7 +28,6 @@ export class Renderer {
     this.elevCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
     this._ground = [];
     this._high = [];
-    this.staticKey = '';
     this._visible = [];
     this._saved = [];
     this._dp = { x: 0, y: 0, angle: 0 };
@@ -35,57 +37,65 @@ export class Renderer {
     if (this.network === network) return;
     this.network = network;
     this.road = new RoadRenderer(network);
-    this.staticKey = '';
     this.staticView = null;
   }
 
   /**
-   * Re-render the static layer for the current camera, unless an eased zoom is running and the
-   * cached layer can simply be scaled and shifted (it is re-rendered once the zoom settles).
+   * The static layer (and the expressway deck) is cached a margin bigger than the screen. Panning
+   * just shifts the cached image; it is re-rendered when the view leaves the margin, once a zoom
+   * has settled (the cached image is scaled meanwhile), on resize, or when the road changes.
    * Returns the transform (device pixels) to draw the cached layer with.
    */
   _ensureStatic() {
     const c = this.canvas;
     const cam = this.camera;
-    const key = `${c.width}x${c.height}|${cam.scale.toFixed(5)}|${cam.centerX.toFixed(3)}|${cam.centerY.toFixed(3)}|${cam.screenCX.toFixed(1)}|${cam.screenCY.toFixed(1)}|${this.road.version || 0}`;
+    const dpr = cam.dpr;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    const camKey = `${cam.scale}|${cam.centerX}|${cam.centerY}|${cam.screenCX}|${cam.screenCY}`;
+    if (camKey !== this._camKey) {
+      this._camKey = camKey;
+      this._movedAt = now;
+    }
+    const moving = cam.animating || now - (this._movedAt || 0) < SETTLE_MS;
     const sv = this.staticView;
-    if (key === this.staticKey) return null;
-    if (cam.animating && sv && sv.w === c.width && sv.h === c.height) {
+    const version = this.road.version || 0;
+    if (sv && sv.w === c.width && sv.h === c.height && sv.version === version && sv.dpr === dpr) {
       const r = cam.scale / sv.scale;
-      if (r < 1.4 && r > 1 / 1.4) {
-        const dpr = cam.dpr;
-        return {
-          r,
-          tx: dpr * (-sv.scx * r + (sv.cx - cam.centerX) * cam.scale + cam.screenCX),
-          ty: dpr * (-sv.scy * r + (sv.cy - cam.centerY) * cam.scale + cam.screenCY),
-        };
+      const tx = -r * sv.mx - r * dpr * (sv.scx - sv.cx * sv.scale) + dpr * (cam.screenCX - cam.centerX * cam.scale);
+      const ty = -r * sv.my - r * dpr * (sv.scy - sv.cy * sv.scale) + dpr * (cam.screenCY - cam.centerY * cam.scale);
+      const same = Math.abs(r - 1) < 1e-6;
+      const covers = tx <= 0.5 && ty <= 0.5 && tx + r * (c.width + 2 * sv.mx) >= c.width - 0.5 && ty + r * (c.height + 2 * sv.my) >= c.height - 0.5;
+      // Same zoom: reuse while the screen is inside the cached area. Mid-zoom: scale it for now.
+      if (same ? covers : moving && r > 0.2 && r < 5) return { r, tx, ty };
+    }
+    // Margin of half a screen each side, keeping the cache within 4096 px.
+    const mx = Math.max(0, Math.min(Math.round(c.width / 2), Math.floor((MAX_CACHE - c.width) / 2)));
+    const my = Math.max(0, Math.min(Math.round(c.height / 2), Math.floor((MAX_CACHE - c.height) / 2)));
+    this.staticView = { w: c.width, h: c.height, dpr, version, scale: cam.scale, cx: cam.centerX, cy: cam.centerY, scx: cam.screenCX, scy: cam.screenCY, mx, my };
+    this.staticRenders = (this.staticRenders || 0) + 1;
+    const W = c.width + 2 * mx;
+    const H = c.height + 2 * my;
+    // World rect of the cached area, so scenery outside it is skipped.
+    const k = 1 / (cam.scale * dpr);
+    const x0 = cam.centerX - (cam.screenCX * dpr + mx) * k;
+    const y0 = cam.centerY - (cam.screenCY * dpr + my) * k;
+    this.road.view = { minX: x0, minY: y0, maxX: x0 + W * k, maxY: y0 + H * k };
+    const paint = (canvas, draw) => {
+      if (canvas.width !== W || canvas.height !== H) {
+        canvas.width = W;
+        canvas.height = H;
       }
-    }
-    this.staticKey = key;
-    this.staticView = { w: c.width, h: c.height, scale: cam.scale, cx: cam.centerX, cy: cam.centerY, scx: cam.screenCX, scy: cam.screenCY };
-    const sc = this.staticCanvas;
-    if (sc.width !== c.width || sc.height !== c.height) {
-      sc.width = c.width;
-      sc.height = c.height;
-    }
-    const sctx = sc.getContext('2d');
-    sctx.setTransform(1, 0, 0, 1, 0, 0);
-    sctx.clearRect(0, 0, sc.width, sc.height);
-    cam.apply(sctx);
-    this.road.drawStatic(sctx);
-    if (this.road.hasElevated) {
-      const ec = this.elevCanvas;
-      if (ec.width !== c.width || ec.height !== c.height) {
-        ec.width = c.width;
-        ec.height = c.height;
-      }
-      const ectx = ec.getContext('2d');
-      ectx.setTransform(1, 0, 0, 1, 0, 0);
-      ectx.clearRect(0, 0, ec.width, ec.height);
-      cam.apply(ectx);
-      this.road.drawElevated(ectx);
-    }
-    return null;
+      const g = canvas.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, W, H);
+      const s = cam.scale * dpr;
+      g.setTransform(s, 0, 0, s, (cam.screenCX - cam.centerX * cam.scale) * dpr + mx, (cam.screenCY - cam.centerY * cam.scale) * dpr + my);
+      draw(g);
+    };
+    paint(this.staticCanvas, (g) => this.road.drawStatic(g));
+    if (this.road.hasElevated) paint(this.elevCanvas, (g) => this.road.drawElevated(g));
+    this.road.view = null;
+    return { r: 1, tx: -mx, ty: -my };
   }
 
   /**
@@ -167,11 +177,9 @@ export class Renderer {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     const xf = this._ensureStatic();
     const blit = (canvas) => {
-      if (xf) {
-        ctx.setTransform(xf.r, 0, 0, xf.r, xf.tx, xf.ty);
-        ctx.drawImage(canvas, 0, 0);
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-      } else ctx.drawImage(canvas, 0, 0);
+      ctx.setTransform(xf.r, 0, 0, xf.r, xf.tx, xf.ty);
+      ctx.drawImage(canvas, 0, 0);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     };
     blit(this.staticCanvas);
     this.weather.drawWet(ctx, this.canvas, sim.env);

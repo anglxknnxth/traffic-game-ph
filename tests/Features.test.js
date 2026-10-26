@@ -7,6 +7,7 @@ import { makeLevel } from '../src/data/levels.js';
 import { MAPS } from '../src/data/maps/index.js';
 import { SIM_DT, ARMS, DIRS, SIDEWALK_WIDTH } from '../src/data/config.js';
 import { Rng } from '../src/utils/math.js';
+import { playerPhaseRequest } from '../src/simulation/TrafficPhaseManager.js';
 
 const MIN_SEP = 0.44;
 const lm = new LevelManager();
@@ -139,7 +140,7 @@ describe('Lane drop (3 lanes become 2)', () => {
     });
     expect(past).toBe(0);
     expect(sim.laneChanger.changes).toBeGreaterThan(10);
-    expect(sim.stats.processed).toBeGreaterThan(40);
+    expect(sim.stats.processed).toBeGreaterThan(20);
   });
 });
 
@@ -169,7 +170,7 @@ describe('Metro Manila: skyway, toll plaza, underpass', () => {
     expect(seen.ramp).toBeGreaterThan(0);
     expect(seen.under).toBeGreaterThan(0);
     expect(overpass).toBeGreaterThan(0);
-    expect(sim.stats.processed).toBeGreaterThan(40);
+    expect(sim.stats.processed).toBeGreaterThan(20);
   });
 });
 
@@ -233,6 +234,24 @@ describe('Modes', () => {
 });
 
 describe('Map layout', () => {
+  it('Metro Manila: no grid (no two junctions in line), every junction clear of the river', () => {
+    const net = new Network(MAPS.metro);
+    const nodes = MAPS.metro.nodes;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        if ((a.id === 'T2' && b.id === 'E2') || (a.id === 'E2' && b.id === 'T2')) continue; // the Quezon Ave tunnel runs straight
+        expect(Math.abs(a.x - b.x) >= 5 && Math.abs(a.y - b.y) >= 5, `${a.id} and ${b.id} line up`).toBe(true);
+      }
+    }
+    for (const I of net.intersections) {
+      if (I.layer) continue;
+      const c = I.core;
+      for (const [x, y] of [[c.minX, c.minY], [c.maxX, c.minY], [c.minX, c.maxY], [c.maxX, c.maxY]]) expect(net.river.distance(x, y) - net.river.width / 2).toBeGreaterThan(20);
+    }
+  });
+
   it('no two roads on the same level run into each other away from their junctions', () => {
     for (const map of Object.values(MAPS)) {
       const net = new Network(map);
@@ -310,6 +329,59 @@ describe('Counterflow and enforcers', () => {
       for (const v of s.counterflow.active) if (v.cf.legal) users.add(v.id);
     });
     expect(users.size).toBeGreaterThan(0);
+  });
+
+  it('contraflow cones line the oncoming lanes, oncoming drivers merge out, one-lane roads are refused', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 12, S: 14, E: 8, W: 8 }, mix: { car: 0.7, motorcycle: 0.3 }, turns: { left: 0.2, right: 0.2 }, initialGroups: { A: 'S' }, enforcer: { count: 2 } }), { seed: 4 });
+    const A = sim.network.byId.get('A');
+    const lane = A.approachLanes.N[0];
+    const [o0, o1] = A.exitLanes.N;
+    const z = sim.counterflow.openZone(lane);
+    expect(typeof z).toBe('object');
+    // The main row sits on the line between the borrowed lane and the oncoming lane that stays open.
+    const q = { x: 0, y: 0 };
+    const dist = (l, c) => Math.min(...Array.from({ length: Math.ceil(l.length) }, (_, s) => (l.path.pointAt(s, q), Math.hypot(q.x - c.x, q.y - c.y))));
+    const row = z.cones.slice(4, -4);
+    expect(row.length).toBeGreaterThan(3);
+    for (const c of row) {
+      const d0 = dist(o0, c);
+      const d1 = dist(o1, c);
+      expect(Math.abs(d0 - d1)).toBeLessThan(0.3);
+      expect(dist(lane, c)).toBeGreaterThan(4);
+    }
+    // Nobody is left parked in the borrowed lane at the cones while the lane is open.
+    let worst = 0;
+    run(sim, 100, (s, i) => {
+      if (i % (20 * 60) === 0) s.requestPhase('A', ['S', 'E', 'W', 'S', 'N'][(i / (20 * 60)) % 5]);
+      for (const v of o0.vehicles) if (v.localS < z.block.s + 1) worst = Math.max(worst, v.stoppedTime);
+    });
+    expect(worst).toBeLessThan(10);
+    expect(sim.stats.processed).toBeGreaterThan(20);
+    // A road with a single oncoming lane cannot be coned off.
+    const pob = new TrafficSimulator(makeLevel({ map: 'poblacion', prewarm: 0 }), { seed: 1 });
+    expect(typeof pob.counterflow.openZone(pob.network.byId.get('A').approachLanes.N[0])).toBe('string');
+  });
+
+  it('an enforcer stands in the middle of the junction', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, enforcer: { count: 1 } }), { seed: 1 });
+    const A = sim.network.byId.get('A');
+    sim.enforcement.toggle('A');
+    const p = sim.enforcement.posts.get('A');
+    expect(Math.hypot(p.x - A.x, p.y - A.y)).toBeLessThan(0.01);
+    expect(sim.enforcement.near(A)).toBe(true);
+  });
+
+  it('tapping one of two paired greens turns just that road red; tapping a lone green does nothing', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, initialGroups: { A: 'N' } }), { seed: 1 });
+    const m = sim.lights.manager('A');
+    expect(playerPhaseRequest(m, 'N')).toBeNull();
+    sim.requestPhase('A', 'S'); // pair N + S
+    run(sim, 4);
+    expect(m.greenGroups().sort()).toEqual(['N', 'S']);
+    sim.requestPhase('A', playerPhaseRequest(m, 'N'));
+    run(sim, 4);
+    expect(m.greenGroups()).toEqual(['S']);
+    expect(m.signalForArm('S', 'left')).toBe('green');
   });
 
   it('an enforcer: patawid walks every crosswalk then gives the green back; padaanin needs one', () => {

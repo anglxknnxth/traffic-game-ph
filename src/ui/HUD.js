@@ -29,7 +29,7 @@ const LEVEL_TEXT = {
 
 const TUTORIAL_STEPS = [
   { title: 'Welcome, traffic controller!', body: 'This is a busy kanto in Metro Manila, seen from directly above. Cars arrive from all four roads and you control the traffic lights.' },
-  { title: 'One road at a time', body: 'Every approach has its own green. Tap a road\'s button below, tap its traffic light, or tap the yellow box in the middle to go to the next road. The change takes 2 seconds. Tap the <b>opposite</b> road while one is green and both go together, straight and right only (no left turn); tap a cross road and both turn red. <b>⚠ Flash</b> (or Y) turns every light to flashing yellow: drivers stop, then go when it is clear.' },
+  { title: 'One road at a time', body: 'Every approach has its own green. Tap a road\'s button below, tap its traffic light, or tap the yellow box in the middle to go to the next road. The change takes 2 seconds. Tap the <b>opposite</b> road while one is green and both go together, straight and right only (no left turn); tap one of the two greens to turn just that road red; tap a cross road and both turn red. <b>⚠ Flash</b> (or Y) turns every light to flashing yellow: drivers stop, then go when it is clear.' },
   { title: 'Safe transitions', body: 'You are in full control: a change starts the moment you tap, with a short <b>yellow</b> and <b>all-red</b> before the next green. Tap the current green during yellow to cancel.' },
   { title: 'Watch the box', body: 'Drivers wait if their exit road is full. Impatient ones may squeeze in anyway and block the yellow box. A red outline means a vehicle is stuck inside. A vehicle with an orange <b>!</b> is stuck: tap it and it goes ahead (optional, it clears on its own too).' },
   { title: 'Your goal', body: 'Move as many vehicles as you can and keep waiting times low. Your target is shown at the top. Keys: <b>1</b>/<b>2</b> switch phases, <b>Space</b> pauses, <b>F</b> changes speed.' },
@@ -55,9 +55,12 @@ export class HUD {
         </div>
       </div>
       <div class="hud-objectives"></div>
-      <aside class="hud-metrics"></aside>
-      <aside class="hud-monitor" hidden></aside>
-      <div class="hud-notify" aria-live="polite"></div>
+      <div class="hud-side">
+        <aside class="hud-metrics"></aside>
+        <aside class="hud-monitor" hidden></aside>
+        <div class="hud-notify" aria-live="polite"></div>
+        <div class="hud-feed" hidden></div>
+      </div>
       <div class="hud-emergency" hidden></div>
       <div class="hud-bottom">
         <div class="signal-panels"></div>
@@ -81,7 +84,6 @@ export class HUD {
         </div>
       </div>
       <div class="hud-toast"></div>
-      <div class="hud-feed" hidden></div>
       <div class="hud-ticker"><span class="tk-tag">TRAFFIC UPDATE</span><div class="tk-wrap"><span class="tk-text"></span></div></div>
       <div class="hud-coach" hidden></div>
     `;
@@ -355,9 +357,9 @@ export class HUD {
     if (this.root.hidden) return { top: 0, bottom: 0, left: 0, right: 0 };
     const top = this.el.top.getBoundingClientRect().bottom + 6;
     const bottom = window.innerHeight - this.el.bottom.getBoundingClientRect().top + 6;
-    const wide = window.innerWidth > 980 && this.game.state.showMetrics;
-    const mon = window.innerWidth > 980 && this.game.state.showMonitor;
-    return { top, bottom, left: wide ? 236 : 0, right: mon ? 262 : 0 };
+    // Everything on the side sits in one column on the left.
+    const side = window.innerWidth > 980 && (this.game.state.showMetrics || this.game.state.showMonitor);
+    return { top, bottom, left: side ? 192 : 0, right: 0 };
   }
 
   /** Big centred banner (a new district opened, ...). */

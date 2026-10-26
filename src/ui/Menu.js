@@ -74,7 +74,6 @@ export class Menu {
           <button class="btn pinoy" data-nav="pinoy">🇵🇭 Pinoy Roads</button>
           <button class="btn" data-nav="brief" data-mode="endless">Endless Mode</button>
           <button class="btn chill" data-nav="brief" data-mode="chill" data-id="single">☕ Chill Endless <small>walang game over</small></button>
-          <button class="btn metro" data-nav="brief" data-mode="chill" data-id="metro">🏙️ Metro Manila <small>sandbox · AUTO lights</small></button>
           <button class="btn grow" data-nav="brief" data-mode="growing">🌆 Lumalaking Lungsod</button>
           <button class="btn" data-nav="challenges">Challenge Mode</button>
           <button class="btn" data-nav="levels">Level Selection</button>

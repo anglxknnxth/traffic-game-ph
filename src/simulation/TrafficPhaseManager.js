@@ -28,6 +28,19 @@ const LEGACY_AXIS = { NS: ['N', 'S'], EW: ['E', 'W'] };
 // Movements that cross the opposite road's straight traffic: banned while paired.
 const CROSSING_MOVES = new Set(['left', 'uturn']);
 
+/**
+ * What a player's tap on `group` asks of the manager: tapping one of two paired greens turns just
+ * that road red (the request keeps its partner), tapping the only green does nothing (null).
+ * Anything else is requested as it is.
+ */
+export function playerPhaseRequest(m, group) {
+  if (m.state !== PHASE.GREEN || m.signalForGroup(group) !== 'green') return group;
+  const P = m.pair;
+  if (P && P.stage === 'on') return group === m.activeGroup ? P.other : m.activeGroup;
+  if (!P && group === m.activeGroup) return null;
+  return group;
+}
+
 export class TrafficPhaseManager {
   constructor({
     phases = DEFAULT_PHASES,

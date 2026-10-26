@@ -52,10 +52,8 @@ export class Enforcement {
       return { ok: true, text: `Enforcer off duty at ${id}` };
     }
     if (this.available <= 0) return { ok: false, text: `All ${this.max} enforcers are on duty: tap one to move them` };
-    // Stand at a corner of the box, on the sidewalk
-    const x = I.x - (I.hx + 2.5);
-    const y = I.y - (I.hy + 2.5);
-    this.posts.set(id, { id, x, y, wave: 0 });
+    // Stand in the middle of the box, on a podium
+    this.posts.set(id, { id, x: I.x, y: I.y, wave: 0 });
     this.sim.notify(`ENF_${id}`, `👮 ENFORCER ON DUTY · ${this._name(I)}`, 'good');
     return { ok: true, text: `Enforcer on duty at ${this._name(I)}` };
   }

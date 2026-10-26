@@ -14,6 +14,7 @@ import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
 import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
 import { rightOf, leftOf, SLOT_KINDS } from '../simulation/LaneManager.js';
 import { TextureBank } from './TextureBank.js';
+import { drawLandmark, landmarkFootprints } from './LandmarkRenderer.js';
 import { drawRiverStatic, drawRiverDynamic, drawBridgeShadows, drawBridgeRails, findBridges, bankPlants, drawBankPlants } from './RiverRenderer.js';
 
 const SW = SIDEWALK_WIDTH;
@@ -253,7 +254,10 @@ export class RoadRenderer {
     const T = this.theme;
     const rng = new Rng(net.map.sceneSeed ?? 1898);
     const corridors = this._corridors();
-    const water = this._waterBoxes();
+    // Landmarks (plaza, simbahan, ...) keep their own ground: nothing else is built on them.
+    const marks = [];
+    for (const l of net.map.landmarks || []) for (const f of landmarkFootprints(l, net.river)) marks.push(box(f.x, f.y, f.w + 4, f.h + 4, f.angle));
+    const water = [...this._waterBoxes(), ...marks];
     const river = net.river;
     const wet = (x, y, m = 2) => !!river && river.contains(x, y, m);
     const b = net.bounds;
@@ -300,7 +304,7 @@ export class RoadRenderer {
           while (st < len - 4) {
             const q = at(g, st, sgn * (A.half + SW - 1.0));
             if (rng.chance(0.75)) {
-              if (!wet(q.x, q.y)) trees.push({ x: q.x, y: q.y, r: rng.range(1.3, 1.9), shade: rng.range(0, 1) });
+              if (!wet(q.x, q.y) && !hits(box(q.x, q.y, 3, 3, 0), marks, 0)) trees.push({ x: q.x, y: q.y, r: rng.range(1.3, 1.9), shade: rng.range(0, 1) });
             } else posts.push({ x: q.x, y: q.y });
             st += rng.range(9, 15);
           }
@@ -328,11 +332,11 @@ export class RoadRenderer {
       const x = rng.range(area.minX, area.maxX);
       const y = rng.range(area.minY, area.maxY);
       const r = box(x, y, 4, 4, 0);
-      if (hits(r, corridors, 0.5) || hits(r, buildings, 0.3) || wet(x, y, 3)) continue;
+      if (hits(r, corridors, 0.5) || hits(r, buildings, 0.3) || wet(x, y, 3) || hits(r, marks, 0.5)) continue;
       trees.push({ x, y, r: rng.range(1.6, 2.6), shade: rng.range(0, 1) });
     }
     // Bamboo and nipa along the river banks (own RNG so maps without water are unchanged)
-    const plants = river ? bankPlants(river, new Rng((net.map.sceneSeed ?? 1898) + 31)).filter((t) => !hits(box(t.x, t.y, 3, 3, 0), corridors, 0.5)) : [];
+    const plants = river ? bankPlants(river, new Rng((net.map.sceneSeed ?? 1898) + 31)).filter((t) => !hits(box(t.x, t.y, 3, 3, 0), corridors, 0.5) && !hits(box(t.x, t.y, 3, 3, 0), marks, 0)) : [];
     for (const b of buildings) if (!b.ribbed && /^#(a3|b4|8b|9c|6f5)/.test(b.color)) b.tiled = true;
     // Bare patches of soil in the empty lots (own RNG so the rest of the scene is unchanged)
     const lr = new Rng((net.map.sceneSeed ?? 1898) + 77);
@@ -340,7 +344,7 @@ export class RoadRenderer {
     for (let i = 0; i < Math.round(30 * areaScale); i++) {
       const x = lr.range(area.minX, area.maxX);
       const y = lr.range(area.minY, area.maxY);
-      if (hits(box(x, y, 10, 10, 0), corridors, 1) || wet(x, y, 4)) continue;
+      if (hits(box(x, y, 10, 10, 0), corridors, 1) || wet(x, y, 4) || hits(box(x, y, 10, 10, 0), marks, 1)) continue;
       lots.push({ x, y, rx: lr.range(5, 14), ry: lr.range(3, 9), angle: lr.range(0, Math.PI) });
     }
     return { buildings, trees, sheds, posts, area, bankPlants: plants, lots };
@@ -364,6 +368,7 @@ export class RoadRenderer {
         ctx.globalAlpha = 0.55;
         ctx.fillStyle = dirt;
         for (const lot of this.scenery.lots || []) {
+          if (this._off(lot.x, lot.y, Math.max(lot.rx, lot.ry))) continue;
           ctx.save();
           ctx.translate(lot.x, lot.y);
           ctx.rotate(lot.angle);
@@ -584,11 +589,45 @@ export class RoadRenderer {
       });
     }
     // Overhead wires: sagging bundles between neighbouring posts, now and then across the road
-    const posts = this.scenery.posts;
-    if (!posts.length) return;
+    const wires = this._wireList();
+    if (!wires.length) return;
     ctx.save();
     ctx.lineCap = 'round';
-    const rng = new Rng((net.map.sceneSeed ?? 1) + 9);
+    for (const w of wires) {
+      if (this._off(w.a.x, w.a.y, 28)) continue;
+      const { a, b: best } = w;
+      for (let k = 0; k < w.strands.length; k++) {
+        const { mx, my } = w.strands[k];
+        ctx.strokeStyle = k === 0 ? 'rgba(15,15,18,0.55)' : 'rgba(25,25,30,0.38)';
+        ctx.lineWidth = k === 0 ? 0.09 : 0.06;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y + k * 0.08);
+        ctx.quadraticCurveTo(mx, my, best.x, best.y + k * 0.08);
+        ctx.stroke();
+      }
+      // A transformer or a tangle on some posts
+      if (w.tangle) {
+        ctx.fillStyle = '#4b5563';
+        ctx.fillRect(a.x - 0.45, a.y - 0.45, 0.9, 0.9);
+        ctx.strokeStyle = 'rgba(15,15,18,0.5)';
+        ctx.lineWidth = 0.05;
+        ctx.beginPath();
+        for (const t of w.tangle) {
+          ctx.moveTo(t[0], t[1]);
+          ctx.quadraticCurveTo(t[2], t[3], t[4], t[5]);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /** The wire bundles between posts, worked out once per map (same random draws every time). */
+  _wireList() {
+    if (this._wires) return this._wires;
+    const posts = this.scenery.posts;
+    const out = [];
+    const rng = new Rng((this.network.map.sceneSeed ?? 1) + 9);
     for (let i = 0; i < posts.length; i++) {
       const a = posts[i];
       let best = null;
@@ -604,32 +643,20 @@ export class RoadRenderer {
       }
       if (!best) continue;
       const n = rng.int(2, 4);
+      const strands = [];
       for (let k = 0; k < n; k++) {
         const sag = rng.range(0.6, 1.8);
-        const mx = (a.x + best.x) / 2 + rng.range(-0.4, 0.4);
-        const my = (a.y + best.y) / 2 + sag;
-        ctx.strokeStyle = k === 0 ? 'rgba(15,15,18,0.55)' : 'rgba(25,25,30,0.38)';
-        ctx.lineWidth = k === 0 ? 0.09 : 0.06;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y + k * 0.08);
-        ctx.quadraticCurveTo(mx, my, best.x, best.y + k * 0.08);
-        ctx.stroke();
+        strands.push({ mx: (a.x + best.x) / 2 + rng.range(-0.4, 0.4), my: (a.y + best.y) / 2 + sag });
       }
-      // A transformer or a tangle on some posts
+      let tangle = null;
       if (rng.chance(0.25)) {
-        ctx.fillStyle = '#4b5563';
-        ctx.fillRect(a.x - 0.45, a.y - 0.45, 0.9, 0.9);
-        ctx.strokeStyle = 'rgba(15,15,18,0.5)';
-        ctx.lineWidth = 0.05;
-        ctx.beginPath();
-        for (let k = 0; k < 6; k++) {
-          ctx.moveTo(a.x + rng.range(-0.8, 0.8), a.y + rng.range(-0.8, 0.8));
-          ctx.quadraticCurveTo(a.x + rng.range(-1.2, 1.2), a.y + rng.range(-1.2, 1.2), a.x + rng.range(-0.8, 0.8), a.y + rng.range(-0.8, 0.8));
-        }
-        ctx.stroke();
+        tangle = [];
+        for (let k = 0; k < 6; k++) tangle.push([a.x + rng.range(-0.8, 0.8), a.y + rng.range(-0.8, 0.8), a.x + rng.range(-1.2, 1.2), a.y + rng.range(-1.2, 1.2), a.x + rng.range(-0.8, 0.8), a.y + rng.range(-0.8, 0.8)]);
       }
+      out.push({ a, b: best, strands, tangle });
     }
-    ctx.restore();
+    this._wires = out;
+    return out;
   }
 
   /** Shadow of the expressway and its ramps on the ground (sun from the upper left), with piers. */
@@ -1147,9 +1174,20 @@ export class RoadRenderer {
     ctx.restore();
   }
 
+  /** Outside the area being drawn (the cached view), so it can be skipped. */
+  _off(x, y, r) {
+    const V = this.view;
+    return !!V && (x + r < V.minX || x - r > V.maxX || y + r < V.minY || y - r > V.maxY);
+  }
+
   _drawScenery(ctx) {
     const { buildings, trees, sheds, posts } = this.scenery;
+    for (const l of this.network.map.landmarks || []) {
+      if (l.kind !== 'promenade' && this._off(l.x, l.y, Math.max(l.w, l.h))) continue;
+      drawLandmark(ctx, l, { river: this.network.river, text: worldText });
+    }
     for (const b of buildings) {
+      if (this._off(b.cx, b.cy, Math.max(b.w, b.h) + 4)) continue;
       const w = b.w;
       const h = b.h;
       const minX = -w / 2;
@@ -1244,6 +1282,7 @@ export class RoadRenderer {
       ctx.restore();
     }
     for (const sh of sheds) {
+      if (this._off(sh.x, sh.y, 4)) continue;
       const w = 4.5;
       const h = 1.8;
       ctx.save();
@@ -1258,6 +1297,7 @@ export class RoadRenderer {
       ctx.restore();
     }
     for (const p of posts) {
+      if (this._off(p.x, p.y, 2)) continue;
       ctx.fillStyle = '#4b5563';
       ctx.beginPath();
       ctx.arc(p.x, p.y, 0.25, 0, Math.PI * 2);
@@ -1268,6 +1308,7 @@ export class RoadRenderer {
       ctx.fill();
     }
     for (const t of trees) {
+      if (this._off(t.x, t.y, t.r + 1)) continue;
       ctx.fillStyle = 'rgba(0,0,0,0.22)';
       ctx.beginPath();
       ctx.arc(t.x + 0.5, t.y + 0.6, t.r, 0, Math.PI * 2);
@@ -1384,9 +1425,138 @@ export class RoadRenderer {
     const net = this.network;
     const b = net.bounds;
     for (const ov of net.map.overlays || []) {
-      if (ov.kind === 'rail') this._drawRail(ctx, ov, b, time);
+      if (ov.kind === 'rail') (ov.follow ? this._drawRailAlong(ctx, ov, time) : this._drawRail(ctx, ov, b, time));
       else if (ov.kind === 'footbridge') this._drawFootbridge(ctx, ov);
     }
+  }
+
+  /**
+   * Centre line of a rail line that follows a road through the nodes in `ov.follow` (N to S): in
+   * from the first node's North arm, along the links, out along the last node's South arm. Each
+   * point carries its distance along the line and the unit tangent.
+   */
+  _railLine(ov) {
+    this._rails = this._rails || new Map();
+    if (this._rails.has(ov)) return this._rails.get(ov);
+    const net = this.network;
+    const nodes = ov.follow.map((id) => net.byId.get(id));
+    const pts = [];
+    const add = (c, u0, u1) => {
+      const n = Math.max(2, Math.ceil(Math.abs(u1 - u0) / 3));
+      for (let i = 0; i <= n; i++) {
+        const p = c.point(u0 + ((u1 - u0) * i) / n, 0);
+        const last = pts[pts.length - 1];
+        if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 0.5) pts.push({ x: p.x, y: p.y });
+      }
+    };
+    const first = nodes[0].arms.N.center;
+    add(first, first.length, 0);
+    for (let i = 0; i < nodes.length - 1; i++) add(nodes[i].arms.S.center, 0, nodes[i].arms.S.center.length);
+    const last = nodes[nodes.length - 1].arms.S.center;
+    add(last, 0, last.length);
+    let d = 0;
+    for (let i = 0; i < pts.length; i++) {
+      if (i) d += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      const a = pts[Math.max(0, i - 1)];
+      const b = pts[Math.min(pts.length - 1, i + 1)];
+      const m = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      pts[i].d = d;
+      pts[i].tx = (b.x - a.x) / m;
+      pts[i].ty = (b.y - a.y) / m;
+    }
+    const line = { pts, length: d };
+    this._rails.set(ov, line);
+    return line;
+  }
+
+  /** Point at distance d along a rail line: { x, y, angle }. */
+  _railAt(line, d) {
+    const P = line.pts;
+    let lo = 0;
+    let hi = P.length - 1;
+    d = Math.max(0, Math.min(line.length, d));
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (P[mid].d <= d) lo = mid;
+      else hi = mid;
+    }
+    const a = P[lo];
+    const b = P[hi];
+    const k = b.d > a.d ? (d - a.d) / (b.d - a.d) : 0;
+    return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, angle: Math.atan2(b.y - a.y, b.x - a.x) };
+  }
+
+  /** An elevated rail line bending with the road under it: guideway, tracks, station, trains. */
+  _drawRailAlong(ctx, ov, time) {
+    const line = this._railLine(ov);
+    const w = ov.width;
+    const stroke = (off, width, color) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      line.pts.forEach((p, i) => {
+        const x = p.x - p.ty * off;
+        const y = p.y + p.tx * off;
+        if (i) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+      });
+      ctx.stroke();
+    };
+    const alpha = ov.translucent ? 0.62 : 0.95;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = alpha * 0.55;
+    ctx.translate(0, 1.4);
+    stroke(0, w, '#000');
+    ctx.translate(0, -1.4);
+    ctx.globalAlpha = alpha;
+    stroke(0, w, '#9ea3a8');
+    stroke(-w / 2 + 0.17, 0.35, '#7c8186');
+    stroke(w / 2 - 0.17, 0.35, '#7c8186');
+    for (const ty of [-w / 4, w / 4]) {
+      stroke(ty, 1.5, '#5b5f63');
+      stroke(ty - 0.49, 0.12, '#c9ced3');
+      stroke(ty + 0.49, 0.12, '#c9ced3');
+    }
+    const colour = ov.line === 'MRT-3' ? '#2563eb' : '#16a34a';
+    if (ov.station) {
+      const s = ov.station;
+      const p = this._railAt(line, s.at);
+      const sw = w + 3.2;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(-s.length / 2 + 0.8, -sw / 2 + 1.4, s.length, sw);
+      ctx.fillStyle = '#d6d3cd';
+      ctx.fillRect(-s.length / 2, -sw / 2, s.length, sw);
+      ctx.fillStyle = colour;
+      ctx.fillRect(-s.length / 2, -sw / 2, s.length, 0.9);
+      ctx.fillRect(-s.length / 2, sw / 2 - 0.9, s.length, 0.9);
+      ctx.restore();
+      worldText(ctx, s.name, p.x, p.y, 1.25, '#1f2937', p.angle);
+    }
+    // A train now and then, car by car along the curve
+    const period = 70;
+    const ph = (time % period) / period;
+    if (ph < 0.45) {
+      const head = (line.length + 40) * (ph / 0.45);
+      const off = ov.line === 'MRT-3' ? -w / 4 : w / 4;
+      for (let c = 0; c < 3; c++) {
+        const d = head - c * 13 - 6.2;
+        if (d < 0 || d > line.length) continue;
+        const p = this._railAt(line, d);
+        ctx.save();
+        ctx.translate(p.x - Math.sin(p.angle) * off, p.y + Math.cos(p.angle) * off);
+        ctx.rotate(p.angle);
+        ctx.fillStyle = ov.line === 'MRT-3' ? '#e5e7eb' : '#f3f4f6';
+        ctx.fillRect(-6.2, -1.4, 12.4, 2.8);
+        ctx.fillStyle = ov.line === 'MRT-3' ? '#1d4ed8' : '#15803d';
+        ctx.fillRect(-6.2, -0.35, 12.4, 0.7);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
   }
 
   _drawRail(ctx, ov, b, time) {

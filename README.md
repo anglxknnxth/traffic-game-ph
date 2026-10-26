@@ -27,8 +27,8 @@ npm test           # run the simulation test suite (Vitest)
 ```
 
 Deep links for quick testing: `?play=career:7`, `?play=pinoy:taft`, `?play=challenge:c1`,
-`?play=endless` or `?play=endless:edsa` (Endless on a given map), `?play=chill:metro` (Chill /
-Metro Manila sandbox) or `?play=growing` (Lumalaking Lungsod). On the dev server, `&ff=60`
+`?play=endless` or `?play=endless:edsa` (Endless on a given map), `?play=chill:metro` (Chill on
+the Metro Manila map) or `?play=growing` (Lumalaking Lungsod). On the dev server, `&ff=60`
 fast-forwards 60 s, `&zoom=2&x=0&y=-46` frames the camera, `&enf=A` stations an enforcer at A and
 `&cone=A:S` cones off a contraflow lane beside A's South road.
 
@@ -160,9 +160,12 @@ What you'll see on the map:
   to AUTO (a queue-balancing controller that also pairs opposite roads and answers emergencies);
   tap a light to take it back (MANUAL). Watch mode hides the controls and lets the camera find the
   action.
-- **Metro Manila (sandbox):** the big map, about 1.2 × 0.8 km, with every light on AUTO to start:
-  EDSA (busway, MRT-3, U-turn slot), the Quezon Ave underpass under EDSA, Taft under the LRT-1, the
-  elevated Skyway with its toll plaza and ramps down to Aurora and Shaw, the Pasig river, barangay
+- **Metro Manila map** (pick it in Chill Endless, or play Lumalaking Lungsod): the big map, about
+  1.2 × 0.8 km, every light on AUTO to start in Chill. Junctions are scattered like a real city (no
+  grid): EDSA (busway, MRT-3, U-turn slot) and Taft (LRT-1) sway under their rail lines, the Quezon
+  Ave underpass dives under EDSA, the elevated Skyway sweeps over the city with its toll plaza and
+  ramps down to Aurora and Shaw, the Pasig river meanders under angled bridges, and there is a
+  plaza, a simbahan, a barangay court, a palengke, a mall and a riverside promenade, plus barangay
   streets with no lights and a lane drop on Shaw.
 - **Lumalaking Lungsod:** the Metro Manila map opens district by district. You start with one
   junction; at 60, 160 and 300 vehicles through the next district opens (EDSA corridor, Taft, the

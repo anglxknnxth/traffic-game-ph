@@ -26,6 +26,8 @@ const LAT_SPEED = 1.7; // m/s sideways
 const STUCK_LIMIT = 15; // s out there before it is made to come back
 const STOP_CLEAR = 18; // a pasaway gets back in at least this far before the stop line
 const CHECK_EVERY = 30; // steps between decisions per vehicle
+const ZONE_MERGE = 20; // m of oncoming lane after the box before a contraflow's cones
+const TAPER = 9; // m of each taper
 
 export const COUNTERFLOW_DEFAULTS = Object.freeze({ moto: 0, car: 0, minWait: 10, minQueue: 4, emergency: false });
 
@@ -116,7 +118,7 @@ export class CounterflowManager {
       if (this.active.some((o) => o.cf && o.cf.opp === opp)) return;
       v.cfNextTry = sim.time + 8;
       if (!sim.rng.chance(moto ? this.cfg.moto : this.cfg.car)) return;
-    } else if (v.v > 2 || v.localS < zone.s0 || v.localS > zone.s1 - 10 || !sim.rng.chance(0.35)) return;
+    } else if (v.v > 2 || v.localS - v.hl < zone.s0 + 1 || v.localS > zone.s1 - 10 || !sim.rng.chance(0.35)) return;
     this._plan(v, lane, opp, moto ? 6 : 3, zone);
   }
 
@@ -324,26 +326,35 @@ export class CounterflowManager {
     if (!opp) return 'Only on undivided roads (no median), next to the inner lane';
     if (this.zones.some((z) => z.lane === lane)) return 'Already coned off';
     if (sim.time < this.cooldownUntil) return `Cones are busy: ${Math.ceil(this.cooldownUntil - sim.time)}s`;
-    const s1 = lane.length - STOP_CLEAR + 4;
-    const s0 = Math.max(4, s1 - length);
-    if (s1 - s0 < 30) return 'Road too short for a contraflow lane';
-    const sa = Math.min(this.oppS(lane, opp, s1 + 3), this.oppS(lane, opp, s0));
-    const block = { id: `cz:${lane.id}`, kind: 'cf', label: '', laneObjs: [opp], s: Math.max(0.5, sa), active: true, done: false, start: -Infinity, end: Infinity };
+    // The oncoming side keeps a lane of its own: it needs two.
+    const outs = lane.endInt.exitLanes[lane.endArm].filter((l) => l.type === 'general');
+    const opp1 = outs[1];
+    if (!opp1) return 'Kailangan ng 2 lane sa kabila (oncoming) para sa contraflow';
+    // Junction end: oncoming drivers get ~20 m after the box to merge out, then a 9 m taper.
+    const len = lane.length;
+    const sStop = len - ZONE_MERGE; // where oncoming traffic in the borrowed lane must be out of it
+    const s1 = sStop - TAPER;
+    const s0 = Math.max(TAPER + 4, s1 - length);
+    if (s1 - s0 < 24) return 'Road too short for a contraflow lane';
+    const oA = this.oppS(lane, opp, sStop);
+    const oB = this.oppS(lane, opp, s0 - TAPER);
+    const block = { id: `cz:${lane.id}`, kind: 'cf', label: '', laneObjs: [opp], s: Math.max(0.5, Math.min(oA, oB)), active: true, done: false, start: -Infinity, end: Infinity };
     sim.blockages.push(block);
-    // Cones along the centre line every 6 m, with a taper at each end
-    const cones = [];
+    // Cones between the borrowed lane and the oncoming lane that stays open, with a taper at each
+    // end from the centre line; placed from the junction end outward.
     const g = lane.center;
-    const oppLat = opp.center === g ? opp.cOffset : -opp.cOffset; // centre of the borrowed lane
+    const lat = (o) => (o.center === g ? o.cOffset : -o.cOffset);
+    const mid = (lat(opp) + lat(opp1)) / 2; // the line between the two oncoming lanes
     const at = (s, k) => {
       const u = lane.cReversed ? lane.cu1 - s : lane.cu0 + s;
-      // taper: k in 0..1 moves the cone from the centre line across the borrowed lane
-      const p = g.point(u, oppLat * k);
+      const p = g.point(u, mid * k);
       return { x: p.x, y: p.y };
     };
-    for (let i = 0; i < 4; i++) cones.push(at(s0 - 12 + i * 3, 1 - i / 4));
-    for (let s = s0; s <= s1; s += 6) cones.push(at(s, 0));
-    for (let i = 1; i <= 4; i++) cones.push(at(s1 + i * 3, i / 4));
-    const zone = { lane, opp, s0, s1, block, cones, placed: 0, placeT: 0, state: 'placing', until: sim.time + secs, users: new Set() };
+    const cones = [];
+    for (let i = 0; i < 4; i++) cones.push(at(sStop - (i * TAPER) / 3, 0.15 + (0.85 * i) / 3));
+    for (let s = s1 - 6; s > s0 + 3; s -= 6) cones.push(at(s, 1));
+    for (let i = 0; i < 4; i++) cones.push(at(s0 - (i * TAPER) / 3, 1 - (0.85 * i) / 3));
+    const zone = { lane, opp, s0, s1, sStop, block, cones, placed: 0, placeT: 0, state: 'placing', until: sim.time + secs, users: new Set() };
     this.zones.push(zone);
     sim.notify(`CZ_${lane.id}`, `🚧 CONTRAFLOW sa ${sim.network.roadName(lane.endInt, lane.endArm) || 'kalsada'} · cones going up`, 'info');
     return zone;
@@ -357,8 +368,10 @@ export class CounterflowManager {
         z.placeT -= 0.15;
         z.placed++;
       }
-      const s0o = Math.min(this.oppS(z.lane, z.opp, z.s0), this.oppS(z.lane, z.opp, z.s1 + 3));
-      const s1o = Math.max(this.oppS(z.lane, z.opp, z.s0), this.oppS(z.lane, z.opp, z.s1 + 3));
+      const a = this.oppS(z.lane, z.opp, z.s0 - TAPER);
+      const b = this.oppS(z.lane, z.opp, z.sStop);
+      const s0o = Math.min(a, b);
+      const s1o = Math.max(a, b);
       const empty = !z.opp.vehicles.some((o) => o.localS + o.hl > s0o && o.localS - o.hl < s1o);
       if (z.placed >= z.cones.length && empty) {
         z.state = 'open';

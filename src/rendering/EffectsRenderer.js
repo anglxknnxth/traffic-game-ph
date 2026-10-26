@@ -150,13 +150,24 @@ export class EffectsRenderer {
       const wave = p.wave > 0 ? Math.sin(time * 14) * 0.9 : Math.sin(time * 2.2) * 0.35;
       ctx.save();
       ctx.translate(p.x, p.y);
-      // a white disc so the officer stands out on the sidewalk
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      // the traffic podium in the middle of the box: shadow, yellow-and-white striped rim
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.beginPath();
-      ctx.arc(0, 0, 1.6, 0, Math.PI * 2);
+      ctx.arc(0.3, 0.4, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      for (let k = 0; k < 8; k++) {
+        ctx.fillStyle = k % 2 ? '#facc15' : '#f8fafc';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, 1.8, (k * Math.PI) / 4, ((k + 1) * Math.PI) / 4);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#e5e7eb';
+      ctx.beginPath();
+      ctx.arc(0, 0, 1.3, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#1d4ed8';
-      ctx.lineWidth = 0.25;
+      ctx.lineWidth = 0.2;
       ctx.stroke();
       ctx.scale(2.4, 2.4);
       ctx.fillStyle = 'rgba(0,0,0,0.3)';

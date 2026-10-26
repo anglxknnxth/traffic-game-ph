@@ -1784,3 +1784,144 @@ summary {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ HUD: one small column on the left */
+#hud .hud-side {
+  position: absolute;
+  top: calc(64px + var(--safe-top));
+  left: 8px;
+  width: 176px;
+  max-height: calc(100% - 64px - 150px - var(--safe-top) - var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+  pointer-events: none !important;
+}
+#hud .hud-side > * {
+  position: static;
+  width: auto;
+  max-width: 100%;
+  transform: none;
+}
+#hud .hud-metrics {
+  padding: 6px 8px;
+  font-size: 10.5px;
+  pointer-events: auto;
+}
+#hud .hud-metrics h4 {
+  font-size: 9.5px;
+  margin-bottom: 3px;
+}
+#hud .hud-metrics .row {
+  padding: 1px 0;
+}
+#hud .hud-metrics .row.small {
+  font-size: 9.5px;
+}
+#hud .hud-monitor {
+  flex: none;
+  max-height: 58vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 6px 8px;
+  font-size: 9.5px;
+  pointer-events: auto;
+}
+#hud .hud-monitor h5 {
+  margin: 6px 0 3px;
+  font-size: 8.5px;
+}
+#hud .mon-q {
+  grid-template-columns: 1fr 44px 18px;
+  gap: 4px;
+}
+#hud .mon-spark {
+  width: 100%;
+}
+#hud .hud-notify {
+  align-items: stretch;
+  gap: 4px;
+}
+#hud .note {
+  padding: 5px 8px;
+  font-size: 10.5px;
+  border-left-width: 4px;
+}
+#hud .note.fade {
+  transform: translateX(-20px);
+}
+#hud .hud-feed {
+  padding: 6px 8px;
+  font-size: 10.5px;
+}
+#hud .hud-feed .fd-head {
+  font-size: 9.5px;
+}
+
+/* Smaller signal panels and control bar */
+#hud .sig-panel {
+  padding: 5px;
+}
+#hud .sig-row {
+  gap: 5px;
+}
+#hud .sig-btn {
+  min-width: 58px;
+  height: 40px;
+  font-size: 11px;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: 10px;
+}
+#hud .sig-btn .sig-name {
+  max-width: 70px;
+}
+#hud .sig-btn .lamp {
+  width: 12px;
+  height: 12px;
+}
+#hud .signal-panels.compact .sig-btn {
+  min-width: 48px;
+  height: 36px;
+  font-size: 10px;
+}
+#hud .signal-panels.compact .sig-btn .sig-name {
+  max-width: 54px;
+}
+#hud .phase,
+#hud .signal-panels.compact .phase {
+  min-width: 104px;
+}
+#hud .phase-label {
+  font-size: 11.5px;
+}
+#hud .phase-count {
+  font-size: 10.5px;
+}
+#hud .sig-title {
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+#hud .flash-btn {
+  padding: 2px 8px;
+  font-size: 10px;
+}
+#hud .hud-controls {
+  gap: 4px;
+  padding: 4px;
+}
+#hud .icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+#hud .icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+#hud .seg button {
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}

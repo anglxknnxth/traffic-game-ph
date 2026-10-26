@@ -11,7 +11,7 @@ import { EffectsRenderer } from './EffectsRenderer.js';
 import { WeatherRenderer } from './WeatherRenderer.js';
 import { drawPedestrians, drawPedSignals } from './PedestrianRenderer.js';
 import { StaticTiles } from './StaticTiles.js';
-import { drawVipRoutes, drawChase, drawParols, drawCrossovers, drawFires, drawForecast } from './EventRenderer.js';
+import { drawVipConvoy, drawChase, drawParols, drawCrossovers, drawFires, drawForecast } from './EventRenderer.js';
 
 const SETTLE_MS = 150; // the cached layers follow a zoom this long after the camera stops
 
@@ -147,7 +147,6 @@ export class Renderer {
     this.road.drawDynamic(ctx, sim, time, cam.visibleRect(4));
     if (debug) this.effects.drawReservations(ctx, sim);
     if (overlay === 'heat') this.effects.drawHeat(ctx, sim, dt);
-    drawVipRoutes(ctx, sim, time);
     if (forecast) drawForecast(ctx, sim, time);
 
     const vr = cam.visibleRect(8);
@@ -175,9 +174,10 @@ export class Renderer {
     this.effects.drawOver(ctx, ground, time);
     this.effects.drawSmoke(ctx, visible, time);
     drawChase(ctx, sim, time);
+    drawVipConvoy(ctx, sim, time);
     drawFires(ctx, sim, time);
     if (sim.peds?.enabled) drawCrossovers(ctx, sim, vr);
-    if (sim.enforcement?.posts.size) this.effects.drawEnforcers(ctx, sim, time, tool === 'enforcer');
+    if (sim.enforcement?.posts.size || sim.enforcement?.marshals.size) this.effects.drawEnforcers(ctx, sim, time, tool);
     if (interactive) this.effects.drawStuck(ctx, sim, ground, time);
     if (sim.network.layered) this.road.drawTrenchShade(ctx);
     if (this.hasElevated) {

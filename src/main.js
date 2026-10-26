@@ -19,6 +19,8 @@ if (play) {
     // &enf=A stations an enforcer at A; &cone=A:N cones off a contraflow lane beside A's North road.
     const sim = game.session.sim;
     if (q.get('enf')) for (const id of q.get('enf').split(',')) sim.enforcement.toggle(id);
+    // &marshal=B stations a traffic marshal at B (he takes over its lights).
+    if (q.get('marshal')) for (const id of q.get('marshal').split(',')) sim.enforcement.toggleMarshal(id);
     if (q.get('cone')) {
       // &cone=A:S:40 starts the cones 40 m along the lane (default: 80 m before the junction)
       const [cid, arm, from] = q.get('cone').split(':');

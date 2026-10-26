@@ -122,11 +122,6 @@ export class BossEvents {
     sim.events.push({ type: 'boss', kind: 'vip', state: 'done', stops: c.stops });
   }
 
-  /** Routes to draw: convoys on their way. */
-  routes() {
-    return this.convoys.filter((c) => !c.done).map((c) => c.route);
-  }
-
   // ------------------------------------------------------------------ bookkeeping
   onDespawn(v) {
     if (!v.getaway) return;

@@ -1,4 +1,4 @@
-// Overlays for the boss events and the calendar: the VIP motorcade's route, the ring on a fleeing
+// Overlays for the boss events and the calendar: the VIP motorcade's rings and badge, the ring on a fleeing
 // getaway car, and parol lanterns on the street lamps at Christmas.
 
 import { drawPedestrians } from './PedestrianRenderer.js';
@@ -135,29 +135,40 @@ export function drawFires(ctx, sim, time) {
   ctx.restore();
 }
 
-/** Dashed gold line along every VIP convoy's route (under the vehicles). */
-export function drawVipRoutes(ctx, sim, time) {
-  const routes = sim.boss?.routes();
-  if (!routes?.length) return;
+/** Gold ring on every car of a VIP convoy, and a "VIP" badge over the first one (over the vehicles). */
+export function drawVipConvoy(ctx, sim, time) {
+  const convoys = sim.boss?.convoys;
+  if (!convoys?.length) return;
   ctx.save();
-  ctx.strokeStyle = 'rgba(250, 204, 21, 0.75)';
-  ctx.lineWidth = 0.7;
-  ctx.setLineDash([2.4, 1.8]);
-  ctx.lineDashOffset = -time * 6;
-  ctx.lineCap = 'round';
-  for (const r of routes) {
-    ctx.beginPath();
-    let first = true;
-    for (const e of r.entries) {
-      const path = e.seg.path;
-      for (let s = 0; s <= path.length; s += 3) {
-        path.pointAt(Math.min(s, path.length), _p);
-        if (first) ctx.moveTo(_p.x, _p.y);
-        else ctx.lineTo(_p.x, _p.y);
-        first = false;
-      }
+  const a = 0.6 + 0.35 * Math.sin(time * 4);
+  for (const c of convoys) {
+    if (c.done) continue;
+    let lead = null;
+    for (const it of c.items) {
+      const v = it.vehicle;
+      if (!v || !sim.vehicles.includes(v)) continue;
+      lead = lead || v;
+      ctx.strokeStyle = `rgba(250, 204, 21, ${a})`;
+      ctx.lineWidth = 0.35;
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, 3, 0, Math.PI * 2);
+      ctx.stroke();
     }
+    if (!lead) continue;
+    const y = lead.y - 5 + Math.sin(time * 3) * 0.4;
+    ctx.fillStyle = '#facc15';
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 0.2;
+    ctx.beginPath();
+    ctx.roundRect(lead.x - 2.2, y - 1, 4.4, 2, 0.6);
+    ctx.fill();
     ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(lead.x - 0.6, y + 1);
+    ctx.lineTo(lead.x, y + 1.8);
+    ctx.lineTo(lead.x + 0.6, y + 1);
+    ctx.fill();
+    worldText(ctx, 'VIP', lead.x, y + 0.04, 1.3, '#111827');
   }
   ctx.restore();
 }

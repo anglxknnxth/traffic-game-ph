@@ -13,6 +13,10 @@
 //     crossing is coming
 //   - "patawid": every crosswalk at the junction gets a walk light (all-red for traffic) for 12 s
 //   - an emergency vehicle heading for the junction is given way twice as far out
+// Traffic marshals (naka-pula; as many as enforcers, their own pool): stationed at a junction they
+// direct it themselves and the stoplight is overridden (see SignalAutopilot.setMarshal): quick
+// changes by the queues, and the player can no longer pick the greens there. They keep drivers in
+// line exactly like an enforcer (near / watched). One person per junction: enforcer or marshal.
 // Anywhere: tap a waiting jaywalker to send them to the crosswalk; tap a stalled vehicle or road
 // works to call a tow truck (cleared in 8 s).
 
@@ -25,6 +29,8 @@ export class Enforcement {
     this.junctions = sim.network.intersections.filter((n) => n.layer === 0 && n.kind !== 'uturn').length;
     this.max = sim.level.enforcer ? this.junctions : 0;
     this.posts = new Map(); // node id -> { id, x, y, wave }
+    this.marshals = new Map(); // node id -> { id, x, y, wave }
+    this.marshalMax = this.max;
     this.caught = 0;
     this.log = [];
   }
@@ -33,14 +39,24 @@ export class Enforcement {
     return this.max - this.posts.size;
   }
 
-  /** Is an enforcer stationed at node I? */
+  get marshalsAvailable() {
+    return this.marshalMax - this.marshals.size;
+  }
+
+  /** Is an enforcer or a marshal stationed at node I? */
   near(I) {
-    return !!I && this.posts.has(I.id);
+    return !!I && (this.posts.has(I.id) || this.marshals.has(I.id));
+  }
+
+  /** The person on duty at node id (enforcer or marshal), or undefined. */
+  postAt(id) {
+    return this.posts.get(id) || this.marshals.get(id);
   }
 
   /** Is (x, y) within an enforcer's reach? */
   watched(x, y) {
     for (const p of this.posts.values()) if (Math.hypot(p.x - x, p.y - y) < ENFORCER_REACH) return true;
+    for (const p of this.marshals.values()) if (Math.hypot(p.x - x, p.y - y) < ENFORCER_REACH) return true;
     return false;
   }
 
@@ -52,11 +68,29 @@ export class Enforcement {
       this.posts.delete(id);
       return { ok: true, text: `Enforcer off duty at ${id}` };
     }
+    if (this.marshals.has(id)) return { ok: false, text: 'May traffic marshal na dito: take him off first (🦺 tool)' };
     if (this.available <= 0) return { ok: false, text: `All ${this.max} enforcers are on duty: tap one to move them` };
     // Stand in the middle of the box, on a podium
     this.posts.set(id, { id, x: I.x, y: I.y, wave: 0 });
     this.sim.notify(`ENF_${id}`, `👮 ENFORCER ON DUTY · ${this._name(I)}`, 'good');
     return { ok: true, text: `Enforcer on duty at ${this._name(I)}` };
+  }
+
+  /** Station a traffic marshal at node `id` (or take him off). He takes over the lights there. */
+  toggleMarshal(id) {
+    const I = this.sim.network.byId.get(id);
+    if (!I || I.layer !== 0 || I.kind === 'uturn') return { ok: false, text: 'Marshals stand at street junctions' };
+    if (this.marshals.has(id)) {
+      this.marshals.delete(id);
+      this.sim.autopilot.setMarshal(id, false);
+      return { ok: true, text: `Marshal off duty at ${this._name(I)} · the lights are yours again` };
+    }
+    if (this.posts.has(id)) return { ok: false, text: 'May enforcer na dito: take them off first (👮 tool)' };
+    if (this.marshalsAvailable <= 0) return { ok: false, text: `All ${this.marshalMax} marshals are on duty: tap one to move him` };
+    this.marshals.set(id, { id, x: I.x, y: I.y, wave: 0 });
+    this.sim.autopilot.setMarshal(id, true);
+    this.sim.notify(`MARSHAL_${id}`, `🦺 TRAFFIC MARSHAL · ${this._name(I)} · sya na ang nagmamando`, 'good');
+    return { ok: true, text: `Marshal on duty at ${this._name(I)}: he directs the traffic there` };
   }
 
   _name(I) {
@@ -110,7 +144,7 @@ export class Enforcement {
     if (!this.near(I) || ce.start - v.front > 6 || v.v > 1 || v.signal === 'green') return false;
     v.waved = this.sim.time + 5;
     v.reactTimer = 0;
-    const post = this.posts.get(I.id);
+    const post = this.postAt(I.id);
     if (post) post.wave = 2;
     this.sim.notify(`WAVE_${I.id}`, '👮 PADAANIN! · the enforcer waves a lane through', 'info');
     return true;
@@ -124,7 +158,7 @@ export class Enforcement {
     if (!m) return { ok: false, text: 'No lights here' };
     const r = m.holdForPeople(12);
     if (r) this.sim.notify(`PATAWID_${id}`, '🚸 PATAWID! · all traffic stops for people crossing', 'good');
-    const post = this.posts.get(id);
+    const post = this.postAt(id);
     if (post) post.wave = 3;
     return { ok: r, text: r ? 'Patawid: walk on every crosswalk for 12 s' : 'Already holding traffic' };
   }
@@ -158,5 +192,6 @@ export class Enforcement {
 
   update(dt) {
     for (const p of this.posts.values()) if (p.wave > 0) p.wave -= dt;
+    for (const p of this.marshals.values()) if (p.wave > 0) p.wave -= dt;
   }
 }

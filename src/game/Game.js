@@ -388,6 +388,7 @@ export class Game {
       this.hud.toast('That junction is not open yet: it runs on AUTO', 'info');
       return;
     }
+    if (this._marshalled(sim, intersectionId)) return;
     this.hud.select(intersectionId);
     // The player took this signal over: it leaves AUTO.
     const wasAuto = sim.autopilot.isAuto(intersectionId);
@@ -416,11 +417,15 @@ export class Game {
     }
   }
 
-  /** Tool picked in the HUD: 'enforcer' (station / move enforcers) or 'contraflow' (cone a lane). */
+  /**
+   * Tool picked in the HUD: 'enforcer' (station / move enforcers), 'marshal' (station / move
+   * traffic marshals) or 'contraflow' (cone a lane).
+   */
   setTool(tool) {
     this.state.tool = this.state.tool === tool ? null : tool;
     this.hud.syncControls();
     if (this.state.tool === 'enforcer') this.hud.toast('👮 Tap a junction to station an enforcer there (tap again to take them off)', 'info');
+    if (this.state.tool === 'marshal') this.hud.toast('🦺 Tap a junction to station a traffic marshal: sya na ang magmamando, override ang stoplight (tap again to take him off)', 'info');
     if (this.state.tool === 'contraflow') this.hud.toast('🚧 Tap an undivided road near a junction to cone off a contraflow lane (tap a coned road again to remove)', 'info');
   }
 
@@ -429,14 +434,15 @@ export class Game {
     const sim = this.session?.sim;
     if (!sim || this.session.ended || this.state.paused) return false;
     const t = this.state.tool;
-    if (t === 'enforcer') {
+    if (t === 'enforcer' || t === 'marshal') {
       const I = sim.network.intersections.find((n) => n.layer === 0 && n.kind !== 'uturn' && Network.inCore(n, x, y, 8));
       if (!I) return false;
-      const r = sim.enforcement.toggle(I.id);
+      const enf = sim.enforcement;
+      const r = t === 'enforcer' ? enf.toggle(I.id) : enf.toggleMarshal(I.id);
       this.hud.toast(r.text, r.ok ? 'ok' : 'info');
       this.hud.buildPanels(sim);
       if (r.ok) this.audio.whistle(0);
-      if (!sim.enforcement.available) this.state.tool = null;
+      if (!(t === 'enforcer' ? enf.available : enf.marshalsAvailable)) this.state.tool = null;
       this.hud.syncControls();
       return true;
     }
@@ -550,10 +556,18 @@ export class Game {
     if (r.ok) this.audio.whistle(0);
   }
 
+  /** True (with a toast) when a traffic marshal runs signal id: the player cannot touch it. */
+  _marshalled(sim, id) {
+    if (!sim.enforcement.marshals.has(id)) return false;
+    this.hud.toast('🦺 Si Marshal ang nagmamando dito · alisin muna sya (🦺 tool)', 'info');
+    return true;
+  }
+
   /** AUTO lights: one signal, or every signal (id null). */
   setAuto(intersectionId, on) {
     const sim = this.session?.sim;
     if (!sim) return;
+    if (intersectionId && this._marshalled(sim, intersectionId)) return;
     if (intersectionId) sim.autopilot.setAuto(intersectionId, on);
     else sim.autopilot.setAll(on);
     this.hud.toast(on ? (intersectionId ? `AUTO · ${intersectionId}` : 'AUTO LAHAT · the lights run themselves') : 'MANUAL · you have the lights', 'ok');
@@ -638,7 +652,7 @@ export class Game {
     if (!this.session || this.session.ended || this.state.paused) return;
     const sim = this.session.sim;
     const m = sim.lights.manager(intersectionId);
-    if (!m) return;
+    if (!m || this._marshalled(sim, intersectionId)) return;
     const where = sim.lights.managers.size > 1 ? ` (${intersectionId})` : '';
     if (m.flashing || m.nextGroup === FLASH_GROUP) {
       const p = sim.metrics.perIntersection.find((x) => x.id === intersectionId);

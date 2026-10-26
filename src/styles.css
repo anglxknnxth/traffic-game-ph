@@ -528,6 +528,22 @@ button {
   color: #111827;
   border-color: #facc15;
 }
+/* A traffic marshal runs the junction: the light controls are his. */
+.sig-btn:disabled,
+.flash-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.marshal-tag {
+  margin-top: 3px;
+  align-self: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
 .sig-btn.pending {
   animation: pendingPulse 0.9s infinite;
 }

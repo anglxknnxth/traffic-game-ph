@@ -16,7 +16,7 @@ const WAVE_STEP = 0.15; // each later wave adds this much peak demand
 
 /** Upgrade cards offered after a surge. `apply(sim)` changes the running session. */
 export const SURGE_CARDS = {
-  enforcer: { icon: '👮', name: 'Dagdag Enforcer', text: '+1 traffic enforcer na puwedeng i-station', apply: (sim) => sim.enforcement.max++ },
+  enforcer: { icon: '👮', name: 'Dagdag Enforcer', text: '+1 traffic enforcer at +1 marshal na puwedeng i-station', apply: (sim) => (sim.enforcement.max++, sim.enforcement.marshalMax++) },
   tow: { icon: '🚚', name: 'Mabilis na Tow', text: 'Tow truck dumarating sa 4 s imbes na 8 s', apply: (sim) => (sim.enforcement.towTime = Math.max(3, (sim.enforcement.towTime ?? 8) / 2)) },
   barker: { icon: '📣', name: 'Barker sa Sakayan', text: '"Cubao! Cubao!" · 35% mas mabilis sumakay at bumaba ang pasahero', apply: (sim) => (sim.boardingMul = (sim.boardingMul ?? 1) * 0.65) },
   wfh: { icon: '🏠', name: 'Work From Home Advisory', text: 'Mas magaan ang susunod na mga rush hour (−12% peak)', apply: (sim) => (sim.surge.relief += 0.12) },

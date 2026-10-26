@@ -6,19 +6,53 @@
 // the current green has run long. A road that has waited too long always gets its turn, and an
 // approaching emergency vehicle is given its green right away. It only ever asks the signal for a
 // change through the normal request path, so yellow and all-red always run.
+//
+// A traffic marshal stationed at a signal (Enforcement.toggleMarshal) takes it over: it runs on
+// this controller with snappier timing and a short "yellow" (his hand signal, not the lamp), and
+// the player cannot take it back until he is off duty. An emergency vehicle comes first with him,
+// at once and with its road alone (see _marshalEmergency).
 
-const TICK = 1; // s between decisions
-const MIN_GREEN = 6; // s before the controller changes a green it picked
-const MAX_GREEN = 32; // s: a long green gives way to any waiting road
-const STARVE = 45; // s: a road with a queue waiting this long goes next
+const AUTO = {
+  tick: 1, // s between decisions
+  minGreen: 6, // s before the controller changes a green it picked
+  maxGreen: 32, // s: a long green gives way to any waiting road
+  starve: 45, // s: a road with a queue waiting this long goes next
+  margin: 1.3, // a road must need it this many times more than the current green (plus `extra`)
+  extra: 1.5,
+};
+const MARSHAL = { tick: 0.5, minGreen: 4, maxGreen: 20, starve: 30, margin: 1.15, extra: 1 };
+const MARSHAL_YELLOW = 1; // s
 
 export class SignalAutopilot {
   constructor(sim, { auto = false, returnAfter = null } = {}) {
     this.sim = sim;
     this.returnAfter = returnAfter; // s of no player input before a MANUAL signal goes back to AUTO
     this.state = new Map();
-    for (const id of sim.lights.managers.keys()) this.state.set(id, { auto, lastInput: -Infinity, served: new Map(), want: null, timer: 0 });
+    for (const id of sim.lights.managers.keys()) this.state.set(id, { auto, marshal: false, lastInput: -Infinity, served: new Map(), want: null, timer: 0 });
     this._t = 0;
+    this._tm = 0;
+  }
+
+  isMarshal(id) {
+    return !!this.state.get(id)?.marshal;
+  }
+
+  /** A traffic marshal takes signal `id` over (on) or hands it back to the player (off). */
+  setMarshal(id, on) {
+    const st = this.state.get(id);
+    const m = this.sim.lights.manager(id);
+    if (!st || !m || st.marshal === on) return;
+    st.marshal = on;
+    st.want = null;
+    if (on) {
+      st.yellow = m.yellow;
+      m.yellow = MARSHAL_YELLOW;
+      st.auto = true;
+    } else {
+      m.yellow = st.yellow ?? m.yellow;
+      st.auto = false;
+      st.lastInput = this.sim.time;
+    }
   }
 
   isAuto(id) {
@@ -37,7 +71,7 @@ export class SignalAutopilot {
 
   setAuto(id, on) {
     const st = this.state.get(id);
-    if (st) {
+    if (st && !st.marshal) {
       st.auto = on;
       st.want = null;
     }
@@ -50,7 +84,7 @@ export class SignalAutopilot {
   /** The player touched signal `id`: it becomes MANUAL (until returnAfter seconds of quiet). */
   onPlayerInput(id) {
     const st = this.state.get(id);
-    if (!st) return;
+    if (!st || st.marshal) return;
     st.auto = false;
     st.want = null;
     st.lastInput = this.sim.time;
@@ -65,9 +99,14 @@ export class SignalAutopilot {
       if (!st.auto && this.returnAfter !== null && sim.time - st.lastInput > this.returnAfter) st.auto = true;
     }
     this._t += dt;
-    if (this._t < TICK) return;
-    this._t = 0;
-    for (const [id, st] of this.state) if (st.auto) this._decide(id, st);
+    this._tm += dt;
+    const tick = this._t >= AUTO.tick;
+    const tickM = this._tm >= MARSHAL.tick;
+    if (tick) this._t = 0;
+    if (tickM) this._tm = 0;
+    for (const [id, st] of this.state) {
+      if (st.marshal ? tickM : tick && st.auto) this._decide(id, st);
+    }
   }
 
   /** Queue score per phase: vehicles waiting plus a weight for how long the head has waited. */
@@ -88,6 +127,8 @@ export class SignalAutopilot {
   _decide(id, st) {
     const sim = this.sim;
     const m = sim.lights.manager(id);
+    const T = st.marshal ? MARSHAL : AUTO;
+    if (st.marshal && m.priorityGroup && this._marshalEmergency(id, st, m)) return;
     if (m.state !== 'GREEN' || m.flashing) return;
     if (m.pair && m.pair.stage !== 'on') return; // a pair is being set up or dropped
     // A pending pair from the last switch: add the opposite road once our road is green.
@@ -135,9 +176,9 @@ export class SignalAutopilot {
     for (const g of m.groups) {
       if (served.has(g) || q[g] < 1) continue;
       const since = sim.time - (st.served.get(g) ?? -Infinity);
-      if (since > STARVE && (!starving || since > starving.since)) starving = { g, since };
+      if (since > T.starve && (!starving || since > starving.since)) starving = { g, since };
     }
-    if (m.timer < MIN_GREEN) return;
+    if (m.timer < T.minGreen) return;
     if (starving) {
       this._switch(id, st, m, starving.g, false);
       return;
@@ -145,7 +186,36 @@ export class SignalAutopilot {
     if (!best) return;
     const same = best.pair ? served.has(best.group) && served.has(m.oppositeOf(best.group)) : served.size === 1 && served.has(best.group);
     if (same) return;
-    if (bestScore > cur * 1.3 + 1.5 || (m.timer > MAX_GREEN && bestScore > 0)) this._switch(id, st, m, best.group, best.pair);
+    if (bestScore > cur * T.margin + T.extra || (m.timer > T.maxGreen && bestScore > 0)) this._switch(id, st, m, best.group, best.pair);
+  }
+
+  /**
+   * A marshal lets an emergency vehicle through first, at once: mid-change or flashing he turns
+   * straight to its road, and a paired green is dropped so its road runs alone (left turns too).
+   * Returns true when he acted on it (nothing else is decided this tick).
+   */
+  _marshalEmergency(id, st, m) {
+    const sim = this.sim;
+    const g = m.priorityGroup;
+    const post = sim.enforcement?.marshals.get(id);
+    if (post) post.wave = 1; // waving it through
+    st.want = null;
+    if (m.flashing) {
+      sim.requestPhase(id, g);
+      return true;
+    }
+    if (m.state !== 'GREEN') {
+      // Yellow back to its own road cancels the change; otherwise redirect the change to it.
+      if (m.nextGroup !== g) sim.requestPhase(id, g);
+      return true;
+    }
+    if (m.pair) {
+      if (m.pair.stage === 'on' && (g === m.activeGroup || g === m.pair.other)) sim.requestPhase(id, g);
+      else if (m.pair.stage === 'on') this._switch(id, st, m, g, false);
+      return true;
+    }
+    if (g !== m.activeGroup) this._switch(id, st, m, g, false);
+    return true;
   }
 
   /**

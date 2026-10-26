@@ -25,7 +25,7 @@ export const ICONS = {
 const RAIL_FOLDS = '(max-width: 720px), (max-height: 520px)';
 const railFolds = () => typeof matchMedia !== 'undefined' && matchMedia(RAIL_FOLDS).matches;
 // Picking one of these on a phone closes the rail again (a tool then waits for a tap on the map).
-const RAIL_CLOSES = new Set(['restart', 'metrics', 'monitor', 'heat', 'forecast', 'enforcer', 'contraflow', 'watch', 'autoall']);
+const RAIL_CLOSES = new Set(['restart', 'metrics', 'monitor', 'heat', 'forecast', 'enforcer', 'marshal', 'contraflow', 'watch', 'autoall']);
 
 /** el[prop] = value, skipping the write (and the style / layout work it triggers) when unchanged. */
 function set(el, prop, value) {
@@ -103,6 +103,7 @@ export class HUD {
           <button class="icon-btn heat-btn" data-act="heat" title="Speed heatmap and queue counts on the map (O)">🌡️</button>
           <button class="icon-btn forecast-btn" data-act="forecast" title="Hula: forecast which roads will fill up, and when">🔮</button>
           <button class="icon-btn tool-btn" data-act="enforcer" title="Station a traffic enforcer at a junction" hidden>👮<small class="tool-n"></small></button>
+          <button class="icon-btn tool-btn" data-act="marshal" title="Station a traffic marshal: he directs the junction himself (overrides the stoplight)" hidden>🦺<small class="tool-n"></small></button>
           <button class="icon-btn tool-btn" data-act="contraflow" title="Cone off a contraflow lane (tap the cones to remove)" hidden>🚧</button>
           <button class="icon-btn auto-all" data-act="autoall" title="AUTO LAHAT: every light runs itself (click a light to take it over)" hidden>AUTO</button>
           <button class="icon-btn watch-btn" data-act="watch" title="Watch mode: hide the controls and let the camera find the action (H)">👁</button>
@@ -156,6 +157,7 @@ export class HUD {
       monitor: root.querySelector('.hud-monitor'),
       monBtn: root.querySelector('[data-act="monitor"]'),
       enfBtn: root.querySelector('[data-act="enforcer"]'),
+      marshalBtn: root.querySelector('[data-act="marshal"]'),
       cfBtn: root.querySelector('[data-act="contraflow"]'),
       heatBtn: root.querySelector('[data-act="heat"]'),
       forecastBtn: root.querySelector('[data-act="forecast"]'),
@@ -216,20 +218,23 @@ export class HUD {
       : '';
     this.el.panels.innerHTML = tabs + managers
       .map(([id, m]) => {
+        // A traffic marshal runs this junction: its light controls are his, not the player's.
+        const marshal = sim.enforcement.marshals.has(id);
+        const off = marshal ? ' disabled' : '';
         const btn = (g) => {
           key++;
-          return `<button class="sig-btn" data-int="${id}" data-group="${g}" title="Request ${m.labelOf(g)} green${key <= 9 ? ` (${key})` : ''}"><span class="lamp"></span><span class="sig-name">${m.labelOf(g)}</span></button>`;
+          return `<button class="sig-btn" data-int="${id}" data-group="${g}"${off} title="${marshal ? 'Si Marshal ang nagmamando dito' : `Request ${m.labelOf(g)} green${key <= 9 ? ` (${key})` : ''}`}"><span class="lamp"></span><span class="sig-name">${m.labelOf(g)}</span></button>`;
         };
         const half = Math.ceil(m.groups.length / 2);
         const left = m.groups.slice(0, half).map(btn).join('');
         const right = m.groups.slice(half).map(btn).join('');
-        const auto = sim.level.allowAuto ? `<button class="auto-btn" data-auto="${id}" title="Hand this signal to AUTO, or take it back">AUTO</button>` : '';
+        const auto = sim.level.allowAuto && !marshal ? `<button class="auto-btn" data-auto="${id}" title="Hand this signal to AUTO, or take it back">AUTO</button>` : '';
         return `
       <div class="sig-panel" data-int="${id}" ${tabbed && id !== this.selected ? 'hidden' : ''}>
         ${multi || auto ? `<div class="sig-title">${multi ? `Intersection ${id}${tabbed ? ` · ${this._junctionName(sim, id)}` : ''}` : ''}${auto}</div>` : ''}
         <div class="sig-row">
           ${left}
-          <div class="phase"><b class="phase-label"></b><span class="phase-count"></span><button class="flash-btn" data-flash="${id}" title="Flashing yellow: every road stops, then goes when clear (Y)">⚠ Flash</button>${sim.enforcement.near(sim.network.byId.get(id)) ? `<button class="flash-btn patawid-btn" data-patawid="${id}" title="The enforcer stops all traffic so people can cross (12 s)">🚸 Patawid</button>` : ''}</div>
+          <div class="phase"><b class="phase-label"></b><span class="phase-count"></span><button class="flash-btn" data-flash="${id}"${off} title="Flashing yellow: every road stops, then goes when clear (Y)">⚠ Flash</button>${marshal ? '<span class="marshal-tag" title="A traffic marshal directs this junction: the stoplight is overridden">🦺 MARSHAL</span>' : ''}${sim.enforcement.near(sim.network.byId.get(id)) ? `<button class="flash-btn patawid-btn" data-patawid="${id}" title="The enforcer stops all traffic so people can cross (12 s)">🚸 Patawid</button>` : ''}</div>
           ${right}
         </div>
       </div>`;
@@ -303,9 +308,12 @@ export class HUD {
     const sim = this.session?.sim;
     const enf = sim?.enforcement;
     this.el.enfBtn.hidden = !enf || enf.max <= 0;
+    this.el.marshalBtn.hidden = !enf || enf.marshalMax <= 0;
     this.el.cfBtn.hidden = !enf || enf.max <= 0;
     if (enf) this.el.enfBtn.querySelector('.tool-n').textContent = `${enf.available}`;
+    if (enf) this.el.marshalBtn.querySelector('.tool-n').textContent = `${enf.marshalsAvailable}`;
     this.el.enfBtn.classList.toggle('active', g.state.tool === 'enforcer');
+    this.el.marshalBtn.classList.toggle('active', g.state.tool === 'marshal');
     this.el.cfBtn.classList.toggle('active', g.state.tool === 'contraflow');
     this.root.querySelector('[data-act="watch"]').classList.toggle('active', !!g.state.watch);
     this.root.classList.toggle('metrics-hidden', !g.state.showMetrics);
@@ -393,6 +401,9 @@ export class HUD {
         break;
       case 'enforcer':
         g.setTool('enforcer');
+        break;
+      case 'marshal':
+        g.setTool('marshal');
         break;
       case 'contraflow':
         g.setTool('contraflow');

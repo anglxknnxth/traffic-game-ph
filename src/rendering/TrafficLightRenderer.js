@@ -28,7 +28,10 @@ export class TrafficLightRenderer {
       let sig = mgr.signalForGroup(h.group);
       // Flashing yellow: the amber lamp blinks on every head.
       if (sig === 'flash') sig = Math.floor(time * 2) % 2 === 0 ? 'yellow' : 'off';
+      // A traffic marshal overrides this junction's lights: drawn faded (he is the signal now).
+      const alpha = sim.enforcement?.marshals.has(h.intersectionId) ? 0.35 : 1;
       ctx.save();
+      ctx.globalAlpha = alpha;
       ctx.translate(h.x, h.y);
 
       // Priority request ring (emergency vehicle needs this group)
@@ -64,12 +67,12 @@ export class TrafficLightRenderer {
         if (lampsOnly && !on) continue;
         const [lit, dim] = LAMP[name];
         if (on) {
-          ctx.globalAlpha = 0.35;
+          ctx.globalAlpha = 0.35 * alpha;
           ctx.fillStyle = lit;
           ctx.beginPath();
           ctx.arc(x, 0, 0.85, 0, Math.PI * 2);
           ctx.fill();
-          ctx.globalAlpha = 1;
+          ctx.globalAlpha = alpha;
         }
         ctx.fillStyle = on ? lit : dim;
         ctx.beginPath();

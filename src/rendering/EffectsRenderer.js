@@ -6,6 +6,9 @@
 import { worldText } from './RoadRenderer.js';
 import { AI_STATE } from '../simulation/Vehicle.js';
 
+const ENFORCER_LOOK = { body: '#1d4ed8', arm: '#1e3a8a', cap: '#f8fafc', reach: 'rgba(59,130,246,0.55)', icon: '👮' };
+const MARSHAL_LOOK = { body: '#dc2626', arm: '#991b1b', cap: '#b91c1c', reach: 'rgba(220,38,38,0.6)', icon: '🦺' };
+const _pt = {};
 const SMOKY = new Set(['jeepney', 'truck', 'bus', 'dumptruck', 'tanker', 'tricycle']);
 
 export class EffectsRenderer {
@@ -136,51 +139,74 @@ export class EffectsRenderer {
     }
   }
 
-  /** Traffic enforcers at their posts: blue uniform, white cap, an arm waving traffic on. */
-  drawEnforcers(ctx, sim, time, showReach) {
-    for (const p of sim.enforcement.posts.values()) {
-      if (showReach) {
-        ctx.strokeStyle = 'rgba(59,130,246,0.55)';
-        ctx.lineWidth = 0.3;
-        ctx.setLineDash([1.5, 1.2]);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 40, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      const wave = p.wave > 0 ? Math.sin(time * 14) * 0.9 : Math.sin(time * 2.2) * 0.35;
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.scale(2.4, 2.4);
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.beginPath();
-      ctx.ellipse(0.12, 0.15, 0.45, 0.3, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // arm with the white glove
-      ctx.strokeStyle = '#1e3a8a';
-      ctx.lineWidth = 0.16;
-      ctx.beginPath();
-      ctx.moveTo(0.2, 0);
-      ctx.lineTo(0.2 + Math.cos(wave) * 0.55, Math.sin(wave) * 0.55);
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(0.2 + Math.cos(wave) * 0.6, Math.sin(wave) * 0.6, 0.09, 0, Math.PI * 2);
-      ctx.fill();
-      // body (blue uniform, reflective vest stripe) and white cap
-      ctx.fillStyle = '#1d4ed8';
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 0.32, 0.22, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#d9f99d';
-      ctx.fillRect(-0.06, -0.22, 0.12, 0.44);
-      ctx.fillStyle = '#f8fafc';
-      ctx.beginPath();
-      ctx.arc(0, 0, 0.15, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      worldText(ctx, '👮', p.x, p.y - 2.2, 1.6, '#fff');
+  /**
+   * Traffic enforcers (blue uniform, white cap) and traffic marshals (all red, facing the road he
+   * is letting through) at their posts, an arm waving traffic on. `tool` shows their reach.
+   */
+  drawEnforcers(ctx, sim, time, tool) {
+    const enf = sim.enforcement;
+    for (const p of enf.posts.values()) this._drawOfficer(ctx, p, time, ENFORCER_LOOK, tool === 'enforcer', 0, false);
+    for (const p of enf.marshals.values()) this._drawOfficer(ctx, p, time, MARSHAL_LOOK, tool === 'marshal', this._greenAngle(sim, p.id), true);
+  }
+
+  /** Direction from junction id's centre to the road its current green releases (0 if none). */
+  _greenAngle(sim, id) {
+    const I = sim.network.byId.get(id);
+    const m = sim.lights.manager(id);
+    if (!I || !m || m.state !== 'GREEN') return 0;
+    for (const arm of m.byId.get(m.activeGroup)?.arms || []) {
+      const lane = I.approachLanes[arm]?.[0];
+      if (!lane) continue;
+      lane.path.pointAt(lane.path.length, _pt);
+      return Math.atan2(_pt.y - I.y, _pt.x - I.x);
     }
+    return 0;
+  }
+
+  _drawOfficer(ctx, p, time, look, showReach, facing, busy) {
+    if (showReach) {
+      ctx.strokeStyle = look.reach;
+      ctx.lineWidth = 0.3;
+      ctx.setLineDash([1.5, 1.2]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 40, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // A marshal keeps beckoning the road he is letting through.
+    const wave = p.wave > 0 || busy ? Math.sin(time * (busy ? 9 : 14)) * 0.9 : Math.sin(time * 2.2) * 0.35;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.scale(2.4, 2.4);
+    if (facing) ctx.rotate(facing);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(0.12, 0.15, 0.45, 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // arm with the white glove
+    ctx.strokeStyle = look.arm;
+    ctx.lineWidth = 0.16;
+    ctx.beginPath();
+    ctx.moveTo(0.2, 0);
+    ctx.lineTo(0.2 + Math.cos(wave) * 0.55, Math.sin(wave) * 0.55);
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(0.2 + Math.cos(wave) * 0.6, Math.sin(wave) * 0.6, 0.09, 0, Math.PI * 2);
+    ctx.fill();
+    // body (uniform, reflective vest stripe) and cap
+    ctx.fillStyle = look.body;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 0.32, 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d9f99d';
+    ctx.fillRect(-0.06, -0.22, 0.12, 0.44);
+    ctx.fillStyle = look.cap;
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    worldText(ctx, look.icon, p.x, p.y - 2.2, 1.6, '#fff');
   }
 
   /**

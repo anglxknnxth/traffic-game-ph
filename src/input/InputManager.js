@@ -222,7 +222,7 @@ export class InputManager {
     }
     const g = this.game;
     const w = g.camera.screenToWorld(p.x, p.y);
-    // A tool picked in the HUD (station an enforcer, cone a contraflow lane)
+    // A tool picked in the HUD (station an enforcer or a marshal, cone a contraflow lane)
     if (g.state.tool && g.toolAt(w.x, w.y)) return;
     // A vehicle: HULI! a violator, wave a stuck one through, padaanin at an enforcer's junction,
     // or follow it in watch mode. Clicking is always optional: everything also clears by itself.

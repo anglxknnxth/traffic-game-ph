@@ -5,7 +5,13 @@
 //   emergency — an ambulance or fire truck stuck behind a queue runs up the oncoming lane to the
 //               junction; oncoming drivers stop and pull over
 //   contraflow— the player cones off the oncoming inner lane (enforcer tool): queued drivers may use
-//               it legally to get to the front faster
+//               it legally to get to the front faster; an ambulance stuck in the queue uses it too
+//               (and the car right in front of it pulls into the cones to make room)
+//
+// A pasaway only runs all the way up to the stop line on its own green, and is sent back into the
+// queue if the light changes before it gets in: nobody parks in the oncoming lane waiting for a
+// green. While someone runs up the oncoming inner lane, drivers heading into it keep right (the
+// next lane, as for the cones), so the junction keeps flowing round it.
 //
 // How it stays collision-free: the vehicle never leaves its own lane in the simulation. It keeps its
 // route coordinate and only moves sideways (a lateral offset) into the oncoming lane, so every
@@ -120,21 +126,16 @@ export class CounterflowManager {
     const opp = this.oppOf(lane);
     if (!opp) return;
     const moto = MOTO.has(v.type);
-    const zone = this.zones.find((z) => z.lane === lane && z.state === 'open');
+    const zone = this.openZoneOn(lane);
     if (zone) {
       // A coned contraflow lane: queued drivers whose whole body is beside it may use it.
-      if (v.v > 2.5 || v.localS - v.hl < zone.s0 + 1 || v.localS + v.hl > lane.length - 3 || !this._canPullOut(v) || !sim.rng.chance(0.35)) return;
+      // (With a siren right behind that cannot pull out round it, the driver pulls in to make room.)
+      const siren = this._boxedSirenBehind(v, lane);
+      if (v.v > 2.5 || v.localS - v.hl < zone.s0 + 1 || v.localS + v.hl > lane.length - 3 || !this._canPullOut(v) || (!siren && !sim.rng.chance(0.35))) return;
       // It is a lane for those turning left (or U-turning) at the junction ahead.
       const move = v.nextConnEntry()?.seg.movement;
-      if (move !== 'left' && move !== 'uturn') return;
-      // Only into a free bit of the lane: nobody already in it close behind, alongside, or within
-      // the stretch it needs to swing out (and room for the swing before the stop line).
-      const out = this._swingL(v);
-      if (v.localS + v.hl + out > lane.length - 1.5) return;
-      for (const o of zone.users) {
-        const p = this._along(o, lane);
-        if (p !== null && p > v.localS - v.hl - 10 && p < v.localS + v.hl + o.hl + out + 2) return;
-      }
+      if (!siren && move !== 'left' && move !== 'uturn') return;
+      if (!this._zoneRoom(v, zone, lane)) return;
       this._startFront(v, lane, opp, { zone, legal: true, target: lane.length - 0.3 });
       return;
     }
@@ -154,12 +155,58 @@ export class CounterflowManager {
     if (!sim.rng.chance(Math.min(0.9, base * (1 + v.waitTime / 20)))) return;
     if (this._plan(v, lane, opp, moto ? 6 : 3)) return;
     // No gap to cut into: run up the oncoming lane as far as it is clear, toward the stop line.
+    // Only on its own green: nobody waits out there for the light to change.
+    if (this._ownSignal(v) !== 'green') return;
     // One at a time per junction: two of them on opposite roads would each block the other's exit.
     if (this.active.some((o) => o.cf && o.cf.front && !o.cf.legal && !o.cf.emergency && o.cf.lane.endInt === lane.endInt)) return;
     // Only the really fed-up go all the way.
     if (v.waitTime < Math.max(20, minWait * 2) || !sim.rng.chance(0.5)) return;
     const target = this._reach(v, lane, opp, 1.5);
     if (target !== null) this._startFront(v, lane, opp, { target });
+  }
+
+  /** The light v's own lane shows for its next movement ('green' at unsignalised nodes). */
+  _ownSignal(v) {
+    const lane = v.cf ? v.cf.lane : v.segment;
+    if (!lane.endInt) return 'green';
+    return this.sim.lights.signal(lane.endInt.id, lane.endArm, v.nextConnEntry()?.seg.movement);
+  }
+
+  /** An emergency vehicle just behind v in its lane, too close behind v to swing out itself. */
+  _boxedSirenBehind(v, lane) {
+    for (const o of lane.vehicles) {
+      if (!o.emergency || o === v || o.cf) continue;
+      const gap = v.localS - v.hl - o.localS - o.hl;
+      if (gap > -0.5 && gap < 12 && this.sim.findLeader(o, 30)?.vehicle === v && !this._canPullOut(o)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Is there a free bit of the coned lane beside v: nobody already in it close behind, alongside,
+   * or within the stretch it needs to swing out (and room for the swing before the stop line)?
+   */
+  _zoneRoom(v, zone, lane) {
+    const out = this._swingL(v);
+    if (v.localS + v.hl + out > lane.length - 1.5) return false;
+    for (const o of zone.users) {
+      const p = this._along(o, lane);
+      if (p !== null && p > v.localS - v.hl - 10 && p < v.localS + v.hl + o.hl + out + 2) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Someone runs up the oncoming inner lane: drivers heading into it from the junction keep right
+   * (the same movement into the next lane, as for the cones) until it is clear again.
+   */
+  _closeOpp(cf) {
+    const opp = cf.opp;
+    if (cf.zone || opp.closed) return;
+    if (!opp.startInt.exitLanes[opp.startArm].some((l) => l !== opp && l.type === 'general')) return;
+    opp.closed = true;
+    opp.cfClosed = true;
+    this._reroute(opp);
   }
 
   /** Pick the vehicle to get in front of (a real gap in the queue), check the oncoming lane, swing out. */
@@ -207,6 +254,7 @@ export class CounterflowManager {
     const sa = Math.min(this.oppS(lane, opp, target + 3), this.oppS(lane, opp, v.localS - v.hl - 1));
     this._start(v, lane, opp, { target, sa, zone, legal, emergency, limit: lane.length - 0.3 });
     v.cf.front = true;
+    this._closeOpp(v.cf);
   }
 
   _start(v, lane, opp, { target, follower = null, legal = false, zone = null, sa, emergency = false, limit = target }) {
@@ -231,14 +279,21 @@ export class CounterflowManager {
 
   /** Sirens held up behind slow traffic: they ignore the centre line and go up the oncoming lane. */
   _maybeEmergency(v) {
-    if (!this.cfg.emergency || v.emergencyDone || v.lc) return;
+    if (v.emergencyDone || v.lc) return;
     const lane = v.segment;
     const opp = this.oppOf(lane);
     if (!opp) return;
+    // Cones up on this road: the siren takes the coned lane (even where it would not counterflow).
+    const zone = this.openZoneOn(lane);
+    if (!this.cfg.emergency && !zone) return;
     const lead = this.sim.findLeader(v, 40);
     const held = v.v < 3 && lead && lead.vehicle.v < 4 && lead.gap < 20;
     v.cfSlowT = held ? (v.cfSlowT || 0) + CHECK_EVERY / 60 : 0;
     if (v.cfSlowT < 1.5 || !this._canPullOut(v)) return;
+    if (zone) {
+      if (v.localS - v.hl >= zone.s0 + 1 && this._zoneRoom(v, zone, lane)) this._startFront(v, lane, opp, { zone, legal: true, emergency: true, target: lane.length - 0.3 });
+      return;
+    }
     const target = this._reach(v, lane, opp, 3);
     if (target !== null) this._startFront(v, lane, opp, { target, emergency: true });
   }
@@ -438,6 +493,9 @@ export class CounterflowManager {
       for (const o of cf.opp.vehicles) o.pullTo = 0.9;
       return;
     }
+    // Running up to the line, but the light is no longer (or not yet) its own green before it got
+    // in: back into the queue rather than waiting out there.
+    if (cf.front && !cf.legal && !cf.forced && cf.phase === 'run' && !v.reservations.size && this._ownSignal(v) !== 'green') this.forceReturn(v);
     if (cf.merge) {
       // Cones lifted: wait beside the queue (no running ahead of it) until there is a gap to zip into.
       if (cf.phase === 'run') {
@@ -465,14 +523,16 @@ export class CounterflowManager {
       if (cf.phase === 'run' && (passed || cf.forced)) this._cutIn(v);
     } else if (cf.phase === 'run' && cf.forced) this._cutIn(v);
     // Told to get back in but there is no room beside: rather than parking out there (and blocking
-    // the oncoming lane), carry on to the stop line and through the junction.
+    // the oncoming lane), carry on to the stop line and through the junction, on its own green.
+    // (On a red it waits out there for a gap; traffic heading into that lane keeps right.)
     if (cf.forced && cf.phase === 'run') {
       cf.noRoomT = (cf.noRoomT || 0) + dt;
-      if (cf.noRoomT > 5) {
+      if (cf.noRoomT > 5 && (cf.legal || this._ownSignal(v) === 'green')) {
         cf.forced = false;
         cf.front = true;
         cf.noStuck = true;
         cf.noRoomT = 0;
+        this._closeOpp(cf);
       }
     }
     if (cf.phase === 'in' && cf.sweep) {
@@ -498,8 +558,10 @@ export class CounterflowManager {
           cf.stuckIn = 0;
           cf.phase = 'out';
           cf.forced = false;
-          cf.front = !cf.merge;
+          // (a pasaway only heads for the line on its own green; otherwise it looks for the next gap)
+          cf.front = !cf.merge && (cf.legal || cf.emergency || this._ownSignal(v) === 'green');
           cf.noStuck = true;
+          if (cf.front) this._closeOpp(cf);
         }
       }
     }
@@ -553,6 +615,12 @@ export class CounterflowManager {
       if (k >= 0) sim.blockages.splice(k, 1);
     }
     if (cf.zone) cf.zone.users.delete(v);
+    // Nobody else running up that lane: traffic may turn into it again (unless the cones hold it).
+    const opp = cf.opp;
+    if (opp?.cfClosed && !this.active.some((o) => o !== v && o.cf && o.cf.opp === opp && o.cf.front && !o.cf.zone)) {
+      opp.cfClosed = false;
+      if (!this.zoneAt(opp)) opp.closed = false;
+    }
     if (cf.merge) v.zipAt = sim.time;
     v.cf = null;
     v.cfOff = 0;
@@ -686,6 +754,11 @@ export class CounterflowManager {
     return null;
   }
 
+  /** The open zone beside `lane` (queued drivers on it may use the cones), or null. */
+  openZoneOn(lane) {
+    return this.zones.find((z) => z.lane === lane && z.state === 'open') || null;
+  }
+
   /** The zone on this road (either inner lane of it), if any. */
   zoneAt(lane) {
     return this.zones.find((z) => z.state !== 'gone' && (z.lane === lane || z.opp === lane)) || null;
@@ -701,7 +774,8 @@ export class CounterflowManager {
     zone.placeT = 0;
     for (const v of [...zone.users]) {
       const cf = v.cf;
-      if (!cf || v.segment !== cf.lane || this.atLine(v) || v.localS + v.hl > cf.lane.length - MERGE_CLEAR) continue;
+      // (a siren in the cones carries on through)
+      if (!cf || cf.emergency || v.segment !== cf.lane || this.atLine(v) || v.localS + v.hl > cf.lane.length - MERGE_CLEAR) continue;
       if (cf.phase === 'signal') {
         this._finish(v); // had not pulled out yet
         continue;

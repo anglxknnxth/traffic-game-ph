@@ -544,6 +544,41 @@ describe('Counterflow and enforcers', () => {
     expect(cf).toBeGreaterThan(0);
   });
 
+  it('a pasaway never waits at the line in the oncoming lane on a red, and traffic keeps right round one', () => {
+    // (two lanes each way: the oncoming side has a lane to keep right into)
+    const sim = new TrafficSimulator(cfLevel({ map: undefined, emergency: null, demand: { N: 18, S: 8, E: 8, W: 8 } }), { seed: 2 });
+    let waitingOnRed = 0;
+    let closedWhileOut = 0;
+    run(sim, 180, (s, i) => {
+      if (i % (25 * 60) === 0) s.requestPhase('A', ['N', 'E', 'W'][(i / (25 * 60)) % 3]);
+      for (const v of s.counterflow.active) {
+        const cf = v.cf;
+        if (cf.legal || cf.emergency || v.segment !== cf.lane) continue;
+        if (s.counterflow.atLine(v) && !v.reservations.size && s.counterflow._ownSignal(v) !== 'green') waitingOnRed++;
+        if (cf.front && !cf.forced && cf.phase === 'run' && cf.opp.closed) closedWhileOut++;
+      }
+    });
+    expect(sim.stats.counterflows || 0).toBeGreaterThan(0);
+    expect(waitingOnRed).toBe(0);
+    expect(closedWhileOut).toBeGreaterThan(0);
+    // once nobody is out there, the oncoming lanes are open again
+    if (!sim.counterflow.active.some((v) => v.cf.front)) for (const l of sim.network.lanes) expect(!!l.closed).toBe(sim.counterflow.zones.some((z) => z.opp === l));
+  });
+
+  it('an ambulance stuck in a queue takes the player\'s contraflow cones (no counterflow otherwise)', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 22, S: 4, E: 4, W: 4 }, mix: { car: 0.8, motorcycle: 0.2 }, turns: { left: 0, right: 0.15 }, initialGroups: { A: 'E' }, enforcer: { count: 2 } }), { seed: 2 });
+    const lane = sim.network.byId.get('A').approachLanes.N[0];
+    let inCones = 0;
+    run(sim, 90, (s, i) => {
+      if (i === 10 * 60) expect(typeof s.counterflow.openZone(lane)).toBe('object');
+      if (i === 40 * 60) s.spawner.createArrival('A:N', true);
+      for (const v of s.counterflow.active) if (v.cf.emergency && v.cf.zone) inCones++;
+    });
+    expect(inCones).toBeGreaterThan(0);
+    // through on its red (North never gets a green here), past the queue it was stuck in
+    expect(sim.emergencySummary().cleared).toBeGreaterThan(0);
+  });
+
   it('an enforcer stands in the middle of the junction', () => {
     const sim = new TrafficSimulator(makeLevel({ prewarm: 0, enforcer: { count: 1 } }), { seed: 1 });
     const A = sim.network.byId.get('A');

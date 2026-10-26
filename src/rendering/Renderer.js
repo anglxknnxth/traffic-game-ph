@@ -43,9 +43,13 @@ export class Renderer {
   _cameraMoving() {
     const cam = this.camera;
     const now = performance.now();
-    const camKey = `${cam.scale}|${cam.centerX}|${cam.centerY}|${cam.screenCX}|${cam.screenCY}`;
-    if (camKey !== this._camKey) {
-      this._camKey = camKey;
+    const k = this._camKey || (this._camKey = [NaN, NaN, NaN, NaN, NaN]);
+    if (k[0] !== cam.scale || k[1] !== cam.centerX || k[2] !== cam.centerY || k[3] !== cam.screenCX || k[4] !== cam.screenCY) {
+      k[0] = cam.scale;
+      k[1] = cam.centerX;
+      k[2] = cam.centerY;
+      k[3] = cam.screenCX;
+      k[4] = cam.screenCY;
       this._movedAt = now;
     }
     return cam.animating || now - (this._movedAt || 0) < SETTLE_MS;
@@ -121,7 +125,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, emergencyInfo = null, interactive = false, overlay = null, tool = null } = {}) {
+  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, frameMs = 1000 / 60, emergencyInfo = null, interactive = false, overlay = null, tool = null } = {}) {
     const ctx = this.ctx;
     const cam = this.camera;
     this.setNetwork(sim.network);
@@ -129,7 +133,7 @@ export class Renderer {
     ctx.fillStyle = '#4b5a3a';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     // The static road layer, from tiles cached at the camera's zoom (see StaticTiles).
-    this.tiles.update(cam, this.road, this._cameraMoving());
+    this.tiles.update(cam, this.road, this._cameraMoving(), frameMs);
     this.tiles.draw(ctx, cam, 's');
     this.weather.drawWet(ctx, this.canvas, sim.env);
 

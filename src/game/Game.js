@@ -49,6 +49,7 @@ export class Game {
         }
       : (dt) => this.update(dt);
     this.loop = new GameLoop(step, (dt, alpha) => this.render(dt, alpha));
+    this.loop.fpsCap = this.save.settings.fpsCap || 0;
     this._em = [];
     this.session = null;
     this.demo = null;
@@ -231,6 +232,13 @@ export class Game {
     this.save.settings.speed = n;
     writeSave(this.save);
     this.setSpeed(n);
+  }
+
+  /** Frame-rate cap: 0 (every display frame), 72 or 60. */
+  setFpsCap(n) {
+    this.save.settings.fpsCap = n;
+    writeSave(this.save);
+    this.loop.fpsCap = n;
   }
 
   setVolume(v) {
@@ -620,12 +628,13 @@ export class Game {
       hoveredHead: this.hoveredHead,
       alpha,
       dt: dtReal,
+      frameMs: this.loop.frameMs,
       interactive: playing,
       overlay: this.state.overlay,
       tool: this.state.tool,
       emergencyInfo: playing && !this.state.watch ? (v) => this.emergencyInfo(v) : null,
     });
-    this.perf?.frame(dtReal, performance.now() - drawStart, this.renderer.tiles.renders);
+    this.perf?.frame(dtReal, performance.now() - drawStart, this.renderer.tiles, this.loop);
     const events = sim.drainEvents();
     this.audio.updateMusic(this.musicMood());
     if (this.session && !this.session.ended) {

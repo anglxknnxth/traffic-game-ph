@@ -96,6 +96,26 @@ describe('Emergency vehicles ignore red lights', () => {
     expect(sim.emergencySummary().cleared).toBe(1);
   });
 
+  it('an ambulance stuck behind a red queue does not hold up the green road crossing its path', () => {
+    const sim = new TrafficSimulator(
+      level({ demand: { N: 18, S: 0, E: 10, W: 0 }, mix: { car: 1 }, turns: { left: 0, right: 0 }, personalities: { patient: 1 } }),
+      { seed: 3 },
+    );
+    let heldClaims = 0;
+    let eastIn = 0;
+    run(sim, 50, (s) => {
+      if (Math.abs(s.time - 20) < 1e-6 || (s.time > 20 && s.time - 1 / 60 < 20)) s.spawner.createArrival('A:N', true); // behind the red North queue
+      for (const c of s.emergencyClaims) {
+        if (c.pass || c.v.v >= 0.5 || c.v.cf) continue; // (claims are made before the step: allow for it still braking)
+        if (!s.isLaneHead(c.v, c.v.nextConnEntry())) heldClaims++;
+      }
+      for (const v of s.vehicles) if (v.segment.kind === 'connector' && v.segment.arm === 'E' && !v._seenIn) ((v._seenIn = true), eastIn++);
+    });
+    expect(sim.vehicles.some((v) => v.emergency)).toBe(true);
+    expect(heldClaims).toBe(0);
+    expect(eastIn).toBeGreaterThan(3);
+  });
+
   it('traffic whose path never meets the emergency vehicle keeps moving', () => {
     const sim = new TrafficSimulator(level({ emergency: { times: [3, 25, 47, 69, 91] } }), { seed: 9 });
     let unrelatedEntries = 0;

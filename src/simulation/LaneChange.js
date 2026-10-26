@@ -106,7 +106,9 @@ export class LaneChanger {
     }
     // Sirens: an emergency vehicle stuck behind slow traffic looks for a clearer lane.
     // (On the inner lane of a road with painted lines it takes the oncoming lane instead.)
-    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40 && !(this.sim.counterflow.cfg.emergency && this.sim.counterflow.oppOf(lane))) return true;
+    // (So does one beside a coned contraflow lane: it takes the cones.)
+    const cfm = this.sim.counterflow;
+    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40 && !((cfm.cfg.emergency || cfm.openZoneOn(lane)) && cfm.oppOf(lane))) return true;
     // ... and drivers with sirens close behind them move over to let it through.
     if (!v.emergency && this._sirenBehind(v, lane)) return true;
     // A lane that ends: start merging well before the end, as drivers do.
@@ -219,7 +221,9 @@ export class LaneChanger {
         if (seg.isCurb && !B.isCurb) keepRight = 1.0;
         else if (B.isCurb && B.connectors.right) keepRight = -1.0;
       }
-      const gain = accNew - accCur - (P.politeness ?? 0.4) * followerLoss + (forced ? 2 : 0) + keepRight;
+      // Sirens head for the lane beside the cones, if the player has coned one off.
+      const cones = v.emergency && this.sim.counterflow.openZoneOn(B) ? 1.5 : 0;
+      const gain = accNew - accCur - (P.politeness ?? 0.4) * followerLoss + (forced ? 2 : 0) + keepRight + cones;
       if (gain > threshold && (!best || gain > best.gain)) best = { lane: B, gain, L, forced };
     }
     return best;

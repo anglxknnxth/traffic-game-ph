@@ -17,6 +17,16 @@ export function settingsMarkup(save, confirmReset = false) {
       <div class="field"><span>Default speed</span>
         <div class="seg">${[1, 2, 3].map((n) => `<button data-set="speed" data-value="${n}" class="${s.speed === n ? 'active' : ''}">${n}x</button>`).join('')}</div>
       </div>
+      <div class="field"><span>Frame rate</span>
+        <div class="seg">${[
+          [0, 'Max'],
+          [72, '72'],
+          [60, '60'],
+        ]
+          .map(([n, l]) => `<button data-set="fpsCap" data-value="${n}" class="${(s.fpsCap || 0) === n ? 'active' : ''}">${l}</button>`)
+          .join('')}</div>
+      </div>
+      <p class="muted small">144 Hz screen hitching? Try 72: every second frame, perfectly even.</p>
       <label class="field check"><input type="checkbox" ${s.showMetrics ? 'checked' : ''} data-set="showMetrics" /><span>Show traffic metrics panel</span></label>
       <label class="field check"><input type="checkbox" ${s.rain !== false ? 'checked' : ''} data-set="rain" /><span>🌧️ Ulan (rain showers)</span></label>
       <label class="field check"><input type="checkbox" ${s.people !== false ? 'checked' : ''} data-set="people" /><span>🚶 Mga tao (pedestrians)</span></label>
@@ -55,6 +65,9 @@ export function bindSettings(root, game, rerender) {
       el.addEventListener('click', () => {
         if (key === 'speed') {
           game.setDefaultSpeed(Number(el.dataset.value));
+          rerender(false);
+        } else if (key === 'fpsCap') {
+          game.setFpsCap(Number(el.dataset.value));
           rerender(false);
         } else if (key === 'reset') rerender(true);
         else if (key === 'reset-cancel') rerender(false);

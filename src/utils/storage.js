@@ -28,6 +28,7 @@ export const DEFAULT_SAVE = Object.freeze({
     rain: true, // rain showers in every mode
     people: true, // pedestrians in every mode
     chillMaxTraffic: 0, // cap on the Chill Endless demand ramp (1–3x); 0 = no limit
+    fpsCap: 0, // frame-rate cap: 0 = every display frame, or 72 / 60
   },
 });
 
@@ -94,6 +95,7 @@ export function validateSave(raw) {
     if (typeof s.musicOn === 'boolean') d.settings.musicOn = s.musicOn;
     if (typeof s.muted === 'boolean') d.settings.muted = s.muted;
     if ([1, 2, 3].includes(s.speed)) d.settings.speed = s.speed;
+    if ([0, 60, 72].includes(s.fpsCap)) d.settings.fpsCap = s.fpsCap;
     if (typeof s.debug === 'boolean') d.settings.debug = s.debug;
     if (typeof s.showMetrics === 'boolean') d.settings.showMetrics = s.showMetrics;
     if (typeof s.rain === 'boolean') d.settings.rain = s.rain;

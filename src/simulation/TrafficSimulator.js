@@ -658,9 +658,13 @@ export class TrafficSimulator {
   /** True when v is queued in front of an emergency vehicle on its lane into I (it clears the way). */
   isEscort(v, I) {
     // Drivers ahead of a siren do not run the red: they keep their place or move over (LaneChange).
-    if (v.emergency || !this.level.escortsRunRed) return false;
+    // Except in the player's contraflow cones: there the one in front of a siren goes on through.
+    if (v.emergency) return false;
+    const cones = v.cf?.zone;
+    if (!this.level.escortsRunRed && !cones) return false;
     for (const c of this.emergencyClaims) {
-      if (c.I === I && c.lane && c.lane === v.segment && v.localS > c.v.localS) return true;
+      if (c.I !== I || !c.lane || c.lane !== v.segment || v.localS <= c.v.localS) continue;
+      if (this.level.escortsRunRed || c.v.cf?.zone === cones) return true;
     }
     return false;
   }
@@ -816,6 +820,8 @@ export class TrafficSimulator {
       if (dist > reach) continue;
       // Stuck far back in a queue that is not moving yet: cross traffic need not stop for it.
       if (dist > 35 && v.v < 1 && !this.enforcement.near(I)) continue;
+      // Stopped behind a queue at its red (nobody ahead will run it): nothing to give way to yet.
+      if (v.v < 1 && !v.cf && !this.level.escortsRunRed && !this.isLaneHead(v, ce)) continue;
       const lane = v.segment.kind === 'lane' && v.segment.endInt === I ? v.segment : null;
       claims.push({ I, v, lane, dist, conn: ce.seg });
     }

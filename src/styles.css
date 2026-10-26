@@ -85,7 +85,7 @@ button {
   flex-direction: column;
   justify-content: center;
   min-height: 46px;
-  backdrop-filter: blur(6px);
+  /* (no backdrop blur: it would be redone every frame over the moving map) */
 }
 
 .hud-level {
@@ -2352,4 +2352,115 @@ summary {
   #hud .live-tag { top: calc(56px + var(--safe-top)); right: 10px; font-size: 11px; }
   #hud .live-ts { top: calc(74px + var(--safe-top)); right: 10px; font-size: 11px; }
   #hud .hud-level::before { display: none; }
+}
+
+/* ================================================================== Control rail
+   Every playback / view / tool button in one column down the left edge. The signal panels keep
+   the bottom-left; the side column (metrics, notes) sits right of the rail. On phones and short
+   landscape windows the rail folds away behind one toggle and opens over the map. */
+:root {
+  --rail-w: 52px; /* left edge to the right of the rail */
+}
+#hud .hud-rail {
+  position: absolute;
+  left: 8px;
+  top: calc(64px + var(--safe-top));
+  bottom: calc(30px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+#hud .hud-rail > * {
+  pointer-events: auto;
+}
+#hud .hud-rail .hud-controls {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  max-width: none;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  gap: 4px;
+  padding: 4px;
+}
+#hud .hud-rail .hud-controls::-webkit-scrollbar {
+  display: none;
+}
+#hud .hud-rail .icon-btn {
+  flex: none;
+}
+#hud .hud-rail .seg {
+  flex: none;
+  flex-direction: column;
+}
+#hud .hud-rail .seg button {
+  width: 36px;
+  height: 26px;
+  padding: 0;
+}
+/* Volume: a short vertical slider under the mute button */
+#hud .hud-rail .vol {
+  flex: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 22px;
+  height: 72px;
+  margin: 0;
+}
+#hud .rail-toggle {
+  display: none;
+}
+/* Everything else on the left moves over to make room for the rail */
+#hud .hud-side {
+  left: calc(var(--rail-w) + 8px);
+}
+#hud .hud-bottom {
+  left: calc(var(--rail-w) + 8px);
+}
+#hud .hud-live .cb.tl,
+#hud .hud-live .cb.bl {
+  left: calc(var(--rail-w) + 196px);
+}
+#hud.watch .hud-live .cb.tl,
+#hud.watch .hud-live .cb.bl {
+  left: calc(var(--rail-w) + 10px);
+}
+
+@media (max-width: 720px), (max-height: 520px) {
+  #hud .hud-rail {
+    top: calc(52px + var(--safe-top));
+    bottom: auto;
+    max-height: calc(100% - 52px - 150px - var(--safe-top) - var(--safe-bottom));
+  }
+  #hud .rail-toggle {
+    display: grid;
+    flex: none;
+    width: 40px;
+    height: 40px;
+  }
+  #hud .hud-rail .hud-controls {
+    display: none;
+  }
+  #hud.rail-open .hud-rail .hud-controls {
+    display: flex;
+    min-height: 0;
+  }
+  /* The rail opens over the map: the panels and the side column keep their places. */
+  #hud .hud-bottom {
+    left: 8px;
+  }
+  #hud .hud-side {
+    left: 56px;
+  }
+}
+@media (max-height: 520px) {
+  #hud .hud-rail {
+    top: calc(46px + var(--safe-top));
+    max-height: calc(100% - 46px - 70px - var(--safe-top) - var(--safe-bottom));
+  }
 }

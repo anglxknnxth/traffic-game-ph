@@ -17,7 +17,14 @@ export const ICONS = {
   zoomIn: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.8" width="14" height="2.4" rx="1"/><rect x="10.8" y="5" width="2.4" height="14" rx="1"/></svg>',
   zoomOut: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.8" width="14" height="2.4" rx="1"/></svg>',
   stats: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="12" width="3.5" height="8" rx="1"/><rect x="10.25" y="7" width="3.5" height="13" rx="1"/><rect x="16.5" y="4" width="3.5" height="16" rx="1"/></svg>',
+  tools: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="2.5" y="7" width="5" height="3.4" rx="1"/><rect x="9.5" y="13.5" width="5" height="3.4" rx="1"/><rect x="16.5" y="9" width="5" height="3.4" rx="1"/></svg>',
 };
+
+// Phones and short landscape windows: the control rail folds away behind its toggle.
+const RAIL_FOLDS = '(max-width: 720px), (max-height: 520px)';
+const railFolds = () => typeof matchMedia !== 'undefined' && matchMedia(RAIL_FOLDS).matches;
+// Picking one of these on a phone closes the rail again (a tool then waits for a tap on the map).
+const RAIL_CLOSES = new Set(['restart', 'metrics', 'monitor', 'heat', 'enforcer', 'contraflow', 'watch', 'autoall']);
 
 /** el[prop] = value, skipping the write (and the style / layout work it triggers) when unchanged. */
 function set(el, prop, value) {
@@ -78,25 +85,28 @@ export class HUD {
       <div class="hud-emergency" hidden></div>
       <div class="hud-bottom">
         <div class="signal-panels"></div>
+      </div>
+      <nav class="hud-rail" aria-label="Game controls">
+        <button class="icon-btn rail-toggle" data-act="rail" title="Show / hide the controls" aria-expanded="false">${ICONS.tools}</button>
         <div class="hud-controls">
           <button class="icon-btn" data-act="restart" title="Restart (R)">${ICONS.restart}</button>
           <div class="seg" role="group" aria-label="Simulation speed">
             <button data-speed="1">1x</button><button data-speed="2">2x</button><button data-speed="3">3x</button><button data-speed="4">4x</button>
           </div>
-          <button class="icon-btn" data-act="mute" title="Mute (M)">${ICONS.sound}</button>
-          <input class="vol" type="range" min="0" max="100" step="1" data-act="volume" aria-label="Sound effects volume" />
-          <button class="icon-btn music-btn" data-act="music" title="Background music on/off">♫</button>
-          <button class="icon-btn" data-act="zoomout" title="Zoom out (-)">${ICONS.zoomOut}</button>
           <button class="icon-btn" data-act="zoomin" title="Zoom in (+)">${ICONS.zoomIn}</button>
+          <button class="icon-btn" data-act="zoomout" title="Zoom out (-)">${ICONS.zoomOut}</button>
           <button class="icon-btn" data-act="metrics" title="Toggle metrics">${ICONS.stats}</button>
           <button class="icon-btn mon-btn" data-act="monitor" title="Monitor: queues, throughput, green timeline (T)">📡</button>
           <button class="icon-btn heat-btn" data-act="heat" title="Speed heatmap and queue counts on the map (O)">🌡️</button>
           <button class="icon-btn tool-btn" data-act="enforcer" title="Station a traffic enforcer at a junction" hidden>👮<small class="tool-n"></small></button>
           <button class="icon-btn tool-btn" data-act="contraflow" title="Cone off a contraflow lane (tap the cones to remove)" hidden>🚧</button>
-          <button class="icon-btn watch-btn" data-act="watch" title="Watch mode: hide the controls and let the camera find the action (H)">👁</button>
           <button class="icon-btn auto-all" data-act="autoall" title="AUTO LAHAT: every light runs itself (click a light to take it over)" hidden>AUTO</button>
+          <button class="icon-btn watch-btn" data-act="watch" title="Watch mode: hide the controls and let the camera find the action (H)">👁</button>
+          <button class="icon-btn" data-act="mute" title="Mute (M)">${ICONS.sound}</button>
+          <input class="vol" type="range" min="0" max="100" step="1" data-act="volume" aria-label="Sound effects volume" />
+          <button class="icon-btn music-btn" data-act="music" title="Background music on/off">♫</button>
         </div>
-      </div>
+      </nav>
       <div class="hud-toast"></div>
       <div class="hud-ticker"><span class="tk-tag">TRAFFIC UPDATE</span><div class="tk-wrap"><span class="tk-text"></span></div></div>
       <div class="hud-coach" hidden></div>
@@ -122,6 +132,8 @@ export class HUD {
       volume: root.querySelector('[data-act="volume"]'),
       music: root.querySelector('[data-act="music"]'),
       bottom: root.querySelector('.hud-bottom'),
+      rail: root.querySelector('.hud-rail'),
+      railBtn: root.querySelector('[data-act="rail"]'),
       top: root.querySelector('.hud-top'),
       side: root.querySelector('.hud-side'),
       cam: root.querySelector('.live-cam'),
@@ -319,7 +331,11 @@ export class HUD {
       return;
     }
     const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act && act !== 'rail' && RAIL_CLOSES.has(act) && railFolds()) this.setRail(false);
     switch (act) {
+      case 'rail':
+        this.setRail(!this.railOpen);
+        break;
       case 'pause':
         g.togglePause();
         break;
@@ -369,14 +385,24 @@ export class HUD {
     }
   }
 
+  /** Phones: fold the control rail away behind its toggle, or open it over the map. */
+  setRail(open) {
+    this.railOpen = open;
+    this.root.classList.toggle('rail-open', open);
+    this.el.railBtn.setAttribute('aria-expanded', String(open));
+    this.el.railBtn.classList.toggle('active', open);
+  }
+
   /** Space taken by HUD bars, so the camera keeps the intersection clear of them. */
   insets() {
     if (this.root.hidden) return { top: 0, bottom: 0, left: 0, right: 0 };
     const top = this.el.top.getBoundingClientRect().bottom + 6;
     const bottom = window.innerHeight - this.el.bottom.getBoundingClientRect().top + 6;
-    // Everything on the side sits in one column on the left.
+    // The control rail on the left edge (folded away over the map on phones), and everything on
+    // the side in one column next to it.
+    const rail = railFolds() ? 0 : Math.max(0, this.el.rail.getBoundingClientRect().right);
     const side = window.innerWidth > 980 && (this.game.state.showMetrics || this.game.state.showMonitor);
-    return { top, bottom, left: side ? 192 : 0, right: 0 };
+    return { top, bottom, left: rail + (side ? 184 : 0), right: 0 };
   }
 
   /** Big centred banner (a new district opened, ...). */

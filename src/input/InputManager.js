@@ -138,8 +138,14 @@ export class InputManager {
 
   onDown(e) {
     this.game.audio.unlock();
-    this.canvas.setPointerCapture?.(e.pointerId);
     const p = this._pos(e);
+    // Right-click a vehicle: despawn it (never pans, never counts as a tap)
+    if (e.button === 2) {
+      const v = this.hitBadged(p.x, p.y);
+      if (v) this.game.despawnVehicle(v);
+      return;
+    }
+    this.canvas.setPointerCapture?.(e.pointerId);
     this.pointers.set(e.pointerId, p);
     this.dragDist = 0;
     // Touch: press and hold a vehicle to read what its "!" means (no action).
@@ -205,6 +211,7 @@ export class InputManager {
   }
 
   onUp(e) {
+    if (e.button === 2) return;
     const p = this._pos(e);
     const wasTap = this.pointers.size === 1 && this.dragDist <= 6;
     this.pointers.delete(e.pointerId);

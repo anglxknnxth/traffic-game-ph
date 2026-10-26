@@ -466,6 +466,22 @@ export class TrafficSimulator {
     this.events.push({ type: 'processed', vehicle: v.type });
   }
 
+  /** The player right-clicked a vehicle away (a gridlock escape hatch): gone, but not counted or scored. */
+  removeVehicle(v) {
+    const k = this.vehicles.indexOf(v);
+    if (k < 0) return false;
+    this.vehicles.splice(k, 1);
+    const seg = v.segment;
+    this._removeFromSeg(seg, v);
+    seg.vehicles.forEach((o, i) => (o.segOrder = i));
+    if (v.lc) this.laneChanger.finish(v);
+    for (const id of [...v.reservations.keys()]) this.imgr.get(id).releaseAll(v);
+    for (const lane of this.network.lanes) lane.committed.delete(v);
+    this.passengers.onDespawn(v);
+    this.boss.onDespawn(v);
+    return true;
+  }
+
   addVehicle(v, lane) {
     // Per-simulation sequence number: decisions keyed on it stay deterministic even when several
     // simulations run side by side (global vehicle ids interleave).
@@ -641,7 +657,10 @@ export class TrafficSimulator {
 
   /**
    * Flashing yellow: a vehicle on a crossing path that came to a stop at its line before v did
-   * (and has not gone yet). Arrival order is a strict total order, so waits never form a cycle.
+   * (and has not gone yet). Arrival order is a strict total order among the vehicles that are able
+   * to go. One held for another reason (no exit space, people crossing, its box path blocked, e.g.
+   * a long vehicle's ring swing over the head waiting at the next approach) is passed over: waiting
+   * for it would stall the whole junction, or lock it when its blocker is waiting for it in turn.
    */
   stopOrderBlocker(v, conn) {
     const I = conn.intersection;
@@ -649,6 +668,7 @@ export class TrafficSimulator {
     for (const pc of this.imgr.get(I.id).crossConflicts(conn)) {
       const o = pc.fromLane.vehicles[pc.fromLane.vehicles.length - 1];
       if (!o || o === v || o.signStop !== I.id || o.reservations.has(I.id)) continue;
+      if (o.v <= 0.5 && o.stoppedTime > 1 && (o.blockReason === 'exit' || o.blockReason === 'box' || o.blockReason === 'pedestrian')) continue;
       const oce = o.nextConnEntry();
       if (!oce || oce.seg !== pc) continue;
       if (o.signStopAt < mine || (o.signStopAt === mine && o.seq < v.seq)) return o;

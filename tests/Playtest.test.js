@@ -159,3 +159,22 @@ describe('Spawner edge cases', () => {
     expect(arrivals).toBe(0);
   });
 });
+
+describe('Flashing yellow at a rotonda', () => {
+  it('the first to stop being held (a bus swinging over the next head) does not lock the ring', () => {
+    // Bayanihan seed 3: a bus held by the van at the next approach (its ring swing) stopped first;
+    // the van waited its turn behind it, and everyone else behind the van.
+    const sim = new TrafficSimulator(lm.get('pinoy', 'bayanihan'), { seed: 3 });
+    for (let i = 0; i < 40 / SIM_DT; i++) sim.step(SIM_DT);
+    sim.requestFlash('D');
+    const seen = new Set();
+    let last = sim.time;
+    let worst = 0;
+    for (let i = 0; i < 200 / SIM_DT; i++) {
+      sim.step(SIM_DT);
+      for (const v of sim.vehicles) if (v.reservations.has('D') && !seen.has(v.id)) (seen.add(v.id), (last = sim.time));
+      worst = Math.max(worst, sim.time - last);
+    }
+    expect(worst).toBeLessThan(30);
+  });
+});

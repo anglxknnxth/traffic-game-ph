@@ -429,6 +429,20 @@ export class Game {
     if (this.state.tool === 'contraflow') this.hud.toast('🚧 Tap an undivided road near a junction to cone off a contraflow lane (tap a coned road again to remove)', 'info');
   }
 
+  /** Right-click on a vehicle: take it off the map (for a car stuck in a gridlock). */
+  despawnVehicle(v) {
+    const sim = this.session?.sim;
+    if (!sim || this.session.ended || this.state.paused) return false;
+    if (!sim.removeVehicle(v)) return false;
+    if (this.director.follow === v) {
+      this.director.follow = null;
+      this.director.shot = null;
+    }
+    if (this.hud.tip?.v === v) this.hud.hideTip();
+    this.hud.toast('🗑️ Inalis ang sasakyan', 'info');
+    return true;
+  }
+
   /** The player tapped the map with a tool, or tapped something the enforcer deals with. */
   toolAt(x, y) {
     const sim = this.session?.sim;

@@ -40,6 +40,7 @@ const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's 
 const FREE_FLOW = 50; // vehicles/s: an exit without a downstream gate never holds anyone
 const RTOR_GAP = 3; // s: right turn on red needs this much time before green traffic arrives
 const EMERGENCY_CLAIM_DIST = 60; // an emergency vehicle this close to a stop line holds that junction
+const EMERGENCY_STALL = 4; // s: an emergency vehicle stopped this long (and not about to go) releases its hold
 
 export class TrafficSimulator {
   constructor(level, { seed = 1 } = {}) {
@@ -293,7 +294,6 @@ export class TrafficSimulator {
   _updateMergers() {
     const list = this.mergers;
     list.length = 0;
-    if (!this.network.laneDrops.length) return;
     for (const d of this.network.laneDrops) {
       let best = null;
       for (const v of d.lane.vehicles) {
@@ -303,6 +303,20 @@ export class TrafficSimulator {
         if (!best || v.localS > best.localS) best = v;
       }
       if (best) list.push({ v: best, lane: d.lane, targets: LaneChanger.neighbours(d.lane).filter((B) => B.allows(best.type)) });
+    }
+    // The same at roadworks, a breakdown or fire hoses: whoever waits at the front is let in.
+    for (const b of this.blockages) {
+      if (!b.active || b.sOf || ['ped', 'laneEnd', 'cf'].includes(b.kind)) continue;
+      for (const lane of b.laneObjs) {
+        let best = null;
+        for (const v of lane.vehicles) {
+          if (v.lc) continue;
+          const gap = b.s - (v.localS + v.hl);
+          if (gap < 0 || gap > 14 || v.v > 3) continue;
+          if (!best || v.localS > best.localS) best = v;
+        }
+        if (best) list.push({ v: best, lane, targets: LaneChanger.neighbours(lane).filter((B) => B.allows(best.type)) });
+      }
     }
   }
 
@@ -740,6 +754,14 @@ export class TrafficSimulator {
       v.blockerId = claim.v.id;
       return false;
     }
+    // Someone up the oncoming lane at the line, right where our way out runs (sirens included: two
+    // of them would each block the other): it goes first.
+    const cfo = this.counterflow.active.length && (v.v * v.v) / (2 * v.spec.decel) < distToStop - 0.5 ? this.counterflow.cfInPath(v, conn, connStart) : null;
+    if (cfo) {
+      v.blockReason = cfo.cf.emergency ? 'emergency' : 'yield';
+      v.blockerId = cfo.id;
+      return false;
+    }
     const mgr = this.imgr.get(I.id);
     // Box sharing: a cell still held by a vehicle that will be long gone by the time we get there
     // does not block entry (the shared cell is then guarded by sharedLimit).
@@ -857,6 +879,15 @@ export class TrafficSimulator {
       if (dist > 35 && v.v < 1 && !this.enforcement.near(I)) continue;
       // Stopped behind a queue at its red (nobody ahead will run it): nothing to give way to yet.
       if (v.v < 1 && !v.cf && !this.level.escortsRunRed && !this.isLaneHead(v, ce)) continue;
+      // Stalled (waiting on someone at their own red, a stream of people, a blocked swing-out): the
+      // rest of the junction keeps its green until it gets going again. Cross traffic still clearing
+      // the box ahead of it does not count as a stall: that is through in a moment.
+      if (v.v >= 0.3) v.claimStalled = false;
+      else if (v.stoppedTime > EMERGENCY_STALL && !v.claimStalled) {
+        const b = v.blockReason === 'box' && this.vehicles.find((o) => o.id === v.blockerId);
+        v.claimStalled = !b || b.v < 0.5;
+      }
+      if (v.claimStalled) continue;
       const lane = v.segment.kind === 'lane' && v.segment.endInt === I ? v.segment : null;
       claims.push({ I, v, lane, dist, conn: ce.seg });
     }
@@ -897,14 +928,29 @@ export class TrafficSimulator {
         const covered = b.laneObjs.some((lane) => lane.vehicles.some((o) => o.localS - o.hl < b.s + 1 && o.localS + o.hl > b.s - 1));
         if (!covered) {
           b.active = true;
+          this._blockEntry(b, true);
           this.notify(`BLK_ON_${b.id}`, `${NOTIFY_TEXT.EXIT_BLOCKED}: ${this.exitName(b.exit).toUpperCase()} · ${b.label || ''}`.trim(), 'warn');
         }
       }
       if (b.active && t >= b.end) {
         b.active = false;
         b.done = true;
+        this._blockEntry(b, false);
         this.notify(`BLK_OFF_${b.id}`, `${NOTIFY_TEXT.EXIT_CLEARED}: ${this.exitName(b.exit).toUpperCase()}`, 'good');
       }
+    }
+  }
+
+  /**
+   * A blockage just past the junction (roadworks, a breakdown, fire hoses): traffic turning or going
+   * straight into that lane takes the lane beside it instead (Network.connectorFor), from now on.
+   */
+  _blockEntry(b, on) {
+    if (on && !(b.s < 45)) return;
+    for (const lane of b.laneObjs) {
+      const was = !!lane.entryBlocked;
+      lane.entryBlocked = this.blockages.some((o) => o.active && o.s < 45 && o.laneObjs.includes(lane) && !['ped', 'laneEnd', 'cf'].includes(o.kind));
+      if (lane.entryBlocked && !was) this.counterflow._reroute(lane);
     }
   }
 

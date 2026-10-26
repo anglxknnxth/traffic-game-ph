@@ -28,7 +28,7 @@
 // beside the queue for a gap, never right behind another one that just came back in.
 
 import { laneSAt } from './PedestrianManager.js';
-import { makeObb } from '../utils/math.js';
+import { makeObb, obbOverlap } from '../utils/math.js';
 import { LaneChanger } from './LaneChange.js';
 import { Network } from './LaneManager.js';
 import { Route, clearFraction } from './Vehicle.js';
@@ -51,6 +51,8 @@ const MERGE_CLEAR = 15; // cones lifted: those this close to the stop line go on
 const ZIP_GAP = 8; // s: nobody zips in right behind someone who just came back from the cones
 const MERGE_PAST = 12; // m past the end of the cones before drivers may move into the borrowed lane
 const ZONE_GAP = 20; // m between two contraflows on one road (one toward each junction)
+const CLIP_STEP = 0.5; // m between the poses sampled along a path checked against a body out there
+const YIELD_BACK = 1.5; // s a siren held at the line waits before backing up for someone crossing in
 
 export const COUNTERFLOW_DEFAULTS = Object.freeze({ moto: 0, car: 0, minWait: 10, minQueue: 4, emergency: false });
 
@@ -95,8 +97,9 @@ export class CounterflowManager {
         if (front + stop > sa) return false;
       }
     }
-    // Vehicles turning into the oncoming lane from the junction right now
-    for (const c of opp.committed) if (c.reservations.size && sa < 12) return false;
+    // Vehicles turning into the oncoming lane from the junction right now (room for all of them to
+    // get off the junction and keep right round it, or they would stop head-on with it in the box)
+    for (const c of opp.committed) if (c.reservations.size && sa < 12 + c.spec.length) return false;
     return true;
   }
 
@@ -214,10 +217,10 @@ export class CounterflowManager {
    * Caught (HULI!) and nowhere to get back in: back up along the queue, through the collision
    * gate, until there is a gap beside it, then slide in. Only ever after a catch.
    */
-  _reverse(v, dt) {
+  _reverse(v, dt, cutIn = true) {
     const sim = this.sim;
     const cf = v.cf;
-    if (this._cutIn(v)) {
+    if (cutIn && this._cutIn(v)) {
       cf.reverse = false;
       cf.revV = 0;
       return;
@@ -611,10 +614,22 @@ export class CounterflowManager {
     }
     if (cf.phase === 'run') this._straighten(v, dt);
     // Heading for the stop line: grow the reserved stretch as the oncoming traffic stops.
-    if (cf.front && !cf.forced && cf.target < cf.lane.length - 0.3) this._extend(v, Math.min(cf.lane.length - 0.3, cf.target + 2));
+    if (cf.front && !cf.forced && !cf.yieldTo && cf.target < cf.lane.length - 0.3) this._extend(v, Math.min(cf.lane.length - 0.3, cf.target + 2));
     // Pull over: oncoming drivers near a siren in their lane move to the curb (drawing only).
     if (cf.emergency) {
       for (const o of cf.opp.vehicles) o.pullTo = 0.9;
+      // Someone already crossing the junction into this road would run into it where it stands (a
+      // wide truck coming off the ring into the next lane over): hold back from the line, backing
+      // up a little if it has to, until they are through. Neither could move otherwise.
+      // (Backs up only while still in their way, then waits there until they are out of the box.)
+      const hit = cf.phase === 'run' ? this._crossingInto(v) : null;
+      if (hit || !this._inBox(cf.yieldTo, cf.lane.endInt)) cf.yieldTo = hit;
+      cf.yieldT = hit && v.v < 0.05 ? (cf.yieldT || 0) + dt : 0;
+      if (cf.yieldT > YIELD_BACK) this._reverse(v, dt, false);
+      else if (cf.reverse) {
+        cf.reverse = false;
+        cf.revV = 0;
+      }
       return;
     }
     // Running up to the line, but the light is no longer (or not yet) its own green before it got
@@ -794,7 +809,7 @@ export class CounterflowManager {
     const cf = v.cf;
     if (!cf) return false;
     if (v.segment !== cf.lane) return true;
-    if (!(cf.front || cf.emergency) || cf.forced || cf.phase !== 'run') return false;
+    if (!(cf.front || cf.emergency) || cf.forced || cf.phase !== 'run' || cf.yieldTo) return false;
     if (cf.target < cf.lane.length - 0.5) return false;
     // Goes into the box only on its own: never on the tail of someone on the same path (its body is
     // still out to the side until it is through).
@@ -843,8 +858,68 @@ export class CounterflowManager {
     const cf = v.cf;
     if (!cf || v.segment !== cf.lane || this.atLine(v)) return null;
     if (cf.phase === 'signal') return v.front; // stays put while the indicator blinks
-    if (cf.emergency && cf.target >= cf.lane.length - 0.5) return null;
+    if (cf.emergency && !cf.yieldTo && cf.target >= cf.lane.length - 0.5) return null;
     return v.route.entries[v.segIdx].start + cf.target;
+  }
+
+  /**
+   * Does o's path between route coordinates s0 and s1 run into body's vehicle where it stands? (As
+   * strict as the look-ahead drivers brake for, so "clear" here means o really drives on.)
+   */
+  _pathHits(o, s0, s1, body) {
+    const tmp = this._probe || (this._probe = makeObb());
+    const buf = this.sim.collision.buffer;
+    for (let s = s0; s <= s1; s += CLIP_STEP) {
+      o.poseAt(s, tmp);
+      if (obbOverlap(tmp, body.obb, buf)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The vehicle out in the oncoming lane at the stop line of conn's junction that v's path through
+   * `conn`, into that same road, would run into: v lets it go first. (Into the next lane over is
+   * usually clear of it, but a wide truck coming off the junction sweeps across it.)
+   */
+  cfInPath(v, conn, connStart) {
+    const I = conn.intersection;
+    for (const o of this.active) {
+      const cf = o.cf;
+      if (o === v || !cf || cf.phase === 'signal' || cf.phase === 'in' || o.segment !== cf.lane || cf.lane.endInt !== I) continue;
+      if (!I.exitLanes[cf.lane.endArm].includes(conn.toLane)) continue;
+      if (this._pathHits(v, connStart, connStart + conn.length + v.spec.length, o)) return o;
+    }
+    return null;
+  }
+
+  /** Is o still crossing junction I (some of it short of the end of its way through)? */
+  _inBox(o, I) {
+    if (!o || o._remove) return false;
+    const e = o.route.entries.find((x) => x.seg.kind === 'connector' && x.seg.intersection === I);
+    return !!e && o.s - o.hl < e.end + 1;
+  }
+
+  /** Someone crossing (or holding the box to cross) into v's road whose way out runs into v. */
+  _crossingInto(v) {
+    const cf = v.cf;
+    const I = cf.lane.endInt;
+    const outs = I.exitLanes[cf.lane.endArm];
+    const id = I.id;
+    for (const c of I.connectors) {
+      // (Someone heading into the very lane it stands in can only come in once it has gone: it goes.)
+      if (!outs.includes(c.toLane) || c.toLane === cf.opp) continue;
+      for (const o of c.vehicles) {
+        if (o === v) continue;
+        const e = o.route.entries[o.segIdx];
+        if (this._pathHits(o, o.s + 0.3, e.end + o.spec.length, v)) return o;
+      }
+      for (const o of c.fromLane.vehicles) {
+        if (o === v || !o.reservations.has(id)) continue;
+        const ce = o.nextConnEntry();
+        if (ce?.seg === c && this._pathHits(o, o.s + 0.3, ce.end + o.spec.length, v)) return o;
+      }
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------ contraflow zones (player tool)

@@ -228,10 +228,26 @@ export class IntersectionManager {
       for (const other of kc.lane.vehicles) {
         if (other === vehicle) continue;
         if (other.localS + other.hl <= kc.limit) continue;
+        // Past the (lane-wide) limit, but a narrower body may still clear the swept cells.
+        if (!this._bodyOnCells(other, kc.cellIdx)) continue;
         return other;
       }
     }
     return null;
+  }
+
+  /** Does o's actual body overlap any of these grid cells? */
+  _bodyOnCells(o, cellIdx) {
+    const body = this._bodyObb || (this._bodyObb = makeObb());
+    const cell = this._cellObb || (this._cellObb = makeObb());
+    setObb(body, o.x, o.y, Math.cos(o.angle), Math.sin(o.angle), o.hl, o.hw);
+    const h = this.cellSize / 2;
+    for (const idx of cellIdx) {
+      const c = this.cellCenter(idx);
+      setObb(cell, c.x, c.y, 1, 0, h, h);
+      if (obbOverlap(cell, body)) return true;
+    }
+    return false;
   }
 
   /** Connectors whose traffic has right of way over `conn` and whose paths cross it (unsignalised nodes). */
@@ -322,7 +338,12 @@ export class IntersectionManager {
     }
     const res = { conn, fp, held, remaining: fp.cells.length, connStart, keepClearActive: fp.keepClear.length > 0, shared };
     vehicle.reservations.set(this.id, res);
-    for (const kc of fp.keepClear) kc.lane.keepClear.set(vehicle, kc.limit);
+    for (const kc of fp.keepClear) {
+      // Whoever already stands past the limit clear of our body (see findBlocker) stays where it is.
+      let limit = kc.limit;
+      for (const o of kc.lane.vehicles) if (o !== vehicle && o.localS + o.hl > limit) limit = o.localS + o.hl;
+      kc.lane.keepClear.set(vehicle, limit);
+    }
     this.reservationCount++;
     return res;
   }

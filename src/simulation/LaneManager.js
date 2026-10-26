@@ -482,8 +482,10 @@ export class Network {
           // An inner exit lane can be coned off for a contraflow: the same movement into the next
           // lane is built too (only used while that lane is closed).
           const outs = I.exitLanes[made.conn.exitArm].filter((l) => l.type === 'general');
-          if (toLane === outs[0] && outs[1] && m !== 'uturn') {
-            const alt = this._connect(I, X, k, lane, m, outs[1], 'a');
+          // (So can the curb lane, for roadworks: then into the lane beside it.)
+          const altTo = m === 'uturn' || outs.length < 2 ? null : toLane === outs[0] ? outs[1] : toLane === outs[outs.length - 1] ? outs[outs.length - 2] : null;
+          if (altTo) {
+            const alt = this._connect(I, X, k, lane, m, altTo, 'a');
             (lane.connectorsAlt = lane.connectorsAlt || {})[m] = alt.conn;
             if (alt.wide) (lane.connectorsAltWide = lane.connectorsAltWide || {})[m] = alt.wide;
           }
@@ -616,8 +618,10 @@ export class Network {
 
   /** Connector a vehicle of this size takes for `move` from `lane` (wide swing for buses and trucks). */
   static connectorFor(lane, move, spec) {
-    // A coned-off exit lane (contraflow): the same movement into the next lane instead.
-    if (lane.connectors[move]?.toLane.closed && lane.connectorsAlt?.[move]) {
+    // A coned-off exit lane (contraflow) or one closed just past the junction (roadworks, a
+    // breakdown): the same movement into the next lane instead.
+    const to = lane.connectors[move]?.toLane;
+    if (to && (to.closed || to.entryBlocked) && lane.connectorsAlt?.[move]) {
       if (spec && spec.length > 8 && lane.connectorsAltWide?.[move]) return lane.connectorsAltWide[move];
       return lane.connectorsAlt[move];
     }

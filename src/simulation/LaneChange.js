@@ -258,7 +258,7 @@ export class LaneChanger {
   execute(v, B, L) {
     const A = v.segment;
     // Whoever was letting this vehicle in has done their turn of the zipper.
-    if (A.dropAt !== undefined) for (const o of B.vehicles) if (o.yieldingTo === v.id) o.letIn = this.sim.time;
+    if (A.dropAt !== undefined || this.sim.mergers.some((m) => m.v === v)) for (const o of B.vehicles) if (o.yieldingTo === v.id) o.letIn = this.sim.time;
     const s = v.localS;
     // Lanes of one direction share their longitudinal coordinate, so the new route is shifted to keep
     // the vehicle's route coordinate (and everything keyed on it) continuous.

@@ -3,6 +3,7 @@ import { TrafficSimulator } from '../src/simulation/TrafficSimulator.js';
 import { CollisionAvoidance } from '../src/simulation/CollisionAvoidance.js';
 import { makeLevel } from '../src/data/levels.js';
 import { SIM_DT } from '../src/data/config.js';
+import { LevelManager } from '../src/game/LevelManager.js';
 
 const MIN_SEP = 0.44;
 
@@ -141,5 +142,29 @@ describe('Emergency vehicles ignore red lights', () => {
     const sim = new TrafficSimulator(level({ emergency: { times: [5, 35, 65] } }), { seed: 12 });
     run(sim, 90);
     expect(sim.metrics.gridlockTime).toBeLessThan(5);
+  });
+
+  it('a siren up the oncoming lane and a truck coming off the rotonda into that road never wedge each other', () => {
+    // Welcome Rotonda (2-lane undivided arms): a fire truck up the oncoming lane at the stop line, and
+    // a truck crossing the ring into the next lane over, whose swing runs into it where it stands.
+    const lm = new LevelManager();
+    const sim = lm.createSim({ ...lm.get('pinoy', 'welcome'), autoLights: true, emergency: { times: [20, 28, 36, 60, 68, 76, 100, 108, 116] } }, 8);
+    const I = sim.network.byId.get('A');
+    const since = new Map(); // crossing vehicle -> time first seen wedged against a siren out there
+    run(sim, 180, (s) => {
+      for (const v of s.counterflow.active) {
+        if (!v.cf.emergency || v.segment !== v.cf.lane || v.stoppedTime < 5) continue;
+        const outs = I.exitLanes[v.cf.lane.endArm];
+        for (const c of I.connectors) {
+          if (!outs.includes(c.toLane)) continue;
+          for (const o of c.vehicles) if (o.stoppedTime > 5 && !since.has(o)) since.set(o, s.time);
+        }
+      }
+      for (const [o, t] of since) {
+        if (o.segment.kind !== 'connector') since.delete(o);
+        else expect(s.time - t).toBeLessThan(40);
+      }
+    });
+    expect(sim.emergencySummary().cleared).toBeGreaterThan(3);
   });
 });

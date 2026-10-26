@@ -21,8 +21,9 @@ function runChecked(sim, seconds, { onStep, auditEvery = 1 } = {}) {
     for (const v of sim.vehicles) {
       const prev = lastS.get(v);
       if (prev !== undefined) {
-        // no reversing (except backing up out of the oncoming lane, see Counterflow), no teleporting
-        if (!v.cf?.reverse) expect(v.s).toBeGreaterThanOrEqual(prev - 1e-9);
+        // no reversing (except backing up out of the oncoming lane, see Counterflow, or to unpin a
+        // gate stalemate, see Unstick), no teleporting
+        if (!v.cf?.reverse && !v.backing) expect(v.s).toBeGreaterThanOrEqual(prev - 1e-9);
         expect(v.s - prev).toBeLessThanOrEqual(v.spec.maxSpeed * 1.2 * SIM_DT + 1e-6);
       }
       lastS.set(v, v.s);

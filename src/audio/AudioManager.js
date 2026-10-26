@@ -6,6 +6,35 @@
 
 import { MusicPlayer } from './MusicPlayer.js';
 
+// Vehicle type -> horn voice, where it differs from the spec's horn kind.
+const HORN_VOICE = {
+  suv: 'suv',
+  pickup: 'suv',
+  van: 'van',
+  motorcycle: 'moto',
+  dumptruck: 'truck',
+  tanker: 'truck',
+  kalesa: 'kalesa',
+  police: 'police',
+  firetruck: 'airhorn',
+};
+
+// Jeepney musical horns; each jeepney keeps its own.
+const JEEP_TUNES = [
+  [523, 659, 784],
+  [784, 659, 784, 988],
+  [659, 784, 880, 784],
+  [523, 523, 784, 659],
+  [880, 784, 659, 523],
+];
+
+/** A stable hash of a vehicle id (number or string). */
+function hornSeed(id) {
+  let h = typeof id === 'number' ? id | 0 : 0;
+  if (typeof id === 'string') for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.imul(h ^ 0x9e37, 2654435761) >>> 0;
+}
+
 export class AudioManager {
   constructor() {
     this.ctx = null;
@@ -16,9 +45,16 @@ export class AudioManager {
     this.musicVolume = 0.5;
     this.musicOn = true;
     this.muted = false;
-    this.maxVoices = 10;
+    // Horn limiter: a gridlock of drivers leaning on their horns comes out as a few distinct honks
+    // (at most 3 at once, ~2 a second, no voice twice in a row), quieter the more of them there are.
+    this.maxVoices = 3;
     this.active = 0;
-    this.lastPlay = 0;
+    this.nextHorn = 0;
+    this.hornTokens = 3;
+    this.hornTokensAt = 0;
+    this.hornPressure = 0;
+    this.hornPressureAt = 0;
+    this.lastVoice = new Map();
     this.siren = null;
     this.ambient = null;
     this.music = null;
@@ -82,7 +118,7 @@ export class AudioManager {
     return !!this.ctx && this.ctx.state === 'running' && !this.muted && this.volume > 0;
   }
 
-  _tone(t0, freqs, dur, type, pan, gain = 0.18, cutoff = 2600) {
+  _tone(t0, freqs, dur, type, pan, gain = 0.18, cutoff = 2600, glide = 1) {
     const ctx = this.ctx;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t0);
@@ -105,6 +141,10 @@ export class AudioManager {
       const osc = ctx.createOscillator();
       osc.type = type;
       osc.frequency.value = f;
+      if (glide !== 1) {
+        osc.frequency.setValueAtTime(f, t0);
+        osc.frequency.exponentialRampToValueAtTime(f * glide, t0 + dur);
+      }
       osc.detune.value = (Math.random() - 0.5) * 18;
       osc.connect(filter);
       osc.start(t0);
@@ -112,51 +152,121 @@ export class AudioManager {
     }
   }
 
-  /** Play a horn. kind: car | moto | tricycle | jeepney | ejeep | multicab | bus | truck. pan in [-1, 1]. */
-  horn(kind, pan = 0, double = false) {
+  /**
+   * Play a horn. kind: the vehicle spec's horn (car | moto | tricycle | jeepney | ejeep | multicab |
+   * bus | truck | bell); `type` (vehicle type) picks a more specific voice, `id` the vehicle's own
+   * variant and pitch, so the same jeepney always plays the same tune. `crowd`: how many horns went
+   * off this frame (only one is played; the rest make the mix duck). pan in [-1, 1].
+   */
+  horn(kind, pan = 0, double = false, type = null, id = 0, crowd = 1) {
     if (!this.ready) return;
     const now = this.ctx.currentTime;
-    if (now - this.lastPlay < 0.04 || this.active >= this.maxVoices) return;
-    this.lastPlay = now;
-    let dur = 0.3;
+    this.hornPressure = this.hornPressure * Math.exp(-(now - this.hornPressureAt) / 2) + crowd;
+    this.hornPressureAt = now;
+    this.hornTokens = Math.min(3, this.hornTokens + (now - this.hornTokensAt) * 2);
+    this.hornTokensAt = now;
+    if (now < this.nextHorn || this.active >= this.maxVoices || this.hornTokens < 1) return;
+    const voice = HORN_VOICE[type] || kind || 'car';
+    if (now - (this.lastVoice.get(voice) ?? -9) < 0.8) return;
+    this.hornTokens -= 1;
+    this.nextHorn = now + 0.35 + Math.random() * 0.15;
+    this.lastVoice.set(voice, now);
+
+    const seed = hornSeed(id);
+    const variant = seed >>> 4;
+    const pitch = 1 + ((seed % 9) - 4) / 100; // ±4% per vehicle
+    const duck = Math.max(0.5, 1 / Math.sqrt(1 + Math.max(0, this.hornPressure - 1) / 3));
     const t = now + Math.random() * 0.03;
-    switch (kind) {
+    const T = (dt, freqs, len, wave, gain, cutoff, glide = 1) => this._tone(t + dt, freqs.map((f) => f * pitch), len, wave, pan, gain * duck, cutoff, glide);
+    let dur = 0.3;
+    switch (voice) {
       case 'moto':
-        this._tone(t, [740, 790], 0.11, 'square', pan, 0.15, 3200);
-        this._tone(t + 0.16, [740, 790], 0.11, 'square', pan, 0.15, 3200);
-        dur = 0.3;
+        if (variant % 2) {
+          // one thin "piiip" that sags a little
+          T(0, [820, 870], 0.22, 'square', 0.13, 3200, 0.92);
+          dur = 0.25;
+        } else {
+          T(0, [740, 790], 0.11, 'square', 0.15, 3200);
+          T(0.16, [740, 790], 0.11, 'square', 0.15, 3200);
+        }
         break;
       case 'tricycle':
       case 'multicab':
-        this._tone(t, [580, 615], 0.13, 'sawtooth', pan, 0.15, 2400);
-        this._tone(t + 0.18, [580, 615], 0.13, 'sawtooth', pan, 0.15, 2400);
+        T(0, [580, 615], 0.13, 'sawtooth', 0.15, 2400);
+        T(0.18, [580, 615], 0.13, 'sawtooth', 0.15, 2400);
         dur = 0.34;
         break;
       case 'jeepney': {
-        const notes = Math.random() < 0.5 ? [523, 659, 784] : [784, 659, 784, 988];
-        notes.forEach((f, i) => this._tone(t + i * 0.13, [f, f * 1.005], 0.12, 'sawtooth', pan, 0.14, 2800));
+        const notes = JEEP_TUNES[variant % JEEP_TUNES.length];
+        notes.forEach((f, i) => T(i * 0.13, [f, f * 1.005], 0.12, 'sawtooth', 0.14, 2800));
         dur = notes.length * 0.13 + 0.05;
         break;
       }
       case 'ejeep':
-        this._tone(t, [466, 587], 0.16, 'square', pan, 0.14, 2600);
-        this._tone(t + 0.22, [466, 587], 0.2, 'square', pan, 0.14, 2600);
+        T(0, [466, 587], 0.16, 'square', 0.14, 2600);
+        T(0.22, [466, 587], 0.2, 'square', 0.14, 2600);
         dur = 0.45;
         break;
       case 'bell':
         // bicycle bell: two bright rings with a metallic overtone
-        for (const dt of [0, 0.12]) this._tone(t + dt, [2093, 2637, 3520], 0.1, 'triangle', pan, 0.08, 7000);
+        for (const dt of [0, 0.12]) T(dt, [2093, 2637, 3520], 0.1, 'triangle', 0.08, 7000);
         dur = 0.25;
         break;
+      case 'kalesa':
+        // kalembang: a lower brass bell, rung three times
+        for (const dt of [0, 0.16, 0.32]) T(dt, [880, 1320, 1975], 0.14, 'triangle', 0.07, 5000);
+        dur = 0.5;
+        break;
+      case 'police':
+        // a short "whoop" yelp
+        T(0, [600], 0.35, 'sawtooth', 0.1, 2400, 1.8);
+        dur = 0.38;
+        break;
+      case 'airhorn':
+        T(0, [131, 165, 196, 262], double ? 1 : 0.75, 'sawtooth', 0.17, 1600);
+        dur = double ? 1.05 : 0.8;
+        break;
       case 'bus':
-      case 'truck':
-        this._tone(t, [155, 196, 233], double ? 0.9 : 0.6, 'sawtooth', pan, 0.19, 1400);
+        // air horn that sags at the end ("PHOOOM")
+        T(0, [155, 196, 233], double ? 0.9 : 0.6, 'sawtooth', 0.19, 1400, 0.94);
         dur = double ? 0.95 : 0.65;
         break;
+      case 'truck':
+        if (double) {
+          for (const dt of [0, 0.36, 0.72]) T(dt, [117, 147, 175], 0.28, 'sawtooth', 0.19, 1100);
+          dur = 1.05;
+        } else {
+          T(0, [117, 147, 175], 0.65, 'sawtooth', 0.19, 1100);
+          dur = 0.7;
+        }
+        break;
+      case 'suv':
+        // deeper, thicker dual tone
+        T(0, [330, 415], double ? 0.14 : 0.3, 'sawtooth', 0.14, 1700);
+        if (double) T(0.22, [330, 415], 0.18, 'sawtooth', 0.14, 1700);
+        dur = double ? 0.44 : 0.32;
+        break;
+      case 'van':
+        T(0, [392, 494], double ? 0.14 : 0.34, 'square', 0.13, 2000);
+        if (double) T(0.22, [392, 494], 0.16, 'square', 0.13, 2000);
+        dur = double ? 0.42 : 0.36;
+        break;
       default:
-        this._tone(t, [415, 520], double ? 0.12 : 0.22, 'square', pan, 0.15, 2300);
-        if (double) this._tone(t + 0.2, [415, 520], 0.14, 'square', pan, 0.15, 2300);
-        dur = double ? 0.38 : 0.24;
+        switch (variant % 3) {
+          case 1: // lower, rounder beep
+            T(0, [349, 440], double ? 0.14 : 0.28, 'square', 0.14, 1800);
+            if (double) T(0.22, [349, 440], 0.16, 'square', 0.14, 1800);
+            dur = double ? 0.42 : 0.3;
+            break;
+          case 2: // short "tit-tit"
+            for (const dt of double ? [0, 0.12, 0.24] : [0, 0.12]) T(dt, [470, 590], 0.08, 'square', 0.14, 2600);
+            dur = double ? 0.34 : 0.22;
+            break;
+          default:
+            T(0, [415, 520], double ? 0.12 : 0.22, 'square', 0.15, 2300);
+            if (double) T(0.2, [415, 520], 0.14, 'square', 0.15, 2300);
+            dur = double ? 0.38 : 0.24;
+        }
     }
     this.active++;
     setTimeout(() => {

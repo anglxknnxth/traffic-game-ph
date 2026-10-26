@@ -719,10 +719,21 @@ export class Game {
     this.audio.updateMusic(this.musicMood());
     if (this.session && !this.session.ended) {
       const playing = !this.state.paused;
+      // Only one horn a frame is played: the one nearest the middle of the screen.
+      let horn = null;
+      let hornD = Infinity;
+      let horns = 0;
       for (const e of events) {
         if (e.type === 'horn' && playing) {
           const p = this.camera.worldToScreen(e.x, e.y);
-          if (p.x > -80 && p.x < this.camera.w + 80 && p.y > -80 && p.y < this.camera.h + 80) this.audio.horn(e.horn, (p.x / this.camera.w) * 2 - 1, e.double);
+          if (p.x > -80 && p.x < this.camera.w + 80 && p.y > -80 && p.y < this.camera.h + 80) {
+            horns++;
+            const d = Math.hypot(p.x - this.camera.w / 2, p.y - this.camera.h / 2);
+            if (d < hornD) {
+              hornD = d;
+              horn = { e, pan: (p.x / this.camera.w) * 2 - 1 };
+            }
+          }
         } else if (e.type === 'pasaway' && playing) {
           const p = this.camera.worldToScreen(e.x, e.y);
           if (p.x > -80 && p.x < this.camera.w + 80 && p.y > -80 && p.y < this.camera.h + 80) this.audio.whistle((p.x / this.camera.w) * 2 - 1);
@@ -736,6 +747,7 @@ export class Game {
           this.audio.radio?.();
         }
       }
+      if (horn) this.audio.horn(horn.e.horn, horn.pan, horn.e.double, horn.e.vehicleType, horn.e.vehicle, horns);
       // Sound automation 30 times a second is plenty (the values glide); every frame at 144 Hz
       // only floods the audio thread with events.
       this._audioT = (this._audioT || 0) + dtReal;

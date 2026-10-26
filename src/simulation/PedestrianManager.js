@@ -660,8 +660,14 @@ export class PedestrianManager {
     const ws = this.walkState(cr.c);
     const hurry = ws === 'walk' || ws === 'gap' ? 1 : 1.6;
     const next = cr.s + p.speed * hurry * dt;
-    // Hold the crosswalk just ahead; if a vehicle is crossing it, wait where we stand.
-    if (!cr.c.grid.pedAdvance(p, cr.line.conn, cr.line.fp, Math.max(0, next), cr.waitMid || 0)) {
+    // Hold the crosswalk just ahead; if a vehicle is crossing it, wait where we stand. (A vehicle up
+    // the oncoming lane holds no cells on the side it is out on: never step into one.)
+    let cfo = false;
+    if (next >= 0 && this.sim.counterflow?.active.length) {
+      cr.line.conn.path.pointAt(Math.min(next, cr.line.length), _pt);
+      cfo = this.sim.counterflow.bodyAt(_pt.x, _pt.y);
+    }
+    if (cfo || !cr.c.grid.pedAdvance(p, cr.line.conn, cr.line.fp, Math.max(0, next), cr.waitMid || 0)) {
       p.moving = false;
       cr.waitMid = (cr.waitMid || 0) + dt;
       this.stats.maxMidWait = Math.max(this.stats.maxMidWait || 0, cr.waitMid);

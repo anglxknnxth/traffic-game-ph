@@ -27,7 +27,7 @@
 // When the player lifts the cones, those still well short of the stop line zip back in: each waits
 // beside the queue for a gap, never right behind another one that just came back in.
 
-import { laneSAt } from './PedestrianManager.js';
+import { laneSAt, PED_RADIUS } from './PedestrianManager.js';
 import { makeObb, obbOverlap } from '../utils/math.js';
 import { LaneChanger } from './LaneChange.js';
 import { Network } from './LaneManager.js';
@@ -38,6 +38,10 @@ const MOTO = new Set(['motorcycle', 'tricycle']);
 const PRIVATE = new Set(['car', 'suv', 'pickup', 'van', 'jeepney', 'multicab']);
 const LAT_SPEED = 1.7; // m/s sideways
 const STUCK_LIMIT = 15; // s out there before it is made to come back
+const PASAWAY_STALL = 12; // s standing still out there (any reason but its own red) before it gives up
+const EMERGENCY_STALL = 20; // the same for a siren
+const CF_AGAIN = 30; // s after giving up before the same vehicle tries again
+const PED_MARGIN = 0.3; // m kept from people crossing in front of a body out in the oncoming lane
 const STOP_CLEAR = 18; // a pasaway gets back in at least this far before the stop line
 const CHECK_EVERY = 30; // steps between decisions per vehicle
 const TAPER = 6; // m of the taper where a contraflow lane begins
@@ -127,7 +131,7 @@ export class CounterflowManager {
   // ------------------------------------------------------------------ deciding
   _maybePasaway(v) {
     const sim = this.sim;
-    if (v.lc || v.reservations.size || v.loading?.state === 'stopped') return;
+    if (v.lc || v.reservations.size || v.loading?.state === 'stopped' || sim.time < (v.cfAgainAt || 0)) return;
     const lane = v.segment;
     const opp = this.oppOf(lane);
     if (!opp) return;
@@ -358,7 +362,7 @@ export class CounterflowManager {
 
   /** Sirens held up behind slow traffic: they ignore the centre line and go up the oncoming lane. */
   _maybeEmergency(v) {
-    if (v.emergencyDone || v.lc) return;
+    if (v.emergencyDone || v.lc || this.sim.time < (v.cfAgainAt || 0)) return;
     const lane = v.segment;
     const opp = this.oppOf(lane);
     if (!opp) return;
@@ -575,6 +579,15 @@ export class CounterflowManager {
       }
       return;
     }
+    // Parked out there for long (sirens included): something it is waiting for is waiting for it
+    // (a head-on at the line, a box that cannot clear while it stands in the way out). Give up:
+    // get back in, backing down the oncoming lane to a gap if it has to. Waiting at the line for
+    // its own green, and the player's coned lane, do not count.
+    if (!cf.legal && !cf.gaveUp && (cf.phase === 'out' || cf.phase === 'run')) {
+      const waiting = !cf.emergency && this.atLine(v) && this._ownSignal(v) !== 'green';
+      cf.stall = v.v < 0.05 && !waiting ? (cf.stall || 0) + dt : 0;
+      if (cf.stall > (cf.emergency ? EMERGENCY_STALL : PASAWAY_STALL)) this._giveUp(v);
+    }
     if (cf.phase === 'out' && cf.sweep) {
       if (v.s >= cf.sweep.s0 + cf.sweep.L - 0.02) {
         cf.sweep = null;
@@ -755,6 +768,25 @@ export class CounterflowManager {
    * Stuck too long, give way, or HULI!: stop advancing and swing back in beside the nearest vehicle
    * behind. `reverse`: caught, so it may back up to a gap if there is none (see _reverse).
    */
+  /**
+   * Stalled out there (see _step): stop counterflowing, and not again for a while. A siren backs
+   * down the oncoming lane to a gap if it must (nobody can HULI! it); a pasaway only gets back in
+   * where it can, and backs up once the player catches it.
+   */
+  _giveUp(v) {
+    const cf = v.cf;
+    const siren = cf.emergency;
+    cf.gaveUp = true;
+    cf.emergency = false; // a siren comes back like anyone else
+    cf.noStuck = false;
+    cf.yieldTo = null;
+    v.cfAgainAt = this.sim.time + CF_AGAIN;
+    // It may have been granted the box at the line: let go, it is not going in from out here.
+    const I = cf.lane.endInt;
+    if (I && v.reservations.has(I.id)) this.sim.cancelReservation(v, I);
+    this.forceReturn(v, { reverse: siren });
+  }
+
   forceReturn(v, { reverse = false } = {}) {
     const cf = v.cf;
     if (!cf || cf.emergency) return;
@@ -890,6 +922,70 @@ export class CounterflowManager {
       if (this._pathHits(v, connStart, connStart + conn.length + v.spec.length, o)) return o;
     }
     return null;
+  }
+
+  // ------------------------------------------------------------------ people on the crosswalks
+  // Out to the side, a counterflower's body runs over the half of the crosswalk its own path (and
+  // so its box reservation) does not cover: it has to look out for the people there itself.
+
+  /** Closest distance from any person on the road to v's body at route coordinate s (Infinity: nobody near). */
+  _pedGap(v, s, peds) {
+    const o = v.poseAt(s, this._pedProbe || (this._pedProbe = makeObb()));
+    let best = Infinity;
+    for (const p of peds) {
+      if (Math.abs(p.x - o.x) > o.hl + 2 || Math.abs(p.y - o.y) > o.hl + 2) continue;
+      const dx = p.x - o.x;
+      const dy = p.y - o.y;
+      const u = Math.abs(dx * o.c + dy * o.s) - o.hl;
+      const w = Math.abs(-dx * o.s + dy * o.c) - o.hw;
+      const d = Math.hypot(Math.max(u, 0), Math.max(w, 0)) - PED_RADIUS;
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  /** How far (≤ ds) v, out in the oncoming lane, may move on without running into someone crossing. */
+  pedClearAdvance(v, ds) {
+    if (Math.abs(v.layer || 0) >= 1) return ds;
+    const peds = this.sim.peds.onRoad();
+    if (!peds.length) return ds;
+    const now = this._pedGap(v, v.s, peds);
+    const ok = (d) => {
+      const g = this._pedGap(v, v.s + d, peds);
+      return g >= PED_MARGIN || g >= now; // never closer to someone than it already is
+    };
+    if (ok(ds)) return ds;
+    let lo = 0;
+    let hi = ds;
+    for (let k = 0; k < 6; k++) {
+      const m = (lo + hi) / 2;
+      if (ok(m)) lo = m;
+      else hi = m;
+    }
+    return lo;
+  }
+
+  /** Someone crossing where v's body (out to the side) would go between route coordinates s0 and s1. */
+  pedInPath(v, s0, s1) {
+    const peds = this.sim.peds.onRoad();
+    if (!peds.length) return false;
+    for (let s = s0; s <= s1; s += 1) if (this._pedGap(v, s, peds) < PED_MARGIN + 0.5) return true;
+    return false;
+  }
+
+  /** Is the point (x, y) inside (or right beside) the body of someone out in the oncoming lane? */
+  bodyAt(x, y, margin = PED_RADIUS + 0.3) {
+    for (const v of this.active) {
+      if (!v.cf || Math.abs(v.layer || 0) >= 1) continue;
+      const o = v.obb;
+      if (Math.abs(x - o.x) > o.hl + 2 || Math.abs(y - o.y) > o.hl + 2) continue;
+      const dx = x - o.x;
+      const dy = y - o.y;
+      const u = Math.abs(dx * o.c + dy * o.s) - o.hl;
+      const w = Math.abs(-dx * o.s + dy * o.c) - o.hw;
+      if (Math.hypot(Math.max(u, 0), Math.max(w, 0)) < margin) return true;
+    }
+    return false;
   }
 
   /** Is o still crossing junction I (some of it short of the end of its way through)? */

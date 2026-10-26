@@ -120,7 +120,8 @@ export class CollisionAvoidance {
       if (dNew >= buf) continue;
       if (dNew > 0) {
         const dCur = obbDistance(vehicle.obb, n.obb);
-        if (dNew >= dCur - 1e-6) continue;
+        // (float noise only: a 1e-6 slack let two stuck bodies creep together about 1 cm per 3 min)
+        if (dNew >= dCur - 1e-9) continue;
       }
       return false;
     }

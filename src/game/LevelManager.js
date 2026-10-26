@@ -50,7 +50,8 @@ export class LevelManager {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) date = todayString();
     let h = 2166136261;
     for (const ch of date) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
-    const pick = (arr, salt) => arr[((h >>> salt) ^ (h >>> 3)) % arr.length];
+    // (>>> 0: with salt 0 the xor can come out negative, and a negative index picks nothing)
+    const pick = (arr, salt) => arr[(((h >>> salt) ^ (h >>> 3)) >>> 0) % arr.length];
     const maps = this.endlessMaps();
     const map = pick(maps, 0);
     const y = date.slice(0, 4);

@@ -34,6 +34,7 @@ import { SPECIAL_LABEL } from './Calendar.js';
 import { BossEvents } from './BossEvents.js';
 import { Approval } from './Approval.js';
 import { Forecast } from './Forecast.js';
+import { Unsticker } from './Unstick.js';
 
 const METRIC_INTERVAL = 0.25;
 const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's stop lines
@@ -111,6 +112,7 @@ export class TrafficSimulator {
     this.growth = level.growth ? new CityGrowth(this, level.growth) : null;
     this.enforcement = new Enforcement(this);
     this.counterflow = new CounterflowManager(this);
+    this.unstick = new Unsticker(this);
     // Endless modes: the AM and PM peaks arrive as surges, each one followed by an upgrade card.
     this.surge = level.surges ? new SurgeDirector(this) : null;
     // Habulan and VIP motorcades (started by the random events, or by a level script).
@@ -203,6 +205,7 @@ export class TrafficSimulator {
     const vehicles = this.vehicles;
     this._updateMergers();
     this.laneChanger.update();
+    this.unstick.step(dt);
     this.collision.rebuild(vehicles);
     this.counterflow.update(dt);
     this.enforcement.update(dt);
@@ -220,6 +223,7 @@ export class TrafficSimulator {
       this.approval.update(this._metricTimer);
       this._metricTimer = 0;
       this.growth?.update();
+      this.unstick.update(this._metricTimer || METRIC_INTERVAL);
     }
   }
 
@@ -253,6 +257,8 @@ export class TrafficSimulator {
     const lim = this.hardLimit(v);
     if (v.s + v.hl + ds > lim) ds = Math.max(0, lim - v.s - v.hl);
     if (ds > 0) ds = this.collision.safeAdvance(v, ds);
+    // Out in the oncoming lane its body runs over crosswalk its box reservation does not cover.
+    if (ds > 0 && v.cf) ds = this.counterflow.pedClearAdvance(v, ds);
     if (ds < planned - 1e-9) {
       newV = Math.min(newV, ds / dt);
       if (ds < planned * 0.5) this.stats.gateInterventions++;
@@ -282,6 +288,8 @@ export class TrafficSimulator {
     if (v.cornerStop && v.cornerStop.state === 'stopped') lim = Math.min(lim, v.front);
     const sh = this.sharedFrontLimit(v);
     if (sh !== null && sh < lim) lim = sh;
+    const hold = this.unstick.holdLimit(v); // backing up ("atras!"), then waiting a moment there
+    if (hold !== null && hold < lim) lim = hold;
     const cf = this.counterflow.frontLimit(v);
     if (cf !== null && cf < lim) lim = cf;
     return lim;
@@ -772,6 +780,11 @@ export class TrafficSimulator {
       v.blockerId = blocker.id;
       return false;
     }
+    // Out in the oncoming lane: people on the half of the crosswalk its reservation does not cover.
+    if (v.cf && this.counterflow.pedInPath(v, v.s, connStart + conn.length)) {
+      v.blockReason = 'pedestrian';
+      return false;
+    }
     const sig = I.kind === 'signal' ? this.lights.signal(I.id, conn.arm, conn.movement) : 'green';
     // Padaanin: an enforcer waves this vehicle through its red when nothing crossing is coming.
     const waved = sig === 'red' && v.waved > this.time && this.clearToRoll(v, conn, sig, false);
@@ -898,7 +911,10 @@ export class TrafficSimulator {
       if (seg.kind === 'connector') claims.push({ I: seg.intersection, v, lane: null, dist: 0, conn: seg, pass: true });
       else {
         const ce = v.nextConnEntry();
-        if (ce && ce.start - v.front < 6) claims.push({ I: ce.seg.intersection, v, lane: null, dist: ce.start - v.front, conn: ce.seg, pass: true });
+        // Not while it sits at its own red: it will not go, so nobody should hold back for it.
+        const I = ce?.seg.intersection;
+        if (ce && ce.start - v.front < 6 && (I.kind !== 'signal' || this.lights.signal(I.id, ce.seg.arm, ce.seg.movement) !== 'red'))
+          claims.push({ I, v, lane: null, dist: ce.start - v.front, conn: ce.seg, pass: true });
       }
     }
     this.emergencyClaims = claims;
@@ -1079,7 +1095,7 @@ export class TrafficSimulator {
   emitHorn(v, double) {
     this.stats.horns++;
     this.stats.hornTimes.push(this.time);
-    this.events.push({ type: 'horn', horn: v.spec.horn, x: v.x, y: v.y, double, vehicleType: v.type });
+    this.events.push({ type: 'horn', horn: v.spec.horn, x: v.x, y: v.y, double, vehicleType: v.type, vehicle: v.id });
   }
 
   drainEvents() {

@@ -78,6 +78,11 @@ export class VehicleSpawner {
       let timer = this.timers.get(key) - dt;
       let guard = 0;
       while (timer <= 0 && guard++ < 5) {
+        // No demand right now: look again in a second rather than sending someone anyway.
+        if (this.rate(key, t) <= 0) {
+          timer = 1;
+          break;
+        }
         this.createArrival(key);
         const r = this.rate(key, t);
         timer += r > 0 ? this.rng.exp(r) : 5;
@@ -224,6 +229,7 @@ export class VehicleSpawner {
     // Bicycles only enter on roads with a bike lane; elsewhere the arrival is something else.
     if (type === 'bicycle' && !lanes.some((l) => l.type === 'bike')) {
       const { bicycle, ...rest } = mix;
+      if (!Object.keys(rest).length) return null; // bicycles only, and no bike lane here
       type = rng.weighted(rest);
     }
     const personality = force?.personality || (emergency ? 'patient' : rng.weighted(this.level.personalities));

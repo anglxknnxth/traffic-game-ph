@@ -762,7 +762,8 @@ export class HUD {
     let text;
     if (sim.metrics.level === 'GRIDLOCK') text = pick([`GRIDLOCK na naman! Di na gumagalaw dito 😭`, `Sino nag-block ng box?! Wala nang makadaan 🙄`]);
     else if (r.queue > 10) text = pick([`Grabe ${Math.max(5, Math.round(r.wait / 60) + 5)} mins na ako dito sa ${r.name} 😤`, `Ang haba ng pila sa ${r.name}, lalakarin ko na lang 🚶`, `${r.name} parking lot na naman 🙃`]);
-    else if (avg < 15) text = pick([`Ang luwag ngayon sa ${r.name}! 👏 Galing ng nag-aayos ng ilaw`, `Wow, green wave! Walang hinto 🚀`, `Ang bilis ng biyahe today, salamat MMDA 🙏`]);
+    // (praise only once traffic has actually been moving: at the start nobody has waited yet)
+    else if (avg < 15 && sim.stats.processed >= 5) text = pick([`Ang luwag ngayon sa ${r.name}! 👏 Galing ng nag-aayos ng ilaw`, `Wow, green wave! Walang hinto 🚀`, `Ang bilis ng biyahe today, salamat MMDA 🙏`]);
     else text = pick([`Usad-pagong sa ${r.name} pero okay lang 🐢`, `Sana mabilis yung green sa ${r.name} 🙏`, `Traffic as usual, sounds trip muna 🎧`]);
     const tag = sim.approval?.trending[0];
     return { user: pick(users), text: tag && sim.level.surges ? `${text} ${tag}` : text, mood };

@@ -330,6 +330,21 @@ export class VehicleAI {
       }
     }
 
+    // 7b. Swing room: stop short of where a vehicle crossing the box ahead is about to swing (a
+    // bus's tail through its turn), rather than tucking in right beside it (see Unstick).
+    if (sim.nearIntersection(v) && !sim.hasPass(v)) {
+      const room = sim.unstick.swingRoom(v);
+      if (room !== Infinity) {
+        const aSw = idmStop(v.v, room, v0, aMax, b);
+        if (aSw < acc) {
+          acc = aSw;
+          constraint = 'swing';
+        }
+      }
+      if (constraint === 'swing') v.swingWait = (v.swingWait || 0) + SIM_DT;
+    }
+    if (v.v > 1) v.swingWait = 0; // (only once it is moving again: no holding back on and off)
+
     // Start-up reaction: once whatever held a stopped vehicle clears, it takes a moment to go.
     // In a queue that is already moving, drivers anticipate: only the head waits the full time.
     if (v.v < 0.3 && acc > 0.05) {

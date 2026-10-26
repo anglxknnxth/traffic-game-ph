@@ -5,6 +5,20 @@ import { MAPS } from '../data/maps/index.js';
 import { TrafficSimulator } from '../simulation/TrafficSimulator.js';
 import { CONGESTION } from '../simulation/GridlockDetector.js';
 
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Today's local date as YYYY-MM-DD. */
+export function todayString() {
+  return ymd(new Date());
+}
+
+/** The Saturday on or after `date` (YYYY-MM-DD). */
+function nextSaturday(date) {
+  const d = new Date(`${date}T12:00:00`);
+  d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7));
+  return ymd(d);
+}
+
 export class LevelManager {
   constructor() {
     this.career = CAREER_LEVELS;
@@ -23,7 +37,53 @@ export class LevelManager {
     if (mode === 'endless') return this.endlessOn(id);
     if (mode === 'chill') return this.chillOn(id);
     if (mode === 'growing') return GROWING_LEVEL;
+    if (mode === 'daily') return this.daily(id);
     return this.demo;
+  }
+
+  /**
+   * Daily Challenge: the same run for everyone on a given date (YYYY-MM-DD). The date picks the map,
+   * the time of day, a themed calendar day and two boss events; the seed is the date itself.
+   * Six minutes, scored like Endless.
+   */
+  daily(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) date = todayString();
+    let h = 2166136261;
+    for (const ch of date) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+    const pick = (arr, salt) => arr[((h >>> salt) ^ (h >>> 3)) % arr.length];
+    const maps = this.endlessMaps();
+    const map = pick(maps, 0);
+    const y = date.slice(0, 4);
+    const themes = [
+      { label: 'Ordinaryong araw', day: date },
+      { label: 'Sweldo Friday', day: `${y}-${date.slice(5, 7)}-15` },
+      { label: 'Undas exodus', day: `${y}-10-31` },
+      { label: 'Simbang Gabi', day: `${y}-12-18` },
+      { label: 'Weekend sa mall', day: nextSaturday(date) },
+      { label: 'Christmas rush', day: `${y}-12-08` },
+    ];
+    const theme = pick(themes, 7);
+    const hour = pick([6.6, 7.2, 11.5, 16.4, 17.1, 18.6], 13);
+    const bosses = pick([['chase', 'vip'], ['vip', 'chase'], ['chase', 'chase'], ['vip', 'vip']], 17);
+    const base = this.endlessOn(map);
+    return {
+      ...base,
+      id: 'daily',
+      mode: 'daily',
+      date,
+      name: `Daily · ${date} · ${MAPS[map]?.name || map}`,
+      subtitle: `${theme.label} · ${bosses.map((b) => (b === 'chase' ? 'Habulan' : 'VIP')).join(' + ')}`,
+      description: 'Same map, same traffic and same events for everyone today. Six minutes: get the best score you can.',
+      seed: Number(date.replace(/-/g, '')),
+      duration: 360,
+      calendar: { start: theme.day },
+      env: { ...base.env, hour, rate: 0.9 },
+      bossScript: [
+        { t: 70, kind: bosses[0] },
+        { t: 220, kind: bosses[1] },
+      ],
+      objectives: [],
+    };
   }
 
   /** Maps Endless can be played on: the default kanto, every Pinoy Roads map and the special maps. */
@@ -58,6 +118,9 @@ export class LevelManager {
         demand,
         mix: src?.mix || rest.mix,
         turns: src?.turns || rest.turns,
+        rush: src?.rush || rest.rush,
+        school: src?.school || false,
+        discipline: src?.discipline,
         initialGroups: src?.initialGroups || rest.initialGroups,
         name: `Endless Rush · ${MAPS[mapId].name}`,
         downstream: { ...rest.downstream, exits: {} },
@@ -84,6 +147,8 @@ export class LevelManager {
 
   /** Build a simulation for a level, including scenario warm-up (real simulated traffic). */
   createSim(level, seed = (Math.random() * 1e9) >>> 0) {
+    // The endless modes run on today's date, so a Friday is a Friday and December is Christmas.
+    if (level.surges && !level.calendar) level = { ...level, calendar: { start: todayString() } };
     const sim = new TrafficSimulator(level, { seed });
     if (level.warmup) sim.runWarmup(level.warmup);
     else if (level.prewarm) sim.runWarmup({ seconds: level.prewarm, requests: [] }, { shiftSchedule: true });
@@ -164,9 +229,11 @@ export class LevelManager {
   /** Returns null while running, otherwise { success, reason }. */
   checkEnd(level, sim, tracker, elapsed) {
     const fail = level.fail;
+    const endless = level.mode === 'endless' || level.mode === 'daily';
     if (fail && tracker.congestionRun >= fail.time) {
-      return { success: level.mode === 'endless', reason: level.mode === 'endless' ? 'Traffic collapsed — run over' : `Congestion stayed above ${Math.round(fail.congestion * 100)}% for ${fail.time}s` };
+      return { success: endless, reason: endless ? 'Traffic collapsed — run over' : `Congestion stayed above ${Math.round(fail.congestion * 100)}% for ${fail.time}s` };
     }
+    if (sim.approval?.failed) return { success: endless, reason: 'Galit na ang buong lungsod — sinibak ka sa puwesto 🔥' };
     if (level.endOnSuccess) {
       const st = this.objectiveStatus(level, sim, tracker);
       if (st.length && st.every((o) => o.pass)) return { success: true, reason: 'Objectives complete' };

@@ -163,6 +163,15 @@ export class Network {
     const half = (a) => (I.arms[a].type === 'none' ? 0 : I.arms[a].profile.half);
     I.hx = Math.max(half('N'), half('S')); // half-width of the north–south road
     I.hy = Math.max(half('E'), half('W')); // half-width of the east–west road
+    if (I.def.rotonda) {
+      // Rotonda: a central island ringed by `lanes` circulating lanes; the box is the ring's square.
+      const r = I.def.rotonda;
+      const ri = r.island ?? 10;
+      const ro = Math.max(ri + (r.lanes ?? 2) * LANE_WIDTH + 0.6, I.hx + 1, I.hy + 1);
+      I.ring = { ri, ro, lanes: r.lanes ?? 2 };
+      I.hx = ro;
+      I.hy = ro;
+    }
     let uturnHalf = 0;
     if (SLOT_KINDS.has(I.kind)) {
       // Depth needed for a U-turn from the first general lane to the first general lane opposite.
@@ -434,7 +443,8 @@ export class Network {
       if (R && lanes[i].isEdge) moves[i].push('right');
       if (!moves[i].length) assign([i]);
     }
-    if ((def.uturn || []).includes(X) && has('uturn') && general.length) moves[general[0]].push('uturn');
+    // A rotonda lets anyone go all the way round and come back (from the inner lane).
+    if (((def.uturn || []).includes(X) || def.rotonda) && has('uturn') && general.length) moves[general[0]].push('uturn');
     return moves.map((ms) => MOVE_ORDER.filter((m) => ms.includes(m)));
   }
 
@@ -492,7 +502,9 @@ export class Network {
     const p3 = toLane.start;
     let pts;
     let widePts = null;
-    if (m === 'straight') {
+    if (I.ring) {
+      pts = this._ringPath(I, p0, p3, m, k, lane);
+    } else if (m === 'straight') {
       const lateral = Math.abs((p3.x - p0.x) * -d.y + (p3.y - p0.y) * d.x);
       if (lateral < 1e-6) pts = [p0, p3];
       else {
@@ -530,6 +542,42 @@ export class Network {
       this._addConnector(I, wide);
     }
     return { conn, wide };
+  }
+
+  /**
+   * Path round a rotonda from approach point p0 to exit point p3, counter-clockwise on screen
+   * (right-hand traffic keeps the island on its left). Right turns and the curb lane ride the outer
+   * ring lane, lefts, U-turns and the inner approach lanes the inner one. The radius eases in from
+   * the stop line and back out to the exit, and the heading is radial at both ends, so the path
+   * joins its lanes without a kink.
+   */
+  _ringPath(I, p0, p3, m, k, lane) {
+    const { ri, ro, lanes } = I.ring;
+    const rIn = ri + 0.3 + LANE_WIDTH / 2;
+    const rOut = ro - 0.3 - LANE_WIDTH / 2;
+    const inner = lanes > 1 && (m === 'left' || m === 'uturn' || (m === 'straight' && k === 0 && !lane.isCurb));
+    const rc = lanes > 1 ? (inner ? rIn : rOut) : (rIn + rOut) / 2;
+    const a0 = Math.atan2(p0.y - I.y, p0.x - I.x);
+    const a3 = Math.atan2(p3.y - I.y, p3.x - I.x);
+    const r0 = Math.hypot(p0.x - I.x, p0.y - I.y);
+    const r3 = Math.hypot(p3.x - I.x, p3.y - I.y);
+    let sweep = (a0 - a3) % (Math.PI * 2);
+    if (sweep <= 0.05) sweep += Math.PI * 2;
+    const n = Math.max(24, Math.ceil(sweep / 0.08));
+    const ta = Math.min(0.3, 0.9 / sweep); // share of the path spent easing in (and out)
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const u = i / n;
+      const e = u * u * (3 - 2 * u); // heading starts and ends radial
+      const a = a0 - sweep * e;
+      let r = rc;
+      if (u < ta) r += (r0 - rc) * (1 - u / ta) ** 2;
+      if (u > 1 - ta) r += (r3 - rc) * ((u - (1 - ta)) / ta) ** 2;
+      pts.push({ x: I.x + Math.cos(a) * r, y: I.y + Math.sin(a) * r });
+    }
+    pts[0] = { x: p0.x, y: p0.y };
+    pts[n] = { x: p3.x, y: p3.y };
+    return pts;
   }
 
   /** Levels of lanes and connectors (see RAMP_LAYER etc.). Lanes may change level along their length. */

@@ -76,8 +76,10 @@ function drawPed(ctx, p, rain) {
 }
 
 /** People, culled to the visible rectangle. */
-export function drawPedestrians(ctx, peds, rain, rect) {
+export function drawPedestrians(ctx, peds, rain, rect, onBridge = false) {
   for (const p of peds) {
+    // people up on a footbridge are drawn later, over the traffic; in an underpass, not at all
+    if (p.hidden || !!p.onBridge !== onBridge) continue;
     if (p.x < rect.minX || p.x > rect.maxX || p.y < rect.minY || p.y > rect.maxY) continue;
     drawPed(ctx, p, rain);
   }

@@ -3,8 +3,9 @@
 import { single, double, corridor, grid } from './generic.js';
 import { edsa, commonwealth, taft, espana, poblacion, likoliko, tulay, serbisyo } from './philippines.js';
 import { metro } from './metro.js';
+import * as buhayKalsada from './buhayKalsada.js';
 
-export const MAPS = { single, double, corridor, grid, edsa, commonwealth, taft, espana, poblacion, likoliko, tulay, serbisyo, metro };
+export const MAPS = { single, double, corridor, grid, edsa, commonwealth, taft, espana, poblacion, likoliko, tulay, serbisyo, metro, ...buhayKalsada };
 
 export function getMap(id = 'single') {
   const map = MAPS[id];

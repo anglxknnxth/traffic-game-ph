@@ -23,6 +23,10 @@ export class ScoringSystem {
       peds: 0,
       pedWaiting: 0,
       enforcement: 0,
+      surge: 0,
+      boss: 0,
+      passengers: 0,
+      stopQueue: 0,
     };
     this.safety = 100;
     this.counts = { processed: 0, earlyRequests: 0, boxBlocks: 0, emergencies: 0, slowEmergencies: 0, recoveries: 0 };
@@ -89,6 +93,37 @@ export class ScoringSystem {
     this.b.unsafe -= 2 * dt;
   }
 
+  /** A rush-hour surge survived: more for every later, heavier wave. */
+  onSurgeCleared(wave) {
+    this.b.surge += 150 + 50 * (wave - 1);
+  }
+
+  /** Habulan: the getaway car caught (or it escaped). */
+  onChase(caught) {
+    if (caught) {
+      this.b.boss += 250;
+      this.safety = Math.min(100, this.safety + 2);
+    } else {
+      this.b.boss -= 150;
+      this.safety -= 3;
+    }
+  }
+
+  /** VIP motorcade through: by how many times the convoy had to stop. */
+  onMotorcade(stops) {
+    this.b.boss += stops === 0 ? 300 : stops <= 2 ? 120 : -80;
+  }
+
+  /** Riders carried: everyone who got off a jeepney, bus or tricycle at their stop. */
+  onPassengers(n) {
+    this.b.passengers += n;
+  }
+
+  /** People piling up at the loading stops (`over` = riders beyond the comfortable queue). */
+  stopQueue(dt, over) {
+    if (over > 0) this.b.stopQueue -= Math.min(over, 40) * 0.04 * dt;
+  }
+
   onRecovery(fromLevel) {
     this.counts.recoveries++;
     this.b.recovery += fromLevel === CONGESTION.GRIDLOCK ? 60 : 25;
@@ -107,12 +142,12 @@ export class ScoringSystem {
 
   positive() {
     const b = this.b;
-    return b.flow + b.waitBonus + b.emergency + b.recovery + b.peds + b.enforcement;
+    return b.flow + b.waitBonus + b.emergency + b.recovery + b.peds + b.enforcement + b.surge + b.passengers + b.boss;
   }
 
   negative() {
     const b = this.b;
-    return b.gridlock + b.waiting + b.unsafe + b.boxBlock + b.emergencyPenalty + b.pedWaiting;
+    return b.gridlock + b.waiting + b.unsafe + b.boxBlock + b.emergencyPenalty + b.pedWaiting + b.stopQueue;
   }
 
   total() {
@@ -139,6 +174,14 @@ export class ScoringSystem {
           ]
         : []),
       ...(this.b.enforcement ? [{ label: 'Enforcement (HULI!)', value: r(this.b.enforcement) }] : []),
+      ...(this.b.surge ? [{ label: 'Rush hour survived', value: r(this.b.surge) }] : []),
+      ...(this.b.boss ? [{ label: 'Habulan / VIP motorcade', value: r(this.b.boss) }] : []),
+      ...(this.b.passengers || this.b.stopQueue
+        ? [
+            { label: 'Pasaherong naihatid', value: r(this.b.passengers) },
+            { label: 'Mahabang pila sa sakayan', value: r(this.b.stopQueue) },
+          ]
+        : []),
       { label: 'Safety rating', value: `${Math.round(this.safety)}%` },
     ];
   }

@@ -107,8 +107,9 @@ export class LaneChanger {
     // Sirens: an emergency vehicle stuck behind slow traffic looks for a clearer lane.
     // (On the inner lane of a road with painted lines it takes the oncoming lane instead.)
     // (So does one beside a coned contraflow lane: it takes the cones.)
+    // (Stopped and boxed in too close to swing out there, it still tries the next lane.)
     const cfm = this.sim.counterflow;
-    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40 && !((cfm.cfg.emergency || cfm.openZoneOn(lane)) && cfm.oppOf(lane))) return true;
+    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40 && !((cfm.cfg.emergency || cfm.openZoneOn(lane)) && cfm.oppOf(lane) && (v.v > 0.5 || cfm._canPullOut(v)))) return true;
     // ... and drivers with sirens close behind them move over to let it through.
     if (!v.emergency && this._sirenBehind(v, lane)) return true;
     // A lane that ends: start merging well before the end, as drivers do.
@@ -192,8 +193,8 @@ export class LaneChanger {
       if (this.sim.blockageOnLane(B, v.localS - v.hl - 2, v.localS + 45)) continue;
       // Never move into a lane that ends further on.
       if (B.dropAt !== undefined) continue;
-      // ... or into one coned off for a contraflow.
-      if (B.closed) continue;
+      // ... or into one coned off for a contraflow (past the cones it is open again).
+      if (B.closed && this.sim.counterflow.closedAt(B, v.localS - v.hl - 2)) continue;
       // Do not drift into a dedicated lane you may use but did not pick (buses stay in the busway, motos in the moto lane, unless forced).
       if (B.allowed && !forced && seg.allowed !== B.allowed && !B.allowed.has(v.type)) continue;
       // No weaving: don't go straight back to the lane just left unless forced.

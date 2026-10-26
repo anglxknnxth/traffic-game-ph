@@ -26,4 +26,5 @@ export const MODE_LABEL = {
   pinoy: 'Pinoy Roads',
   chill: 'Chill Endless',
   growing: 'Lumalaking Lungsod',
+  daily: 'Daily Challenge',
 };

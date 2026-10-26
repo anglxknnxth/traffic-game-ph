@@ -6,7 +6,7 @@
 //   box         — squeezed into the box with no exit space
 //   stop        — a jeepney or tricycle stopping inside the junction to load or unload
 //
-// Enforcers the player stations at a junction (level.enforcer.count of them):
+// Enforcers the player stations at a junction (one per street junction on the map):
 //   - drivers behave within 40 m of them: no counterflow, no corner stops in the box, far fewer
 //     box-blocking squeezes, no late yellow runs
 //   - "padaanin": tap the vehicle at the front of a red lane and it is waved through when nothing
@@ -21,8 +21,9 @@ export const ENFORCER_REACH = 40; // m
 export class Enforcement {
   constructor(sim) {
     this.sim = sim;
-    const cfg = sim.level.enforcer || {};
-    this.max = cfg.count ?? 0;
+    // One enforcer for every street junction they can stand at (see Game.toolAt).
+    this.junctions = sim.network.intersections.filter((n) => n.layer === 0 && n.kind !== 'uturn').length;
+    this.max = sim.level.enforcer ? this.junctions : 0;
     this.posts = new Map(); // node id -> { id, x, y, wave }
     this.caught = 0;
     this.log = [];
@@ -67,6 +68,7 @@ export class Enforcement {
   /** The violation v can be caught for right now, or null. */
   violationOf(v) {
     if (v.emergency || v.caught) return null;
+    if (v.getaway) return v.cornered ? 'getaway' : null; // Habulan: catchable only once cornered
     if (v.cf && !v.cf.legal && !v.cf.emergency) return 'counterflow';
     const x = v.violation;
     if (x && x.until > this.sim.time) return x.kind;
@@ -88,8 +90,9 @@ export class Enforcement {
     v.sayTimer = 2.2;
     this.caught++;
     sim.stats.caught = (sim.stats.caught || 0) + 1;
-    sim.scoring.onCatch?.(kind);
-    const label = { counterflow: 'COUNTERFLOW', red: 'BEATING THE RED', box: 'BLOCKING THE BOX', stop: 'BAWAL MAGBABA DITO' }[kind];
+    if (kind === 'getaway') sim.boss?.caught(v);
+    else sim.scoring.onCatch?.(kind);
+    const label = { counterflow: 'COUNTERFLOW', red: 'BEATING THE RED', box: 'BLOCKING THE BOX', stop: 'BAWAL MAGBABA DITO', getaway: 'CARNAPPER, ARESTADO!' }[kind];
     sim.notify(`HULI_${v.id}`, `🚨 HULI! ${v.spec.label.toUpperCase()} · ${label}`, 'good');
     sim.events.push({ type: 'pasaway', x: v.x, y: v.y, huli: true });
     if (kind === 'counterflow') sim.counterflow.sendBack(v);
@@ -145,10 +148,11 @@ export class Enforcement {
   /** Tow a stalled vehicle / clear road works: gone in 8 s. */
   tow(b) {
     const sim = this.sim;
-    if (!b || !b.active || b.towing || ['ped', 'laneEnd', 'cf'].includes(b.kind)) return false;
+    if (!b || !b.active || b.towing || b.noTow || ['ped', 'laneEnd', 'cf'].includes(b.kind)) return false; // no towing a fire or DPWH works
     b.towing = sim.scheduleTime;
-    b.end = Math.min(b.end, sim.scheduleTime + 8);
-    sim.notify(`TOW_${b.id}`, `🚚 TOW TRUCK ON THE WAY · ${b.label || 'blockage'} cleared in 8 s`, 'info');
+    const secs = this.towTime ?? 8;
+    b.end = Math.min(b.end, sim.scheduleTime + secs);
+    sim.notify(`TOW_${b.id}`, `🚚 TOW TRUCK ON THE WAY · ${b.label || 'blockage'} cleared in ${secs} s`, 'info');
     return true;
   }
 

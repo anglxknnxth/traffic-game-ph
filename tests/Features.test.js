@@ -544,6 +544,22 @@ describe('Counterflow and enforcers', () => {
     expect(cf).toBeGreaterThan(0);
   });
 
+  it('a fire truck held up in a queue keeps room to swing out and goes up the oncoming lane too', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 26, S: 3, E: 3, W: 3 }, mix: { car: 0.8, motorcycle: 0.2 }, counterflow: { emergency: true }, initialGroups: { A: 'E' } }), { seed: 1 });
+    const trucks = new Set();
+    const went = new Set();
+    run(sim, 100, (s, i) => {
+      if (i === 40 * 60 || i === 60 * 60) {
+        s.spawner.createArrival('A:N', true);
+        for (const q of s.spawner.pending.values()) for (const item of q) if (item.emergency) item.type = 'firetruck';
+      }
+      for (const v of s.vehicles) if (v.type === 'firetruck') trucks.add(v.id);
+      for (const v of s.counterflow.active) if (v.cf.emergency && v.type === 'firetruck') went.add(v.id);
+    });
+    expect(trucks.size).toBeGreaterThan(0);
+    expect(went.size).toBe(trucks.size);
+  });
+
   it('a pasaway never waits at the line in the oncoming lane on a red, and traffic keeps right round one', () => {
     // (two lanes each way: the oncoming side has a lane to keep right into)
     const sim = new TrafficSimulator(cfLevel({ map: undefined, emergency: null, demand: { N: 18, S: 8, E: 8, W: 8 } }), { seed: 2 });

@@ -197,11 +197,52 @@ export const VEHICLE_TYPES = {
     emergency: true,
     colors: ['#d00000'],
   },
+  // Horse-drawn carriage of the old towns (Intramuros, Vigan): slow, and everyone behind it waits.
+  kalesa: {
+    key: 'kalesa',
+    label: 'Kalesa',
+    length: 4.2,
+    width: 1.6,
+    maxSpeed: 4.5,
+    accel: 0.8,
+    decel: 2.2,
+    hardDecel: 5,
+    horn: 'car',
+    colors: ['#7c2d12', '#1f2937', '#14532d'],
+  },
+  // Habulan: a getaway car with a patrol car on its tail (event vehicles, never in a level's mix).
+  getaway: {
+    key: 'getaway',
+    label: 'Getaway car',
+    length: 4.5,
+    width: 1.8,
+    maxSpeed: 17,
+    accel: 3.4,
+    decel: 4,
+    hardDecel: 8.5,
+    horn: 'car',
+    colors: ['#111827', '#334155', '#7f1d1d'],
+  },
+  police: {
+    key: 'police',
+    label: 'Police car',
+    length: 4.6,
+    width: 1.85,
+    maxSpeed: 17,
+    accel: 3.2,
+    decel: 4,
+    hardDecel: 8.5,
+    horn: 'siren',
+    colors: ['#f8fafc'],
+  },
 };
 
 for (const k of ['bus', 'truck']) VEHICLE_TYPES[k].bigHorn = true;
 
 export const HEAVY_TYPES = new Set(['bus', 'truck', 'jeepney', 'tricycle', 'ejeep', 'dumptruck', 'tanker', 'multicab']);
-export const LOADING_TYPES = new Set(['jeepney', 'bus', 'ejeep']);
+export const LOADING_TYPES = new Set(['jeepney', 'bus', 'ejeep', 'tricycle', 'multicab']);
+/** Seated riders per public utility vehicle, and how many more hang on the back (sabit) at rush hour. */
+export const CAPACITY = { jeepney: 22, ejeep: 26, bus: 55, tricycle: 4, multicab: 12 };
+export const SABIT = { jeepney: 3, multicab: 2, tricycle: 1 };
 /** Vehicles that may stop right at the corner, inside the junction, to drop off or pick up. */
 export const CORNER_STOP_TYPES = new Set(['jeepney', 'ejeep', 'multicab', 'tricycle']);

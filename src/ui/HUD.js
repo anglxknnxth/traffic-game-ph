@@ -6,6 +6,7 @@ import { MODE_LABEL } from '../game/GameState.js';
 import { CONGESTION } from '../simulation/GridlockDetector.js';
 import { FLASH_GROUP } from '../simulation/TrafficPhaseManager.js';
 import { Monitor } from './Monitor.js';
+import { djLine } from './RadioDJ.js';
 
 export const ICONS = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
@@ -24,7 +25,7 @@ export const ICONS = {
 const RAIL_FOLDS = '(max-width: 720px), (max-height: 520px)';
 const railFolds = () => typeof matchMedia !== 'undefined' && matchMedia(RAIL_FOLDS).matches;
 // Picking one of these on a phone closes the rail again (a tool then waits for a tap on the map).
-const RAIL_CLOSES = new Set(['restart', 'metrics', 'monitor', 'heat', 'enforcer', 'contraflow', 'watch', 'autoall']);
+const RAIL_CLOSES = new Set(['restart', 'metrics', 'monitor', 'heat', 'forecast', 'enforcer', 'contraflow', 'watch', 'autoall']);
 
 /** el[prop] = value, skipping the write (and the style / layout work it triggers) when unchanged. */
 function set(el, prop, value) {
@@ -69,6 +70,8 @@ export class HUD {
         <div class="hud-block hud-time"><span class="lbl">Time</span><b data-k="time">0:00</b></div>
         <div class="hud-block hud-env" hidden><span class="lbl" data-k="clock"></span><b data-k="weather"></b></div>
         <div class="hud-block hud-status" data-k="status"></div>
+        <div class="hud-block hud-surge" hidden><span class="lbl" data-k="surgeLbl"></span><b data-k="surgeTime"></b><i class="surge-bar"><i data-k="surgeFill"></i></i></div>
+        <div class="hud-block hud-approval" hidden title="Commuter approval: what the city thinks of your traffic"><span class="lbl">Approval</span><b data-k="approval"></b></div>
         <div class="hud-block hud-score"><span class="lbl">Score</span><b data-k="score">0</b></div>
         <div class="hud-actions">
           <button class="icon-btn" data-act="pause" title="Pause (Space)">${ICONS.pause}</button>
@@ -98,6 +101,7 @@ export class HUD {
           <button class="icon-btn" data-act="metrics" title="Toggle metrics">${ICONS.stats}</button>
           <button class="icon-btn mon-btn" data-act="monitor" title="Monitor: queues, throughput, green timeline (T)">📡</button>
           <button class="icon-btn heat-btn" data-act="heat" title="Speed heatmap and queue counts on the map (O)">🌡️</button>
+          <button class="icon-btn forecast-btn" data-act="forecast" title="Hula: forecast which roads will fill up, and when">🔮</button>
           <button class="icon-btn tool-btn" data-act="enforcer" title="Station a traffic enforcer at a junction" hidden>👮<small class="tool-n"></small></button>
           <button class="icon-btn tool-btn" data-act="contraflow" title="Cone off a contraflow lane (tap the cones to remove)" hidden>🚧</button>
           <button class="icon-btn auto-all" data-act="autoall" title="AUTO LAHAT: every light runs itself (click a light to take it over)" hidden>AUTO</button>
@@ -119,6 +123,12 @@ export class HUD {
       env: root.querySelector('.hud-env'),
       clock: root.querySelector('[data-k="clock"]'),
       weather: root.querySelector('[data-k="weather"]'),
+      approvalBox: root.querySelector('.hud-approval'),
+      approval: root.querySelector('[data-k="approval"]'),
+      surge: root.querySelector('.hud-surge'),
+      surgeLbl: root.querySelector('[data-k="surgeLbl"]'),
+      surgeTime: root.querySelector('[data-k="surgeTime"]'),
+      surgeFill: root.querySelector('[data-k="surgeFill"]'),
       status: root.querySelector('[data-k="status"]'),
       score: root.querySelector('[data-k="score"]'),
       objectives: root.querySelector('.hud-objectives'),
@@ -148,6 +158,7 @@ export class HUD {
       enfBtn: root.querySelector('[data-act="enforcer"]'),
       cfBtn: root.querySelector('[data-act="contraflow"]'),
       heatBtn: root.querySelector('[data-act="heat"]'),
+      forecastBtn: root.querySelector('[data-act="forecast"]'),
     };
     this.monitor = new Monitor(this.el.monitor);
     if (typeof ResizeObserver !== 'undefined') {
@@ -287,6 +298,7 @@ export class HUD {
     this.el.monitor.hidden = !g.state.showMonitor;
     this.el.monBtn.classList.toggle('active', !!g.state.showMonitor);
     this.el.heatBtn.classList.toggle('active', g.state.overlay === 'heat');
+    this.el.forecastBtn.classList.toggle('active', !!g.state.forecast);
     this.root.classList.toggle('watch', !!g.state.watch);
     const sim = this.session?.sim;
     const enf = sim?.enforcement;
@@ -375,6 +387,9 @@ export class HUD {
         break;
       case 'heat':
         g.toggleOverlay();
+        break;
+      case 'forecast':
+        g.toggleForecast();
         break;
       case 'enforcer':
         g.setTool('enforcer');
@@ -535,8 +550,31 @@ export class HUD {
     this.el.env.hidden = !lvl.env;
     if (lvl.env) {
       const icon = sim.env.weather === 'clear' ? (sim.env.darkness > 0.5 ? '🌙' : '☀️') : sim.env.weather === 'rain' ? '🌧️' : '⛈️';
-      set(this.el.clock, 'textContent', sim.env.clock());
-      set(this.el.weather, 'textContent', `${icon} ${sim.env.label()}`);
+      const cal = sim.env.rushHour ? sim.env.calendar : null;
+      set(this.el.clock, 'textContent', cal ? `${cal.label()} · ${sim.env.clock()}` : sim.env.clock());
+      const special = sim.env.special();
+      set(this.el.weather, 'textContent', special ? `${icon} ${special}` : `${icon} ${sim.env.label()}`);
+      set(this.el.env, 'title', special ? `${sim.env.label()} · ${special}` : sim.env.label());
+    }
+    // Commuter approval (the endless modes)
+    const ap = sim.approval;
+    const showAp = !!lvl.surges && !!ap;
+    set(this.el.approvalBox, 'hidden', !showAp);
+    if (showAp) {
+      const v = Math.round(ap.value);
+      set(this.el.approval, 'textContent', `${ap.mood} ${v}%`);
+      set(this.el.approvalBox, 'className', `hud-block hud-approval ${v < 25 ? 'bad' : v < 50 ? 'meh' : 'ok'}`);
+    }
+    // Rush-hour surge: countdown while it is coming, intensity bar while it lasts.
+    const sg = sim.surge;
+    const showSurge = !!sg && sg.state !== 'calm';
+    set(this.el.surge, 'hidden', !showSurge);
+    if (showSurge) {
+      const on = sg.state === 'surge';
+      set(this.el.surge, 'className', `hud-block hud-surge ${on ? 'on' : 'soon'}`);
+      set(this.el.surgeLbl, 'textContent', on ? `🚨 RUSH HOUR · WAVE ${sg.wave}` : `⏰ RUSH HOUR in`);
+      set(this.el.surgeTime, 'textContent', formatTime(Math.max(0, sg.countdown)));
+      this.el.surgeFill.style.width = `${Math.round((on ? sim.env.rushIntensity : 0) * 100)}%`;
     }
     const [txt, cls] = LEVEL_TEXT[m.level] || LEVEL_TEXT.NORMAL;
     set(this.el.status, 'textContent', txt);
@@ -707,7 +745,9 @@ export class HUD {
     const blk = sim.blockages.find((b) => b.active && b.kind !== 'ped' && b.kind !== 'laneEnd');
     if (blk) items.push(`${blk.label || 'Sagabal'} sa ${sim.exitName(blk.exit)}`);
     items.push(`${sim.stats.processed} sasakyan na ang nakadaan`);
+    if (sim.passengers?.delivered) items.push(`${sim.passengers.delivered} pasahero ang naihatid`);
     items.push(sim.env.clock());
+    if (sim.level.surges) items.unshift(djLine(sim));
     return items;
   }
 
@@ -717,14 +757,34 @@ export class HUD {
     const pick = (a) => a[Math.floor(Math.random() * a.length)];
     const users = ['@commuter_juan', '@titamaria', '@jeepney.driver', '@student_ust', '@grabkuya', '@callcenter.ate', '@riderph', '@lolo_ben'];
     const avg = sim.metrics.avgWait;
-    const mood = avg < 15 ? '😊' : avg < 30 ? '😐' : avg < 50 ? '😤' : '🤬';
+    const mood = sim.level.surges && sim.approval ? `${sim.approval.mood} ${Math.round(sim.approval.value)}%` : avg < 15 ? '😊' : avg < 30 ? '😐' : avg < 50 ? '😤' : '🤬';
     const r = roads[0];
     let text;
     if (sim.metrics.level === 'GRIDLOCK') text = pick([`GRIDLOCK na naman! Di na gumagalaw dito 😭`, `Sino nag-block ng box?! Wala nang makadaan 🙄`]);
     else if (r.queue > 10) text = pick([`Grabe ${Math.max(5, Math.round(r.wait / 60) + 5)} mins na ako dito sa ${r.name} 😤`, `Ang haba ng pila sa ${r.name}, lalakarin ko na lang 🚶`, `${r.name} parking lot na naman 🙃`]);
     else if (avg < 15) text = pick([`Ang luwag ngayon sa ${r.name}! 👏 Galing ng nag-aayos ng ilaw`, `Wow, green wave! Walang hinto 🚀`, `Ang bilis ng biyahe today, salamat MMDA 🙏`]);
     else text = pick([`Usad-pagong sa ${r.name} pero okay lang 🐢`, `Sana mabilis yung green sa ${r.name} 🙏`, `Traffic as usual, sounds trip muna 🎧`]);
-    return { user: pick(users), text, mood };
+    const tag = sim.approval?.trending[0];
+    return { user: pick(users), text: tag && sim.level.surges ? `${text} ${tag}` : text, mood };
+  }
+
+  /** A big moment went viral: show it in the feed right away. */
+  viral(e) {
+    const sim = this.session?.sim;
+    if (!sim) return;
+    const users = ['@balitang_kalsada', '@metro.updates', '@commuter_juan', '@titamaria', '@riderph'];
+    const f = this.el.feed;
+    this._feedT = sim.time; // the regular post waits its turn
+    f.hidden = false;
+    f.innerHTML = `<div class="fd-head"><b>${users[Math.floor(Math.random() * users.length)]}</b><span>· 🔥 VIRAL</span></div><div class="fd-body"></div><div class="fd-mood">Trending ${e.tag} · Approval ${sim.approval.mood} ${Math.round(sim.approval.value)}%</div>`;
+    f.querySelector('.fd-body').textContent = e.text;
+    f.classList.toggle('viral-good', !!e.good);
+    f.classList.toggle('viral-bad', !e.good);
+    f.classList.remove('show');
+    void f.offsetWidth;
+    f.classList.add('show');
+    // the DJ talks about it at once
+    this._tickT = undefined;
   }
 
   // ------------------------------------------------------------------ tutorial coach

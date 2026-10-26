@@ -74,6 +74,12 @@ export class VehicleAI {
         s0 = P.creepGap;
         v.creeping = true;
       }
+      // A siren where it may go up the oncoming lane hangs back (no creeping up) with room to pull out.
+      const sg = v.emergency ? sim.counterflow.sirenGap(v, lead.vehicle) : null;
+      if (sg !== null && sg > s0) {
+        s0 = sg;
+        v.creeping = false;
+      }
       // Perception lag: the follower reacts to the leader's speed from a moment ago, unless the gap
       // is already critical (then everyone brakes at once).
       const critical = s0 + v.v * T * 0.6;
@@ -360,7 +366,7 @@ export class VehicleAI {
     if (conn.movement !== 'straight' && conn.movement !== 'right') return;
     if (conn.toLane.type !== 'general' || sim.emergencyClaimFor(v, I, conn)) return;
     if (sim.enforcement.near(I)) return; // BAWAL MAGBABA: not with an enforcer watching
-    if (!sim.rng.chance(sim.cornerStopRate)) return;
+    if (!sim.rng.chance(sim.cornerStopRate * (sim.cornerStopMul ?? 1))) return;
     v.cornerStopAt = I.id;
     v.cornerStop = { I, conn, s: connStart + conn.length - 0.6, duration: sim.rng.range(3, 7), timer: 0, state: 'pending' };
   }

@@ -284,6 +284,57 @@ function drawAmbulance(ctx, L, W, time) {
   ctx.fillRect(L * 0.18, 0, 0.3, hw * 0.8);
 }
 
+function drawPolice(ctx, L, W, time) {
+  const hl = L / 2;
+  const hw = W / 2;
+  drawCar(ctx, L, W, '#f8fafc');
+  // blue doors and a POLICE stripe along both sides
+  ctx.fillStyle = '#1d4ed8';
+  ctx.fillRect(-hl * 0.45, -hw, L * 0.42, 0.22);
+  ctx.fillRect(-hl * 0.45, hw - 0.22, L * 0.42, 0.22);
+  // roof light bar
+  const on = Math.floor(time * 6) % 2 === 0;
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(-0.2, -hw * 0.75, 0.42, W * 0.75);
+  ctx.fillStyle = on ? '#ef4444' : '#3b82f6';
+  ctx.fillRect(-0.16, -hw * 0.7, 0.34, hw * 0.65);
+  ctx.fillStyle = on ? '#3b82f6' : '#ef4444';
+  ctx.fillRect(-0.16, 0.05, 0.34, hw * 0.65);
+}
+
+/** Kalesa: the horse in front (head at +x), two big wheels and the canopied carriage behind. */
+function drawKalesa(ctx, L, W, color) {
+  const hl = L / 2;
+  const hw = W / 2;
+  // wheels
+  ctx.fillStyle = '#1c1917';
+  ctx.fillRect(-hl + 0.35, -hw - 0.08, 0.9, 0.18);
+  ctx.fillRect(-hl + 0.35, hw - 0.1, 0.9, 0.18);
+  // carriage with its canopy
+  ctx.fillStyle = color;
+  roundRect(ctx, -hl + 0.1, -hw + 0.1, L * 0.5, W - 0.2, 0.3);
+  ctx.fill();
+  ctx.fillStyle = '#f5f5f4';
+  roundRect(ctx, -hl + 0.25, -hw + 0.22, L * 0.38, W - 0.44, 0.25);
+  ctx.fill();
+  // shafts
+  ctx.strokeStyle = '#78350f';
+  ctx.lineWidth = 0.08;
+  ctx.beginPath();
+  ctx.moveTo(-hl + L * 0.5, -0.32);
+  ctx.lineTo(hl - 0.5, -0.32);
+  ctx.moveTo(-hl + L * 0.5, 0.32);
+  ctx.lineTo(hl - 0.5, 0.32);
+  ctx.stroke();
+  // horse: body, neck and head
+  ctx.fillStyle = '#92400e';
+  roundRect(ctx, hl - 1.75, -0.28, 1.25, 0.56, 0.25);
+  ctx.fill();
+  ctx.fillRect(hl - 0.6, -0.14, 0.45, 0.28);
+  ctx.fillStyle = '#451a03';
+  ctx.fillRect(hl - 1.6, -0.06, 1.1, 0.12); // mane
+}
+
 function drawFiretruck(ctx, L, W, time) {
   const hl = L / 2;
   const hw = W / 2;
@@ -666,6 +717,12 @@ function drawBody(ctx, v, time, vh, flip) {
     case 'firetruck':
       drawFiretruck(ctx, L, W, time);
       break;
+    case 'police':
+      drawPolice(ctx, L, W, time);
+      break;
+    case 'kalesa':
+      drawKalesa(ctx, L, W, v.color);
+      break;
     default:
       drawCar(ctx, L, W, v.color);
   }
@@ -761,7 +818,7 @@ function bodySprite(v, time, vh, ppm) {
   let sprites = spriteLevels.get(res);
   if (!sprites) spriteLevels.set(res, (sprites = new Map()));
   const flip = v.type === 'jeepney' && Math.cos(v.angle) < -0.1;
-  const strobe = v.type === 'ambulance' ? Math.floor(time * 6) % 2 : v.type === 'firetruck' ? Math.floor(time * 5) % 2 : 0;
+  const strobe = v.type === 'ambulance' || v.type === 'police' ? Math.floor(time * 6) % 2 : v.type === 'firetruck' ? Math.floor(time * 5) % 2 : 0;
   if (v._look === undefined) {
     v._look = `${v.type}|${v.color}|${lookKey(v, vh)}`;
     v._keys = [`${v._look}|00`, `${v._look}|01`, `${v._look}|10`, `${v._look}|11`];
@@ -794,6 +851,7 @@ const BRAKE_RGB = Array.from({ length: 33 }, (_, i) => {
   return `rgb(${Math.round(139 + 116 * g)},${Math.round(29 + 13 * g)},${Math.round(29 + 13 * g)})`;
 });
 const HALO_RGBA = Array.from({ length: 33 }, (_, i) => `rgba(255,40,40,${((0.25 * i) / 32).toFixed(3)})`);
+const SABIT_SHIRTS = ['#f8fafc', '#ef4444', '#3b82f6', '#eab308', '#22c55e'];
 const BOTH_SIDES = [-1, 1];
 const LEFT = [-1];
 const RIGHT = [1];
@@ -842,6 +900,19 @@ export function drawVehicle(ctx, v, time, ppm = 0) {
   if (v._brakeHalo > 0.03) {
     ctx.fillStyle = HALO_RGBA[Math.round(Math.min(1, v._brakeHalo) * 32)];
     ctx.fillRect(-hl - 0.6, -hw, 0.6, W);
+  }
+  // Sabit: riders hanging on the back step of a packed jeepney at rush hour.
+  if (v.sabit > 0) {
+    const n = Math.min(3, v.sabit);
+    for (let i = 0; i < n; i++) {
+      const y = (i - (n - 1) / 2) * 0.55;
+      ctx.fillStyle = SABIT_SHIRTS[(vh + i) % SABIT_SHIRTS.length];
+      ctx.fillRect(-hl - 0.42, y - 0.22, 0.34, 0.44);
+      ctx.fillStyle = '#1c1917';
+      ctx.beginPath();
+      ctx.arc(-hl - 0.25, y, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.fillStyle = '#fff6c2';
   if (twoWheel) ctx.fillRect(hl - 0.1, -0.08, 0.12, 0.16);

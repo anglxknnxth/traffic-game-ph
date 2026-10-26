@@ -2515,3 +2515,116 @@ summary {
 #hud .veh-tip .vt-act:empty {
   display: none;
 }
+
+/* ---------------------------------------------------------------- rush-hour surge */
+.hud-surge {
+  min-width: 150px;
+}
+.hud-surge b {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.hud-surge.soon {
+  color: #fcd34d;
+  border-color: rgba(250, 204, 21, 0.5);
+}
+.hud-surge.on {
+  color: #fff;
+  background: rgba(185, 28, 28, 0.88);
+  animation: surge-pulse 1.4s ease-in-out infinite;
+}
+.surge-bar {
+  display: block;
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+.surge-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--yellow);
+  transition: width 0.4s ease;
+}
+@keyframes surge-pulse {
+  50% {
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.75);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-surge.on {
+    animation: none;
+  }
+}
+
+.surge-cards {
+  max-width: 760px;
+  text-align: center;
+}
+.surge-kicker {
+  margin: 0 0 4px;
+  color: var(--green);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  font-size: 13px;
+}
+.surge-card-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.surge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.surge-card:hover,
+.surge-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: var(--yellow);
+  outline: none;
+}
+.surge-card-icon {
+  font-size: 34px;
+  line-height: 1;
+}
+
+/* ---------------------------------------------------------------- commuter approval + viral feed */
+.hud-approval b {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hud-approval.ok b {
+  color: #86efac;
+}
+.hud-approval.meh b {
+  color: #fcd34d;
+}
+.hud-approval.bad {
+  background: rgba(185, 28, 28, 0.88);
+}
+.hud-approval.bad b {
+  color: #fff;
+}
+.viral-good {
+  border-color: rgba(34, 197, 94, 0.7) !important;
+}
+.viral-bad {
+  border-color: rgba(239, 68, 68, 0.8) !important;
+}
+.btn.daily {
+  border-color: rgba(250, 204, 21, 0.55);
+}

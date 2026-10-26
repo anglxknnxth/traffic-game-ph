@@ -11,6 +11,7 @@ import { EffectsRenderer } from './EffectsRenderer.js';
 import { WeatherRenderer } from './WeatherRenderer.js';
 import { drawPedestrians, drawPedSignals } from './PedestrianRenderer.js';
 import { StaticTiles } from './StaticTiles.js';
+import { drawVipRoutes, drawChase, drawParols, drawCrossovers, drawFires, drawForecast } from './EventRenderer.js';
 
 const SETTLE_MS = 150; // the cached layers follow a zoom this long after the camera stops
 
@@ -129,7 +130,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, frameMs = 1000 / 60, emergencyInfo = null, interactive = false, overlay = null, tool = null } = {}) {
+  _render(sim, { time = 0, debug = false, hoveredHead = null, dt = 1 / 60, frameMs = 1000 / 60, emergencyInfo = null, interactive = false, overlay = null, tool = null, forecast = false } = {}) {
     const ctx = this.ctx;
     const cam = this.camera;
     this.setNetwork(sim.network);
@@ -146,6 +147,8 @@ export class Renderer {
     this.road.drawDynamic(ctx, sim, time, cam.visibleRect(4));
     if (debug) this.effects.drawReservations(ctx, sim);
     if (overlay === 'heat') this.effects.drawHeat(ctx, sim, dt);
+    drawVipRoutes(ctx, sim, time);
+    if (forecast) drawForecast(ctx, sim, time);
 
     const vr = cam.visibleRect(8);
     if (sim.peds?.enabled) {
@@ -171,6 +174,9 @@ export class Renderer {
     for (const v of ground) drawVehicle(ctx, v, time, ppm);
     this.effects.drawOver(ctx, ground, time);
     this.effects.drawSmoke(ctx, visible, time);
+    drawChase(ctx, sim, time);
+    drawFires(ctx, sim, time);
+    if (sim.peds?.enabled) drawCrossovers(ctx, sim, vr);
     if (sim.enforcement?.posts.size) this.effects.drawEnforcers(ctx, sim, time, tool === 'enforcer');
     if (interactive) this.effects.drawStuck(ctx, sim, ground, time);
     if (sim.network.layered) this.road.drawTrenchShade(ctx);
@@ -192,6 +198,7 @@ export class Renderer {
     if (sim.env?.darkness > 0.02) {
       cam.apply(ctx);
       this.lights.draw(ctx, sim, time, null, vr, true);
+      drawParols(ctx, sim, this.road.scenery.posts, time, vr);
     }
     // Screen-space pass (CSS pixels): emergency pointers.
     if (emergencyInfo) {

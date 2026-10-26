@@ -154,13 +154,18 @@ What you'll see on the map:
   jeepneys and tricycles with curbside loading stops, turns and blocked exits, impatient drivers,
   rush-hour gridlock, emergency vehicles, two connected intersections, and a final high-density
   challenge. Clearing a level unlocks the next one.
-- **Pinoy Roads:** nine maps inspired by real Philippine roads, unlocked one after another:
+- **Pinoy Roads:** maps inspired by real Philippine roads, unlocked one after another:
   Poblacion (a town plaza with STOP-sign barangay roads and a river), Taft under the LRT-1 (two
   signals, lots of students), España in the rain, Commonwealth (motorcycle lane and a U-turn slot),
   EDSA (Carousel busway, MRT-3, dusk into night), Liko-Liko (a mountain S-bend over a river),
   Tatlong Kanto (three signals: build a green wave), Dalawang Pampang (a signal on each bank of a
   city river, one short bridge between them), Sa Highway (side streets that join MacArthur Highway
   with no light, and a lane that ends) and Grid ng Maynila (four signals).
+  Sixteen more follow (`src/data/maps/buhayKalsada.js`): Ayala–EDSA (footbridge, underpass, U-turn
+  slots), Ortigas on payday, Quiapo with its procession, Baclaran, Cubao when the game lets out,
+  C5–Kalayaan, Masinag, Alabang on Undas, the signalised Welcome Rotonda, Session Road with
+  the Burnham rotonda, Cebu's Fuente Osmeña rotonda at Sinulog, Intramuros with kalesas, disciplined
+  Davao, fast Diversion Road in Iloilo, the unsignalised Tagaytay rotonda, and Bacolod at MassKara.
 - Every mode has the same street life: people crossing at the lights and the odd jaywalker, a
   clock and changing weather (lighter in the first career levels).
 - **Endless:** demand grows every minute through the afternoon rush into the night, with passing

@@ -3,7 +3,7 @@
 import { Camera } from './Camera.js';
 import { GameLoop } from './GameLoop.js';
 import { GameState, SCREEN, MODE_LABEL } from './GameState.js';
-import { LevelManager } from './LevelManager.js';
+import { LevelManager, todayString } from './LevelManager.js';
 import { Renderer } from '../rendering/Renderer.js';
 import { AudioManager } from '../audio/AudioManager.js';
 import { InputManager } from '../input/InputManager.js';
@@ -15,6 +15,7 @@ import { FLASH_GROUP, playerPhaseRequest } from '../simulation/TrafficPhaseManag
 import { Director } from './Director.js';
 import { Network } from '../simulation/LaneManager.js';
 import { PerfOverlay } from '../ui/PerfOverlay.js';
+import { SURGE_CARDS } from '../simulation/SurgeDirector.js';
 
 export class Game {
   constructor(root) {
@@ -124,11 +125,11 @@ export class Game {
   startSession(mode, id) {
     this.audio.unlock();
     const level = this.levels.withOptions(this.levels.get(mode, id), this._options());
-    const sim = this.levels.createSim(level);
+    const sim = this.levels.createSim(level, level.seed); // the Daily Challenge has a fixed seed
     if (mode === 'chill') sim.rampMax = this.save.settings.chillMaxTraffic || Infinity;
     this.session = {
       mode,
-      id: level.id,
+      id: mode === 'daily' ? level.date : level.id,
       mapId: mode === 'endless' || mode === 'chill' ? (mode === 'chill' ? id || 'single' : level.map || 'single') : null,
       level,
       sim,
@@ -166,6 +167,10 @@ export class Game {
     this.startSession(m, m === 'endless' || m === 'chill' ? this.session.mapId : this.session.id);
   }
 
+  startDaily() {
+    this.startSession('daily', todayString());
+  }
+
   quitToMenu() {
     this.session = null;
     this.hud.hide();
@@ -192,8 +197,24 @@ export class Game {
     }
   }
 
-  togglePause() {
+  /** A surge was survived: pause and offer the upgrade cards (watch mode just takes the first). */
+  offerSurgeCards(e) {
+    const sim = this.session.sim;
+    if (this.state.watch) {
+      sim.surge.pick(e.cards[0]);
+      return;
+    }
+    this.pause(true, false);
+    this.menu.showCards(e.wave, e.cards.map((id) => ({ id, ...SURGE_CARDS[id] })));
+  }
+
+  pickSurgeCard(id) {
     if (!this.session || this.session.ended) return;
+    if (this.session.sim.surge?.pick(id)) this.pause(false);
+  }
+
+  togglePause() {
+    if (!this.session || this.session.ended || this.menu.current === 'cards') return;
     if (this.state.paused) this.pause(false);
     else this.pause(true, true);
   }
@@ -271,7 +292,7 @@ export class Game {
     if (s.ended || this.state.paused) return 'menu';
     const sim = s.sim;
     const level = sim.metrics.level;
-    if (level === 'GRIDLOCK' || sim.metrics.congestion > 0.75) return 'tense';
+    if (level === 'GRIDLOCK' || sim.metrics.congestion > 0.75 || sim.surge?.state === 'surge') return 'tense';
     if (sim.env.rain > 0.3) return 'rain';
     if (sim.env.darkness > 0.5) return 'night';
     return 'day';
@@ -340,6 +361,13 @@ export class Game {
     this.state.overlay = this.state.overlay === 'heat' ? null : 'heat';
     this.hud.syncControls();
     this.hud.toast(this.state.overlay ? 'Heatmap on: red = stopped, green = moving' : 'Heatmap off');
+  }
+
+  /** Hula: show which approaches are forecast to fill up, and in how many seconds. */
+  toggleForecast() {
+    this.state.forecast = !this.state.forecast;
+    this.hud.syncControls();
+    this.hud.toast(this.state.forecast ? '🔮 Hula on: roads that will fill up glow, with the seconds left' : 'Hula off');
   }
 
   resetProgress() {
@@ -416,7 +444,7 @@ export class Game {
       // Tapping the cones (or the coned lane, or that road again) takes them away.
       const hit = sim.counterflow.zoneAtPoint(x, y, Math.max(4, 20 / this.camera.scale));
       const at = this._laneAt(sim, x, y);
-      const had = hit || (at && sim.counterflow.zoneAt(at.lane));
+      const had = hit || (at && sim.counterflow.zoneOn(at.lane));
       if (had) {
         this.closeZone(had);
         this.state.tool = null;
@@ -426,7 +454,7 @@ export class Game {
       if (!at) return false;
       // The contraflow runs from where the road was tapped all the way to the junction.
       const z = sim.counterflow.openZone(at.lane, { from: at.s });
-      this.hud.toast(typeof z === 'string' ? z : '🚧 Contraflow para sa mga kakaliwa: mula dito hanggang kanto · tap the cones to remove', typeof z === 'string' ? 'info' : 'ok');
+      this.hud.toast(typeof z === 'string' ? z : `🚧 Contraflow para sa mga kakaliwa: mula dito hanggang kanto ng ${sim.enforcement._name(at.lane.endInt)} · tap the cones to remove`, typeof z === 'string' ? 'info' : 'ok');
       this.state.tool = null;
       this.hud.syncControls();
       return true;
@@ -445,28 +473,35 @@ export class Game {
     return ok;
   }
 
-  /** The inner approach lane nearest to (x, y) (within 5 m) and where along it, for the contraflow tool. */
+  /**
+   * The inner approach lane nearest to (x, y) (within 5 m) and where along it, for the contraflow tool.
+   * On a road between two junctions a tap is just as near both directions (each borrows the other's
+   * inner lane): the one heading for the junction nearer the tap wins.
+   */
   _laneAt(sim, x, y) {
-    let best = null;
-    let bestS = 0;
-    let bestD = 5;
+    const hits = [];
     const p = { x: 0, y: 0, dx: 0, dy: 0 };
     for (const lane of sim.network.lanes) {
       if ((lane.role !== 'approach' && lane.role !== 'link') || !lane.endInt) continue;
       const opp = sim.counterflow.oppOf(lane);
       if (!opp) continue;
+      let hit = null;
       for (let s = 0; s < lane.length; s += 2) {
         lane.path.pointAt(s, p);
         // the tap may land on either inner lane: the borrowed one or the queue's own
         const d = Math.min(Math.hypot(p.x - x, p.y - y), Math.hypot(p.x - p.dy * (lane.offset + opp.offset) - x, p.y + p.dx * (lane.offset + opp.offset) - y));
-        if (d < bestD) {
-          bestD = d;
-          best = lane;
-          bestS = s;
-        }
+        if (d < 5 && (!hit || d < hit.d)) hit = { lane, s, d };
       }
+      if (hit) hits.push(hit);
     }
-    return best ? { lane: best, s: bestS } : null;
+    if (!hits.length) return null;
+    const near = hits.reduce((a, b) => (b.d < a.d ? b : a));
+    const cfm = sim.counterflow;
+    const sameRoad = (h) => h === near || cfm.oppOf(h.lane) === near.lane || cfm.oppOf(near.lane) === h.lane;
+    const best = hits
+      .filter((h) => sameRoad(h) && h.d < near.d + 0.5)
+      .reduce((a, b) => (b.lane.length - b.s < a.lane.length - a.s ? b : a));
+    return { lane: best.lane, s: best.s };
   }
 
   /** HULI! Catch a violator (red-! vehicle). */
@@ -675,6 +710,7 @@ export class Game {
       frameMs: this.loop.frameMs,
       interactive: playing,
       overlay: this.state.overlay,
+      forecast: !!this.state.forecast && !this.session?.ended,
       tool: this.state.tool,
       emergencyInfo: playing && !this.state.watch ? (v) => this.emergencyInfo(v) : null,
     });
@@ -692,6 +728,12 @@ export class Game {
           if (p.x > -80 && p.x < this.camera.w + 80 && p.y > -80 && p.y < this.camera.h + 80) this.audio.whistle((p.x / this.camera.w) * 2 - 1);
         } else if (e.type === 'notify') {
           this.hud.notify(e);
+        } else if (e.type === 'viral') {
+          if (this.session.level.surges) this.hud.viral(e);
+        } else if (e.type === 'surgeCards') {
+          this.offerSurgeCards(e);
+        } else if (e.type === 'surge' && e.state === 'surge' && playing) {
+          this.audio.radio?.();
         }
       }
       // Sound automation 30 times a second is plenty (the values glide); every frame at 144 Hz
@@ -703,7 +745,7 @@ export class Game {
         em.length = 0;
         let heavy = 0;
         for (const v of sim.vehicles) {
-          if (v.emergency) em.push(v);
+          if (v.emergency || v.type === 'police') em.push(v);
           if (v.spec.length > 6) heavy++;
         }
         this.audio.updateSiren(em, sim.time, (v) => (this.camera.worldToScreen(v.x, v.y).x / this.camera.w) * 2 - 1);
@@ -765,6 +807,17 @@ export class Game {
         newBest = best > 0;
       }
       save.endlessBestTime = Math.max(save.endlessBestTime, s.elapsed);
+    } else if (s.mode === 'daily') {
+      // Best per date, and a streak of consecutive days played.
+      best = save.dailyBest[level.date] || 0;
+      if (score > best) {
+        save.dailyBest[level.date] = score;
+        newBest = best > 0;
+      }
+      const prev = new Date(`${level.date}T12:00:00`);
+      prev.setDate(prev.getDate() - 1);
+      const yesterday = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`;
+      if (save.dailyStreak.last !== level.date) save.dailyStreak = { last: level.date, count: save.dailyStreak.last === yesterday ? save.dailyStreak.count + 1 : 1 };
     } else if (s.mode === 'challenge') {
       best = save.challengeBest[level.id] || 0;
       if (success && score > best) {

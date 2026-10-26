@@ -4,6 +4,7 @@ import { settingsMarkup, bindSettings } from './Settings.js';
 import { resultsMarkup } from './ResultsScreen.js';
 import { formatTime } from '../utils/math.js';
 import { mapForLevel, getMap } from '../data/maps/index.js';
+import { todayString } from '../game/LevelManager.js';
 
 // Dev server only: every career level is playable. Production builds keep normal progression.
 const DEV_UNLOCK_ALL = import.meta.env.DEV;
@@ -75,6 +76,7 @@ export class Menu {
           <button class="btn" data-nav="brief" data-mode="endless">Endless Mode</button>
           <button class="btn chill" data-nav="brief" data-mode="chill" data-id="single">☕ Chill Endless <small>walang game over</small></button>
           <button class="btn grow" data-nav="brief" data-mode="growing">🌆 Lumalaking Lungsod</button>
+          <button class="btn daily" data-nav="brief" data-mode="daily" data-id="${todayString()}">📅 Daily Challenge <small>${save.dailyBest[todayString()] ? `best ${save.dailyBest[todayString()].toLocaleString()}` : 'bago ngayong araw'}${save.dailyStreak.count > 1 ? ` · 🔥 ${save.dailyStreak.count} araw` : ''}</small></button>
           <button class="btn" data-nav="challenges">Challenge Mode</button>
           <button class="btn" data-nav="levels">Level Selection</button>
           <button class="btn" data-nav="tutorial">Tutorial${save.tutorialDone ? ' ✔' : ''}</button>
@@ -157,6 +159,9 @@ export class Menu {
     if (signals > 1) extra.push(`${signals} connected signals`);
     if (map.nodes.some((n) => n.kind === 'uturn')) extra.push('U-turn slots');
     if (map.nodes.some((n) => n.kind === 'yield')) extra.push('Yield junctions');
+    if (map.nodes.some((n) => n.rotonda)) extra.push('⭕ Rotonda');
+    if (map.nodes.some((n) => n.footbridge || n.pedUnderpass)) extra.push('🌉 Footbridge');
+    if (lvl.surges) extra.push('🚨 Rush hour waves');
     if (map.river) extra.push('🌊 River & bridge');
     if (Object.values(map.roads || {}).some((r) => r.types?.includes('bike'))) extra.push('🚲 Bike lanes');
     const heavy = ['truck', 'dumptruck', 'tanker'].reduce((n, t) => n + (lvl.mix?.[t] || 0), 0);
@@ -186,6 +191,8 @@ export class Menu {
               ? 'Chill Endless · no game over'
               : mode === 'growing'
                 ? 'Lumalaking Lungsod'
+                : mode === 'daily'
+                  ? `Daily Challenge · ${lvl.subtitle}`
                 : 'Endless';
     // Endless can be played on any map
     const picked = mode === 'chill' ? id || 'single' : lvl.map || 'single';
@@ -239,6 +246,31 @@ export class Menu {
           <button class="btn" data-nav="quit">Quit to main menu</button>
         </div>
         <p class="muted small">Keys: 1–4 green a road (arrows too) · Y flashing yellow · Space pause · F speed · M mute · R restart · +/− zoom</p>
+      </div>`,
+      'dim',
+    );
+  }
+
+  /** After a rush-hour surge: pick one of the offered upgrade cards. */
+  showCards(wave, cards) {
+    const items = cards
+      .map(
+        (c) => `
+          <button class="surge-card" data-nav="card" data-card="${c.id}">
+            <span class="surge-card-icon">${c.icon}</span>
+            <strong>${c.name}</strong>
+            <span class="muted small">${c.text}</span>
+          </button>`,
+      )
+      .join('');
+    this._show(
+      'cards',
+      `
+      <div class="panel surge-cards">
+        <p class="surge-kicker">✅ NALAMPASAN ANG RUSH HOUR WAVE ${wave}</p>
+        <h2>Pumili ng isang upgrade</h2>
+        <p class="muted">Mas mabigat ang susunod na rush hour. Ano ang kailangan ng kalsada mo?</p>
+        <div class="surge-card-row">${items}</div>
       </div>`,
       'dim',
     );
@@ -302,6 +334,9 @@ export class Menu {
     g.audio.click();
     const nav = el.dataset.nav;
     switch (nav) {
+      case 'card':
+        g.pickSurgeCard(el.dataset.card);
+        break;
       case 'menu':
         if (g.session) g.quitToMenu();
         else this.showMain();

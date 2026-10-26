@@ -81,6 +81,7 @@ export class PedestrianManager {
     this.rng = new Rng(((sim.seed ?? 1) ^ 0x7f4a7c15) >>> 0);
     if (!this.cfg) return;
     if (this.cfg.cross > 0) this._buildCrossings();
+    this._buildCrossovers();
     if (this.cfg.jaywalk > 0) this._buildSites();
     this.jayTimer = this.cfg.jaywalk > 0 ? this.rng.exp(this.cfg.jaywalk / 60) : Infinity;
     // Sidewalk ends at the map edge, two per external road.
@@ -130,6 +131,62 @@ export class PedestrianManager {
     }
   }
 
+  /**
+   * Footbridges and pedestrian underpasses (map: node.footbridge = { E: 30 }, node.pedUnderpass =
+   * { N: 28 }: arm and distance from the node). People walking past one may use it to get to the
+   * other side of the road: slower than a crosswalk (stairs), but they never stop traffic.
+   */
+  _buildCrossovers() {
+    this.crossovers = [];
+    for (const I of this.sim.network.intersections) {
+      if (I.layer !== 0) continue;
+      for (const [kind, spec] of [['bridge', I.def.footbridge], ['tunnel', I.def.pedUnderpass]]) {
+        for (const [arm, u] of Object.entries(spec || {})) {
+          const A = I.arms[arm];
+          if (!A || A.type === 'none' || !A.center) continue;
+          this.crossovers.push({ kind, I, arm, u, A, use: kind === 'bridge' ? 0.45 : 0.55 });
+        }
+      }
+    }
+  }
+
+  /** Someone on the sidewalk of arm `arm` just walked past a crossover: maybe take it. */
+  _maybeCrossOver(p, prevU) {
+    for (const c of this.crossovers) {
+      if (c.I !== p.road.I || c.arm !== p.road.arm) continue;
+      if ((prevU - c.u) * (p.u - c.u) > 0) continue; // not passing it this step
+      if (!this.rng.chance(c.use)) continue;
+      p.state = 'over';
+      p.over = { c, t: 0, dur: (2 * (c.A.half + SW)) / p.speed + (c.kind === 'bridge' ? 10 : 7), from: p.side };
+      p.u = c.u;
+      return;
+    }
+  }
+
+  /** Walking a footbridge or underpass: stairs up (or down), across, stairs down (or up). */
+  _crossOver(p, dt) {
+    const o = p.over;
+    o.t += dt;
+    const stairs = o.c.kind === 'bridge' ? 5 : 3.5;
+    const k = Math.min(1, Math.max(0, (o.t - stairs) / Math.max(0.1, o.dur - 2 * stairs)));
+    const lat = o.from * (o.c.A.half + SW / 2) * (1 - 2 * k);
+    o.c.A.center.point(o.c.u, lat, _pt);
+    p.x = _pt.x;
+    p.y = _pt.y;
+    p.angle = _pt.angle + (o.from > 0 ? -Math.PI / 2 : Math.PI / 2);
+    p.hidden = o.c.kind === 'tunnel' && k > 0 && k < 1; // under the road
+    p.onBridge = o.c.kind === 'bridge';
+    if (o.t >= o.dur) {
+      p.state = 'walk';
+      p.side = -o.from;
+      p.over = null;
+      p.hidden = false;
+      p.onBridge = false;
+      this.stats.overUsed = (this.stats.overUsed || 0) + 1;
+      this._place(p);
+    }
+  }
+
   _buildSites() {
     const net = this.sim.network;
     for (const I of net.intersections) {
@@ -141,15 +198,26 @@ export class PedestrianManager {
         if (A.type === 'external') {
           const u0 = A.stop + 18;
           const u1 = A.length - 45;
-          if (u1 > u0 + 5) this.sites.push({ I, arm, g: A.center, half: A.half, u0, u1, lanes: [...(I.approachLanes[arm] || []), ...(I.exitLanes[arm] || [])] });
+          if (u1 > u0 + 5) this._pushSite({ I, arm, g: A.center, half: A.half, u0, u1, lanes: [...(I.approachLanes[arm] || []), ...(I.exitLanes[arm] || [])] });
         } else if (A.type === 'link' && A.link.a === I.id && A.link.aArm === arm) {
           const B = net.byId.get(A.other);
           const u0 = A.stop + 18;
           const u1 = A.center.length - B.arms[A.link.bArm].stop - 18;
-          if (u1 > u0 + 5) this.sites.push({ I, arm, g: A.center, half: A.half, u0, u1, lanes: [...(I.exitLanes[arm] || []), ...(I.approachLanes[arm] || [])] });
+          if (u1 > u0 + 5) this._pushSite({ I, arm, g: A.center, half: A.half, u0, u1, lanes: [...(I.exitLanes[arm] || []), ...(I.approachLanes[arm] || [])] });
         }
       }
     }
+  }
+
+  /** A jaywalking stretch, minus 25 m either side of any footbridge or underpass on it. */
+  _pushSite(site) {
+    const near = this.crossovers.filter((c) => c.I === site.I && c.arm === site.arm).map((c) => c.u).sort((a, b) => a - b);
+    let u0 = site.u0;
+    for (const u of near) {
+      if (u - 25 > u0 + 5) this.sites.push({ ...site, u0, u1: Math.min(site.u1, u - 25) });
+      u0 = Math.max(u0, u + 25);
+    }
+    if (site.u1 > u0 + 5) this.sites.push({ ...site, u0 });
   }
 
   _seedStrollers() {
@@ -280,6 +348,35 @@ export class PedestrianManager {
     }
   }
 
+  /** Someone queueing for a ride at road distance u on the exit side of arm `arm` (null when full). */
+  addRider(I, arm, u) {
+    if (!this.cfg || this.peds.length >= MAX_PEDS) return null;
+    const p = this._newPed(this.rng.chance(0.3) ? 'student' : 'adult');
+    p.road = { I, arm };
+    p.side = 1;
+    p.u = u;
+    p.lat = this.rng.range(0.5, 1.6); // close to the kerb, ready to hop on
+    p.dir = this.rng.chance(0.5) ? 1 : -1;
+    p.state = 'ride';
+    this._place(p);
+    this.peds.push(p);
+    return p;
+  }
+
+  /** Riders stepping off a jeepney / bus at road distance u: they walk off along the sidewalk. */
+  dropOff(I, arm, u, n) {
+    if (!this.cfg) return;
+    for (let i = 0; i < n && this.peds.length < MAX_PEDS; i++) {
+      const p = this._newPed();
+      p.road = { I, arm };
+      p.side = 1;
+      p.u = u + this.rng.range(-2, 2);
+      p.dir = this.rng.chance(0.6) ? -1 : 1;
+      this._place(p);
+      this.peds.push(p);
+    }
+  }
+
   /**
    * Smallest distance from the kerb (into the sidewalk) that keeps a person clear of every turning
    * path at node I, at road distance u along arm `arm` on `side`. Tabulated once per sidewalk.
@@ -344,8 +441,14 @@ export class PedestrianManager {
     for (const p of this.peds) {
       p.moving = true;
       switch (p.state) {
-        case 'walk':
+        case 'walk': {
+          const prevU = p.u;
           this._walk(p, dt);
+          if (this.crossovers.length && p.state === 'walk' && p.road) this._maybeCrossOver(p, prevU);
+          break;
+        }
+        case 'over':
+          this._crossOver(p, dt);
           break;
         case 'wait':
           this._waitAtCrossing(p, dt);
@@ -358,6 +461,9 @@ export class PedestrianManager {
           break;
         case 'jaywalk':
           this._jayWalk(p, dt);
+          break;
+        case 'ride':
+          p.moving = false; // queued at a jeepney / bus stop (see Passengers)
           break;
         default:
           break;
@@ -388,11 +494,12 @@ export class PedestrianManager {
   _spawn(dt) {
     const rng = this.rng;
     const room = this.peds.length < MAX_PEDS;
+    const crowd = this.sim.env.crowdFactor; // fewer people at night, crowds at rush hour
     // Strollers entering from the map edge
     for (const e of this.ends) {
       e.timer -= dt;
       if (e.timer > 0) continue;
-      e.timer = rng.exp(this.cfg.strollers / 60);
+      e.timer = rng.exp((this.cfg.strollers * crowd) / 60);
       if (!room) continue;
       const p = this._newPed();
       p.road = { I: e.I, arm: e.arm };
@@ -406,7 +513,7 @@ export class PedestrianManager {
     for (const c of this.crossings) {
       c.timer -= dt;
       if (c.timer > 0) continue;
-      c.timer = rng.exp(this.cfg.cross / 60);
+      c.timer = rng.exp((this.cfg.cross * crowd) / 60);
       const from = rng.chance(0.5) ? 1 : -1;
       const queued = this.peds.filter((q) => q.goal?.c === c && q.goal.from === from).length;
       if (!room || queued >= 12) continue;

@@ -28,6 +28,12 @@ import { EventScheduler } from './EventScheduler.js';
 import { CityGrowth } from './CityGrowth.js';
 import { CounterflowManager } from './Counterflow.js';
 import { Enforcement } from './Enforcement.js';
+import { SurgeDirector } from './SurgeDirector.js';
+import { Passengers } from './Passengers.js';
+import { SPECIAL_LABEL } from './Calendar.js';
+import { BossEvents } from './BossEvents.js';
+import { Approval } from './Approval.js';
+import { Forecast } from './Forecast.js';
 
 const METRIC_INTERVAL = 0.25;
 const PROBE_MARGIN = 16; // look-ahead probing starts this far outside a node's stop lines
@@ -88,6 +94,7 @@ export class TrafficSimulator {
       lane.gate.tokens = 1;
     }
     this.resetStats();
+    this.passengers = new Passengers(this); // before the spawner: new PUVs are filled with riders
     this.spawner = new VehicleSpawner(this);
     this.peds = new PedestrianManager(this);
     this.metrics = this._emptyMetrics();
@@ -103,6 +110,25 @@ export class TrafficSimulator {
     this.growth = level.growth ? new CityGrowth(this, level.growth) : null;
     this.enforcement = new Enforcement(this);
     this.counterflow = new CounterflowManager(this);
+    // Endless modes: the AM and PM peaks arrive as surges, each one followed by an upgrade card.
+    this.surge = level.surges ? new SurgeDirector(this) : null;
+    // Habulan and VIP motorcades (started by the random events, or by a level script).
+    this.boss = new BossEvents(this);
+    this.approval = new Approval(this);
+    this.forecast = new Forecast(this);
+    // Session modifiers the surge cards adjust.
+    this.codingMul = 1;
+    this.cornerStopMul = 1;
+    this.disciplineMul = level.discipline ?? 1; // Davao: drivers who follow the rules
+    this.boardingMul = 1;
+  }
+
+  /** Midnight: the radio names the new day and anything special about it. */
+  _announceDay() {
+    const cal = this.env.calendar;
+    const tag = cal.tags.find((t) => t !== 'fridayNight' && t !== 'ber');
+    const extra = tag ? ` · ${SPECIAL_LABEL[tag]}` : '';
+    this.notify('NEW_DAY', `📅 ${cal.dayName().toUpperCase()}, ${cal.label()}${extra}`, 'info');
   }
 
   resetStats() {
@@ -161,10 +187,13 @@ export class TrafficSimulator {
     }
     this.time += dt;
     this.env.update(dt, this.scheduleTime);
+    if (this.env.newDay && this.env.rushHour) this._announceDay();
     this.lights.update(dt);
     this.updatePriority();
     this.autopilot.update(dt);
     this.scenarios?.update(dt);
+    this.surge?.update();
+    this.boss.update(dt);
     this.updateBlockages();
     this.peds.update(dt);
     this.spawner.update(dt);
@@ -180,10 +209,14 @@ export class TrafficSimulator {
     for (let i = 0; i < vehicles.length; i++) this.move(vehicles[i], dt);
     this.postMove();
     for (let i = 0; i < this.vehicles.length; i++) this.ai.updateAfterMove(this.vehicles[i], dt);
+    this.passengers.update(dt);
+    this.approval.observe();
+    this.forecast.update(dt);
 
     this._metricTimer += dt;
     if (this._metricTimer >= METRIC_INTERVAL) {
       this.computeMetrics(this._metricTimer);
+      this.approval.update(this._metricTimer);
       this._metricTimer = 0;
       this.growth?.update();
     }
@@ -405,6 +438,8 @@ export class TrafficSimulator {
     this.stats.recentWaits.push(v.waitTime);
     if (this.stats.recentWaits.length > 40) this.stats.recentWaits.shift();
     this.scoring.onProcessed(v);
+    this.passengers.onDespawn(v);
+    this.boss.onDespawn(v);
     if (this.keepRemovedLog) this.removedLog.push({ id: v.id, s: v.s, front: v.front, routeLength: v.route.length });
     this.events.push({ type: 'processed', vehicle: v.type });
   }
@@ -768,7 +803,7 @@ export class TrafficSimulator {
       // Impatient/aggressive drivers whose patience has run out at a green light push in more often.
       // Patient drivers never enter without exit space.
       if (v.p.tightAccept > 0 && v.greenWait > v.p.patience) p += space === 'tight' ? 0.2 : 0.08;
-      p *= this.level.boxBlockFactor ?? 1;
+      p *= (this.level.boxBlockFactor ?? 1) * this.disciplineMul;
       if (this.enforcement.near(I)) p *= 0.2; // nobody squeezes in under an enforcer's nose
       if (!this.rng.chance(Math.min(0.95, p))) return false;
       v.boxBlocker = true;

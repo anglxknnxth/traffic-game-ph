@@ -11,7 +11,7 @@
 
 import { Rng, makeObb, setObb, obbOverlap } from '../utils/math.js';
 import { strip, addLine, dashes, withFrame, at } from './roadShapes.js';
-import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S } from '../data/config.js';
+import { ARMS, DIRS, CROSSWALK_WIDTH, SIDEWALK_WIDTH, CURB_RADIUS, LOADING_ZONE_S, LANE_WIDTH } from '../data/config.js';
 import { rightOf, leftOf, SLOT_KINDS } from '../simulation/LaneManager.js';
 import { TextureBank, makeCanvas, context2d } from './TextureBank.js';
 import { drawLandmark, landmarkFootprints } from './LandmarkRenderer.js';
@@ -1062,9 +1062,64 @@ export class RoadRenderer {
     }
   }
 
+  /** Rotonda: dashed ring lane lines, then the island (kerb, lawn, flower bed and a monument). */
+  _drawRotonda(ctx, I) {
+    const { ri, ro, lanes } = I.ring;
+    ctx.save();
+    ctx.strokeStyle = COLORS.white;
+    ctx.lineWidth = 0.15;
+    ctx.setLineDash([3, 3]);
+    for (let k = 1; k < lanes; k++) {
+      ctx.beginPath();
+      ctx.arc(I.x, I.y, ri + 0.3 + k * LANE_WIDTH, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // kerb
+    ctx.fillStyle = '#d6d3d1';
+    ctx.beginPath();
+    ctx.arc(I.x, I.y, ri, 0, Math.PI * 2);
+    ctx.fill();
+    // lawn
+    ctx.fillStyle = '#4d7c0f';
+    ctx.beginPath();
+    ctx.arc(I.x, I.y, ri - 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    // flower bed ring
+    ctx.strokeStyle = '#db2777';
+    ctx.lineWidth = 0.9;
+    ctx.setLineDash([0.7, 0.5]);
+    ctx.beginPath();
+    ctx.arc(I.x, I.y, ri * 0.62, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // monument: a stone base and an obelisk, seen from above
+    const b = Math.min(3.2, ri * 0.32);
+    ctx.fillStyle = '#a8a29e';
+    ctx.fillRect(I.x - b, I.y - b, 2 * b, 2 * b);
+    ctx.fillStyle = '#e7e5e4';
+    ctx.fillRect(I.x - b * 0.55, I.y - b * 0.55, b * 1.1, b * 1.1);
+    ctx.fillStyle = '#78716c';
+    ctx.beginPath();
+    ctx.moveTo(I.x, I.y - b * 0.55);
+    ctx.lineTo(I.x + b * 0.55, I.y);
+    ctx.lineTo(I.x, I.y + b * 0.55);
+    ctx.lineTo(I.x - b * 0.55, I.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    // The ring's outer edge reads as a kerb line where the arms do not meet it.
+    ctx.strokeStyle = 'rgba(245,245,245,0.35)';
+    ctx.lineWidth = 0.12;
+    ctx.beginPath();
+    ctx.arc(I.x, I.y, ro, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   _drawNodeMarkings(ctx, I) {
     const net = this.network;
-    if (I.kind === 'signal') {
+    if (I.ring) this._drawRotonda(ctx, I);
+    else if (I.kind === 'signal') {
       // Yellow box junction ("Don't block the box")
       const bx = I.hx - 0.5;
       const by = I.hy - 0.5;
@@ -1656,13 +1711,15 @@ export class RoadRenderer {
       for (const lane of b.laneObjs) {
         const A = lane.startInt.arms[lane.startArm];
         withFrame(ctx, this._g(lane.startInt, lane.startArm), A.exitStop + b.s, lane.offset, () => {
-          // stalled vehicle silhouette beyond the cones
+          // stalled vehicle silhouette beyond the cones (a parked fire truck at a fire, broken
+          // concrete slabs at DPWH reblocking)
           ctx.fillStyle = 'rgba(0,0,0,0.3)';
           ctx.fillRect(1.6, -1.1, 7, 2.3);
-          ctx.fillStyle = '#6b7280';
+          ctx.fillStyle = b.kind === 'fire' ? '#b91c1c' : b.kind === 'works' ? '#78716c' : '#6b7280';
           ctx.fillRect(1.4, -1.2, 7, 2.4);
-          ctx.fillStyle = '#9ca3af';
-          ctx.fillRect(6.4, -1.0, 1.6, 2.0);
+          ctx.fillStyle = b.kind === 'works' ? '#a8a29e' : '#9ca3af';
+          if (b.kind === 'works') for (let k = 0; k < 3; k++) ctx.fillRect(1.8 + k * 2.2, -1.0, 1.7, 2.0);
+          else ctx.fillRect(6.4, -1.0, 1.6, 2.0);
           const blink = Math.floor(time * 3) % 2 === 0;
           ctx.fillStyle = blink ? '#fbbf24' : '#92400e';
           ctx.fillRect(1.4, -1.2, 0.4, 0.4);

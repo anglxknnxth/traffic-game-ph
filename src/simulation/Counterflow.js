@@ -31,7 +31,7 @@ import { laneSAt } from './PedestrianManager.js';
 import { makeObb } from '../utils/math.js';
 import { LaneChanger } from './LaneChange.js';
 import { Network } from './LaneManager.js';
-import { Route } from './Vehicle.js';
+import { Route, clearFraction } from './Vehicle.js';
 import { VEHICLE_TYPES } from '../data/vehicles.js';
 
 const MOTO = new Set(['motorcycle', 'tricycle']);
@@ -42,12 +42,15 @@ const STOP_CLEAR = 18; // a pasaway gets back in at least this far before the st
 const CHECK_EVERY = 30; // steps between decisions per vehicle
 const TAPER = 6; // m of the taper where a contraflow lane begins
 const MAX_YAW = 0.32; // rad: how far the nose turns while swinging out or back
+const YAW_TAPER = 0.8; // m: the nose straightens over the last bit of a sideways swing
 const YAW_EASE = 0.25; // s: how quickly the nose follows the swing
 const SIGNAL_FIRST = 0.8; // s of indicator before swinging out (as for a lane change)
 const CUT_MIN = 4; // m of travel needed to swing back in
 const CUT_MAX = 10;
 const MERGE_CLEAR = 15; // cones lifted: those this close to the stop line go on through instead
 const ZIP_GAP = 8; // s: nobody zips in right behind someone who just came back from the cones
+const MERGE_PAST = 12; // m past the end of the cones before drivers may move into the borrowed lane
+const ZONE_GAP = 20; // m between two contraflows on one road (one toward each junction)
 
 export const COUNTERFLOW_DEFAULTS = Object.freeze({ moto: 0, car: 0, minWait: 10, minQueue: 4, emergency: false });
 
@@ -152,7 +155,7 @@ export class CounterflowManager {
     if (!this._canPullOut(v)) return;
     // The longer the wait, the likelier they lose patience.
     const base = moto ? this.cfg.moto : this.cfg.car;
-    if (!sim.rng.chance(Math.min(0.9, base * (1 + v.waitTime / 20)))) return;
+    if (!sim.rng.chance(Math.min(0.9, base * (1 + v.waitTime / 20) * (sim.disciplineMul ?? 1)))) return;
     if (this._plan(v, lane, opp, moto ? 6 : 3)) return;
     // No gap to cut into: run up the oncoming lane as far as it is clear, toward the stop line.
     // Only on its own green: nobody waits out there for the light to change.
@@ -374,7 +377,9 @@ export class CounterflowManager {
   // ------------------------------------------------------------------ moving
   /**
    * Try to move sideways by d with the nose turned by yaw (a real lane change, not a crab walk);
-   * the collision gate checks the whole new body. Falls back to the same slide without turning.
+   * the collision gate checks the whole new body. Falls back to the same slide without turning,
+   * then with the nose straight (a turned body can stick out into a tight queue where a straight
+   * one fits).
    */
   _slide(v, d, yaw) {
     const sim = this.sim;
@@ -382,7 +387,7 @@ export class CounterflowManager {
     const oldYaw = v.cfYaw || 0;
     const tmp = this._tmp || (this._tmp = makeObb());
     const nb = sim.collision.neighbors(v, Math.abs(d) + 1.2);
-    for (const y of [yaw, oldYaw]) {
+    for (const y of [yaw, oldYaw, 0]) {
       v.cfOff = oldOff + d;
       v.cfYaw = y;
       v.poseAt(v.s, tmp);
@@ -412,13 +417,28 @@ export class CounterflowManager {
    * (~38° motorcycles, ~33° the rest at the steepest point) with room ahead, sharper (~48° / ~40°)
    * when pulling out from close behind the car in front.
    */
-  _swingL(v, room = this._roomAhead(v)) {
+  _swingL(v, room = this._roomAhead(v), speed = v.v) {
     const moto = MOTO.has(v.type);
-    const w = Math.abs(v.cf?.full ?? -(v.segment.offset + (this.oppOf(v.segment)?.offset ?? 0)));
+    const w = this._swingW(v);
     const floor = moto ? 4.5 : v.spec.length > 6 ? 1.6 * v.spec.length : 7;
     const sharp = Math.max(floor, w * (moto ? 1.4 : 1.9));
-    const gentle = Math.max(floor, w * (moto ? 2.0 : 2.4), Math.min(20, v.v * 2.8));
+    const gentle = Math.max(floor, w * (moto ? 2.0 : 2.4), Math.min(20, speed * 2.8));
     return Math.max(sharp, Math.min(gentle, room / 0.35));
+  }
+
+  /** How far sideways the swing out into the oncoming lane goes. */
+  _swingW(v) {
+    return Math.abs(v.cf?.full ?? -(v.segment.offset + (this.oppOf(v.segment)?.offset ?? 0)));
+  }
+
+  /**
+   * Room ahead needed to swing out round `lead` over L metres. Sirens (a wide fire truck most of
+   * all) wait for their whole width to clear the car in front, as for a lane change round it: a
+   * third of the swing is only enough for the nose, and it would stall out there half-way.
+   */
+  _pullOutNeed(v, L, lead) {
+    if (!v.emergency || !lead) return 0.35 * L;
+    return Math.max(0.35 * L, clearFraction(this._swingW(v), v.spec.width, lead.spec.width) * L + 0.6);
   }
 
   /** Free road ahead of v in its own lane (to the rear of the car in front). */
@@ -427,10 +447,23 @@ export class CounterflowManager {
     return lead ? lead.gap : Infinity;
   }
 
+  /**
+   * Gap a siren keeps to the car in front where it may go up the oncoming lane: enough to swing its
+   * body out round `lead` from a standstill (a fire truck ~10 m), or it would close up and be
+   * boxed in. Null elsewhere.
+   */
+  sirenGap(v, lead) {
+    if (!v.emergency || v.emergencyDone || v.cf || v.segment.kind !== 'lane') return null;
+    if (!this.oppOf(v.segment) || !(this.cfg.emergency || this.openZoneOn(v.segment))) return null;
+    // (+2 m: braking up to a stopped queue, it comes to rest a little short of the gap it aims for)
+    return this._pullOutNeed(v, this._swingL(v, Infinity, 0), lead) + 2;
+  }
+
   /** Is there room ahead in its own lane for the nose to swing out before the car in front? */
   _canPullOut(v) {
-    const room = this._roomAhead(v);
-    return room >= 0.35 * this._swingL(v, room);
+    const lead = this.sim.findLeader(v, 30);
+    const room = lead ? lead.gap : Infinity;
+    return room >= this._pullOutNeed(v, this._swingL(v, room), lead?.vehicle);
   }
 
   /** Ease the sideways offset to `to` over the next L metres of forward travel. */
@@ -505,7 +538,7 @@ export class CounterflowManager {
     const rate = Math.min(LAT_SPEED, Math.max(0.4, 0.35 * v.v + 0.4));
     const left = goal - v.cfOff;
     const d = Math.sign(left) * Math.min(Math.abs(left), rate * dt);
-    const want = Math.max(-MAX_YAW, Math.min(MAX_YAW, Math.atan2(d / dt, Math.max(v.v, 1.2))));
+    const want = Math.max(-MAX_YAW, Math.min(MAX_YAW, Math.atan2(d / dt, Math.max(v.v, 1.2)))) * Math.min(1, Math.abs(left) / YAW_TAPER);
     const y = v.cfYaw || 0;
     this._slide(v, d, y + (want - y) * Math.min(1, dt / YAW_EASE));
   }
@@ -644,6 +677,8 @@ export class CounterflowManager {
     } else if (cf.phase === 'in') {
       if (v.cfOff > -0.03 && Math.abs(v.cfYaw || 0) < 0.02) this._finish(v);
       else if (v.cfOff > -0.03) this._straighten(v, dt);
+      // Nearly in: square up into the slot in one go if the straight body fits there.
+      else if (Math.abs(v.cfOff) < 0.35 && this._slide(v, -v.cfOff, 0)) this._finish(v);
       else {
         const before = v.cfOff;
         this._swing(v, 0, dt);
@@ -740,7 +775,7 @@ export class CounterflowManager {
     const opp = cf.opp;
     if (opp?.cfClosed && !this.active.some((o) => o !== v && o.cf && o.cf.opp === opp && o.cf.front && !o.cf.zone)) {
       opp.cfClosed = false;
-      if (!this.zoneAt(opp)) opp.closed = false;
+      if (!this.zoneBorrowing(opp)) opp.closed = false;
     }
     if (cf.merge) v.zipAt = sim.time;
     v.cf = null;
@@ -823,7 +858,7 @@ export class CounterflowManager {
     const sim = this.sim;
     const opp = this.oppOf(lane);
     if (!opp) return 'Only on undivided roads (no median), next to the inner lane';
-    const had = this.zoneAt(lane);
+    const had = this.zoneOn(lane);
     if (had) return had;
     // The oncoming side keeps a lane of its own: it needs two.
     const outs = lane.endInt.exitLanes[lane.endArm].filter((l) => l.type === 'general');
@@ -831,7 +866,15 @@ export class CounterflowManager {
     if (!opp1) return 'Kailangan ng 2 lane sa kabila (oncoming) para sa contraflow';
     const len = lane.length;
     const taper = Math.min(TAPER, len * 0.15);
-    const s0 = Math.min(len - 6, Math.max(taper + 1, from ?? len - length));
+    let s0 = Math.min(len - 6, Math.max(taper + 1, from ?? len - length));
+    // A road between two junctions can have one contraflow toward each: the other direction's cones
+    // borrow the start of this lane, so ours begin far enough on to leave room to merge in between.
+    const facing = this.zoneBorrowing(lane);
+    if (facing) {
+      s0 = Math.max(s0, facing.oppEnd + ZONE_GAP + taper);
+      if (len - s0 < 20) return 'Masyadong maikli ang kalsada para sa 2 contraflow';
+    }
+    const oppEnd = Math.max(this.oppS(lane, opp, s0 - taper), this.oppS(lane, opp, len));
     const block = { id: `cz:${lane.id}`, kind: 'cf', label: '', laneObjs: [opp], s: 0.5, active: false, done: false, start: -Infinity, end: Infinity };
     sim.blockages.push(block);
     // Cones between the borrowed lane and the oncoming lane that stays open, from the junction out,
@@ -847,7 +890,7 @@ export class CounterflowManager {
     const cones = [];
     for (let s = len - 1; s > s0 + 2; s -= 6) cones.push(at(s, 1));
     for (let i = 0; i < 4; i++) cones.push(at(s0 - (i * taper) / 3, 1 - (0.85 * i) / 3));
-    const zone = { lane, opp, s0, s1: len, block, cones, placed: 0, placeT: 0, state: 'placing', until: sim.time + secs, users: new Set() };
+    const zone = { lane, opp, s0, s1: len, oppEnd, block, cones, placed: 0, placeT: 0, state: 'placing', until: sim.time + secs, users: new Set() };
     this.zones.push(zone);
     // Oncoming drivers who were going to use that lane take the next one from now on.
     opp.closed = true;
@@ -880,9 +923,25 @@ export class CounterflowManager {
     return this.zones.find((z) => z.lane === lane && z.state === 'open') || null;
   }
 
-  /** The zone on this road (either inner lane of it), if any. */
-  zoneAt(lane) {
-    return this.zones.find((z) => z.state !== 'gone' && (z.lane === lane || z.opp === lane)) || null;
+  /** The zone whose queue runs on `lane` (it borrows the oncoming lane beside it), if any. */
+  zoneOn(lane) {
+    return this.zones.find((z) => z.state !== 'gone' && z.lane === lane) || null;
+  }
+
+  /** The zone that borrows `lane` (cones on it from its junction end out), if any. */
+  zoneBorrowing(lane) {
+    return this.zones.find((z) => z.state !== 'gone' && z.opp === lane) || null;
+  }
+
+  /**
+   * May nobody move into `lane` at lane coordinate s? Someone running up it closes all of it; cones
+   * close only their stretch, and drivers may merge into it past them.
+   */
+  closedAt(lane, s) {
+    if (!lane.closed) return false;
+    if (lane.cfClosed) return true;
+    const z = this.zoneBorrowing(lane);
+    return !z || s < z.oppEnd + MERGE_PAST;
   }
 
   /**
@@ -958,7 +1017,8 @@ export class CounterflowManager {
         z.placed++;
       }
       // Opens once the cones are down and nobody is in, or still heading into, the borrowed lane.
-      const busy = z.opp.vehicles.length > 0 || [...z.opp.committed].some((c) => c.reservations.size);
+      // (Drivers who merged into the lane past the cones are not in the way.)
+      const busy = z.opp.vehicles.some((o) => o.localS - o.hl < z.oppEnd + 2) || [...z.opp.committed].some((c) => c.reservations.size);
       if (z.placed >= z.cones.length && !busy) {
         z.block.active = true;
         z.state = 'open';

@@ -16,6 +16,8 @@ export const DEFAULT_SAVE = Object.freeze({
   pinoyBest: {},
   pinoyStars: {},
   endlessBestByMap: {},
+  dailyBest: {}, // Daily Challenge best score per date (YYYY-MM-DD)
+  dailyStreak: { last: '', count: 0 }, // consecutive days played
   tutorialDone: false,
   settings: {
     volume: 0.8,
@@ -68,6 +70,13 @@ export function validateSave(raw) {
   d.pinoyBest = sanitizeScoreMap(raw.pinoyBest, 1e7);
   d.pinoyStars = sanitizeScoreMap(raw.pinoyStars, 3);
   d.endlessBestByMap = sanitizeScoreMap(raw.endlessBestByMap, 1e7);
+  const daily = sanitizeScoreMap(raw.dailyBest, 1e7);
+  // keep the last 60 days
+  for (const k of Object.keys(daily).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort().slice(-60)) d.dailyBest[k] = daily[k];
+  const st = raw.dailyStreak;
+  if (st && typeof st === 'object' && typeof st.last === 'string' && /^(\d{4}-\d{2}-\d{2})?$/.test(st.last) && isNum(st.count) && st.count >= 0) {
+    d.dailyStreak = { last: st.last, count: Math.min(9999, Math.floor(st.count)) };
+  }
   if (isNum(raw.pinoyUnlocked)) d.pinoyUnlocked = Math.floor(raw.pinoyUnlocked);
   // Career levels 11–16 became Pinoy Roads levels: carry their progress over.
   for (const [old, id] of Object.entries(LEGACY_CAREER_TO_PINOY)) {

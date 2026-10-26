@@ -7,6 +7,10 @@ import { PERSONALITIES, LOADING_ZONE_S } from '../data/config.js';
 import { Route, Vehicle } from './Vehicle.js';
 import { Network } from './LaneManager.js';
 
+// Loading-stop vehicles from before tricycles and multicabs joined them: they keep drawing the same
+// random numbers as always, so levels without loading stops replay exactly as before.
+const CLASSIC_LOADERS = new Set(['jeepney', 'bus', 'ejeep']);
+
 /** Buses and trucks rarely turn into single-lane streets: they cannot make the swing past waiting cars. */
 function narrowTurn(type, conn) {
   return VEHICLE_TYPES[type].length > 8 && conn && conn.toLane.laneCount === 1 ? 0.12 : 1;
@@ -47,8 +51,8 @@ export class VehicleSpawner {
     const amp = this.level.demandWave || 0;
     const phase = this.wavePhase.get(key) || 0;
     const wave = 1 + amp * Math.sin((t / 55) * Math.PI * 2 + phase) * 0.8 + amp * 0.4 * Math.sin((t / 23) * Math.PI * 2 + phase * 1.7);
-    const scale = (this.level.demandScale ?? 1) * (this.sim.demandMul ?? 1);
-    return Math.max(0, (perMin / 60) * scale * ramp * Math.max(0.2, wave) * this.sim.env.demandFactor);
+    const scale = (this.level.demandScale ?? 1) * (this.sim.demandMul ?? 1) * (this.sim.codingMul ?? 1);
+    return Math.max(0, (perMin / 60) * scale * ramp * Math.max(0.2, wave) * this.sim.env.demandFor(key) * (this.sim.scenarios?.boost(key) ?? 1));
   }
 
   pendingCount() {
@@ -98,8 +102,43 @@ export class VehicleSpawner {
     }
   }
 
+  /**
+   * Waze-style routing for drivers with a navigation app: each movement's weight drops with the
+   * queue already standing on the road it leads into, so app users drift to the roads that are
+   * moving. Counts a reroute when the app talks the driver out of their first choice.
+   */
+  _waze(w, connOf) {
+    const raw = Object.keys(w).reduce((a, b) => (w[a] >= w[b] ? a : b));
+    for (const m of Object.keys(w)) {
+      const to = connOf(m)?.toLane;
+      if (!to) continue;
+      let q = 0;
+      for (const o of to.vehicles) if (o.v < 1.5) q++;
+      w[m] *= 1 / (1 + (q / 5) ** 2);
+    }
+    const best = Object.keys(w).reduce((a, b) => (w[a] >= w[b] ? a : b));
+    if (best !== raw) this._rerouted(connOf(raw)?.toLane);
+  }
+
+  _rerouted(avoided) {
+    this.reroutes = (this.reroutes || 0) + 1;
+    this._rerouteBatch = (this._rerouteBatch || 0) + 1;
+    if (this._rerouteBatch < 12) return;
+    this._rerouteBatch = 0;
+    const I = avoided?.endInt || avoided?.startInt;
+    const road = I ? this.sim.network.roadName(I, avoided.endInt ? avoided.endArm : avoided.startArm) : null;
+    this.sim.notify('WAZE', `📱 WAZE: nag-reroute na ang ${this.reroutes} sasakyan${road ? ` palayo sa ${road}` : ''}`, 'info');
+  }
+
+  /** Does this arrival drive with a navigation app (the endless modes only)? */
+  _appUser(type) {
+    if (!this.level.surges) return false;
+    const share = { car: 0.35, suv: 0.35, van: 0.3, pickup: 0.25, motorcycle: 0.2 }[type] || 0;
+    return share > 0 && this.rng.chance(share);
+  }
+
   /** Next movement for a vehicle of `type` arriving at the end of `lane`. */
-  chooseMovement(lane, type, usedUturn = false) {
+  chooseMovement(lane, type, usedUturn = false, app = false) {
     const turns = this.level.turns || { left: 0.1, right: 0.1 };
     const c = lane.connectors;
     const ok = (m) => c[m] && c[m].toLane.allows(type);
@@ -112,10 +151,11 @@ export class VehicleSpawner {
     const keys = Object.keys(w);
     if (!keys.length) return Object.keys(c)[0];
     if (keys.length === 1) return keys[0];
+    if (app) this._waze(w, (m) => c[m]);
     return this.rng.weighted(w);
   }
 
-  buildRoute(firstLane, firstMove, type = 'car') {
+  buildRoute(firstLane, firstMove, type = 'car', app = false) {
     const segs = [firstLane];
     let lane = firstLane;
     let move = firstMove;
@@ -128,7 +168,7 @@ export class VehicleSpawner {
       segs.push(conn);
       lane = conn.toLane;
       segs.push(lane);
-      if (lane.endInt) move = this.chooseMovement(lane, type, usedUturn);
+      if (lane.endInt) move = this.chooseMovement(lane, type, usedUturn, app);
     }
     return new Route(segs);
   }
@@ -158,22 +198,41 @@ export class VehicleSpawner {
     return rng.pick(general);
   }
 
-  createArrival(key, emergency = false) {
+  /** The level's vehicle mix reweighted for the hour (rush PUVs, truck ban, night trikes), cached per game-minute. */
+  hourlyMix() {
+    const env = this.sim.env;
+    const sc = this.sim.scenarios;
+    if (!env.rushHour && !sc?.gas) return this.level.mix;
+    const minute = Math.floor(env.hour * 60) * 2 + (sc?.gas ? 1 : 0);
+    if (this._mixMinute !== minute) {
+      this._mixMinute = minute;
+      this._mix = Object.fromEntries(Object.entries(this.level.mix).map(([t, w]) => [t, w * env.mixFactor(t) * (sc?.gasFactor(t) ?? 1)]));
+    }
+    return this._mix;
+  }
+
+  /**
+   * Queue an arrival on approach `key`. `force` (event vehicles: Habulan, VIP motorcade) fixes the
+   * type and adds `flags` to the vehicle; it goes to the front of the queue. Returns the queued item.
+   */
+  createArrival(key, emergency = false, force = null) {
     const lanes = this.sim.network.approachLanesByKey(key);
-    if (!lanes.length) return;
+    if (!lanes.length) return null;
     const rng = this.rng;
-    let type = emergency ? (rng.chance(0.65) ? 'ambulance' : 'firetruck') : rng.weighted(this.level.mix);
+    const mix = this.hourlyMix();
+    let type = force?.type || (emergency ? (rng.chance(0.65) ? 'ambulance' : 'firetruck') : rng.weighted(mix));
     // Bicycles only enter on roads with a bike lane; elsewhere the arrival is something else.
     if (type === 'bicycle' && !lanes.some((l) => l.type === 'bike')) {
-      const { bicycle, ...rest } = this.level.mix;
+      const { bicycle, ...rest } = mix;
       type = rng.weighted(rest);
     }
-    const personality = emergency ? 'patient' : rng.weighted(this.level.personalities);
+    const personality = force?.personality || (emergency ? 'patient' : rng.weighted(this.level.personalities));
     const turns = this.level.turns || { left: 0.1, right: 0.1 };
     const avail = new Set();
     for (const l of lanes) if (l.allows(type) && (type !== 'bicycle' || l.type === 'bike')) for (const m of Object.keys(l.connectors)) if (m !== 'uturn' && l.connectors[m].toLane.allows(type)) avail.add(m);
     let move;
-    if (emergency) move = avail.has('straight') ? 'straight' : [...avail][0];
+    let app = false; // drives with a navigation app (Waze-style routing)
+    if (emergency || force?.move) move = avail.has(force?.move || 'straight') ? force?.move || 'straight' : [...avail][0];
     else {
       const w = {};
       if (avail.has('straight')) w.straight = Math.max(0, 1 - turns.left - turns.right);
@@ -182,13 +241,17 @@ export class VehicleSpawner {
       if (avail.has('right')) w.right = turns.right * narrowTurn(type, sample('right'));
       const keys = Object.keys(w);
       if (keys.length && !keys.some((k) => w[k] > 0)) for (const k of keys) w[k] = 1;
+      app = !force && this._appUser(type);
+      if (app && keys.length > 1) this._waze(w, sample);
       move = keys.length ? rng.weighted(w) : 'straight';
     }
     const lane = this.chooseLane(lanes, type, move);
-    if (!lane) return;
-    const route = this.buildRoute(lane, move, type);
-    const item = { type, personality, route, emergency };
-    if (emergency) {
+    if (!lane) return null;
+    const route = this.buildRoute(lane, move, type, app);
+    const item = { type, personality, route, emergency, flags: force?.flags || null, color: force?.color || null, lane };
+    if (force && !emergency) {
+      this.pending.get(lane).unshift(item);
+    } else if (emergency) {
       this.sim.stats.emergencyArrivals++;
       this.sim.stats.emergencyArrivalTimes.push(this.sim.scheduleTime);
       this.pending.get(lane).unshift(item);
@@ -197,6 +260,20 @@ export class VehicleSpawner {
       this.pending.get(lane).push(item);
     }
     this.arrivals.push(this.sim.time);
+    return item;
+  }
+
+  /** Queue a vehicle right behind `lead` (still waiting off-map), on the very same route. */
+  queueBehind(lead, type, { flags = null, color = null, personality = 'patient' } = {}) {
+    const q = this.pending.get(lead.lane);
+    const at = q.indexOf(lead);
+    if (at < 0) return null;
+    // behind the lead and whoever of its convoy is already queued after it
+    let i = at + 1;
+    while (i < q.length && q[i].convoyOf === lead) i++;
+    const item = { type, personality, route: new Route(lead.route.entries.map((e) => e.seg)), emergency: false, flags, color, lane: lead.lane, convoyOf: lead };
+    q.splice(i, 0, item);
+    return item;
   }
 
   trySpawn(lane, item) {
@@ -216,7 +293,7 @@ export class VehicleSpawner {
       spec,
       personality: PERSONALITIES[item.personality],
       route: item.route,
-      color: this.rng.pick(spec.colors),
+      color: item.color || this.rng.pick(spec.colors),
       s,
       v: Math.max(0, v0),
       time: sim.time,
@@ -229,7 +306,14 @@ export class VehicleSpawner {
     const [r0, r1] = veh.p.reaction || [0.5, 0.8];
     veh.reaction = item.emergency ? 0.3 : this.rng.range(r0, r1);
     veh.idealTravel = 0;
-    if (!item.emergency && LOADING_TYPES.has(item.type) && this.rng.chance(this.level.loadingStops || 0)) {
+    if (item.flags) Object.assign(veh, item.flags);
+    item.vehicle = veh;
+    sim.passengers?.fill(veh);
+    // A packed jeepney usually drives past the stop ("PUNO NA!") unless someone wants off.
+    // (no random draws at all on levels without loading stops, so their traffic is unchanged)
+    const stops = this.level.loadingStops || 0;
+    const packed = stops > 0 && veh.capacity && veh.passengers >= veh.capacity && this.rng.chance(0.6);
+    if (!item.emergency && !packed && LOADING_TYPES.has(item.type) && (stops > 0 || CLASSIC_LOADERS.has(item.type)) && this.rng.chance(stops)) {
       const exit = item.route.exitLane;
       // Curbside stop on general roads; buses also stop on their own busway (median stations).
       const stopLane = (exit.isCurb && exit.type === 'general') || (exit.type === 'bus' && item.type === 'bus');

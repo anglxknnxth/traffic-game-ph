@@ -1,7 +1,12 @@
 // Settings screen markup and handlers.
 
+// Chill max traffic slider, in percent; its last notch means no limit.
+const CHILL_NO_LIMIT = 325;
+const chillLabel = (pct) => (pct >= CHILL_NO_LIMIT ? 'Walang limit' : `${pct}%`);
+
 export function settingsMarkup(save, confirmReset = false) {
   const s = save.settings;
+  const chillPct = s.chillMaxTraffic ? Math.round(s.chillMaxTraffic * 100) : CHILL_NO_LIMIT;
   return `
     <div class="panel narrow">
       <h2>Settings</h2>
@@ -16,6 +21,8 @@ export function settingsMarkup(save, confirmReset = false) {
       <label class="field check"><input type="checkbox" ${s.rain !== false ? 'checked' : ''} data-set="rain" /><span>🌧️ Ulan (rain showers)</span></label>
       <label class="field check"><input type="checkbox" ${s.people !== false ? 'checked' : ''} data-set="people" /><span>🚶 Mga tao (pedestrians)</span></label>
       <p class="muted small">Rain and people changes apply from the next game you start (or Restart).</p>
+      <label class="field"><span>☕ Chill Endless · max traffic: <b data-out="chillMaxTraffic">${chillLabel(chillPct)}</b></span><input type="range" min="100" max="${CHILL_NO_LIMIT}" step="25" value="${chillPct}" data-set="chillMaxTraffic" /></label>
+      <p class="muted small">Traffic in Chill still grows over time, but stops at this level (100% = starting traffic).</p>
       <label class="field check"><input type="checkbox" ${s.debug ? 'checked' : ''} data-set="debug" /><span>Show intersection reservations (debug)</span></label>
       <div class="field danger-zone">
         ${confirmReset ? '<span>Erase all progress and scores?</span><div class="row-btns"><button class="btn danger" data-set="reset-confirm">Yes, erase</button><button class="btn" data-set="reset-cancel">Cancel</button></div>' : '<button class="btn ghost" data-set="reset">Reset progress…</button>'}
@@ -28,7 +35,14 @@ export function bindSettings(root, game, rerender) {
   root.querySelectorAll('[data-set]').forEach((el) => {
     const key = el.dataset.set;
     if (el.type === 'range') {
-      el.addEventListener('input', () => (key === 'music' ? game.setMusicVolume(el.value / 100) : game.setVolume(el.value / 100)));
+      el.addEventListener('input', () => {
+        const v = Number(el.value);
+        if (key === 'chillMaxTraffic') {
+          game.setChillMaxTraffic(v >= CHILL_NO_LIMIT ? 0 : v / 100);
+          root.querySelector('[data-out="chillMaxTraffic"]').textContent = chillLabel(v);
+        } else if (key === 'music') game.setMusicVolume(v / 100);
+        else game.setVolume(v / 100);
+      });
     } else if (el.type === 'checkbox') {
       el.addEventListener('change', () => {
         if (key === 'muted') game.setMuted(el.checked);

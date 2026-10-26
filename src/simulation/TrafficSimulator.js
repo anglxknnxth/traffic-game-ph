@@ -99,6 +99,7 @@ export class TrafficSimulator {
     // Growing city: only the open districts are the player's (the rest runs on AUTO).
     this.openNodes = null;
     this.demandMul = 1;
+    this.rampMax = Infinity; // Chill Endless: the player's cap on the demand ramp
     this.growth = level.growth ? new CityGrowth(this, level.growth) : null;
     this.enforcement = new Enforcement(this);
     this.counterflow = new CounterflowManager(this);
@@ -447,8 +448,9 @@ export class TrafficSimulator {
     }
     // Someone out in the oncoming lane beside us is not our leader (until they cut back in).
     let next = idx + 1;
-    // Those running up to the stop line are never anyone's leader here.
-    while (next < list.length && list[next].cf && list[next].cf.phase !== 'in' && ((list[next].cf.front && list[next].cf.lane === seg) || list[next].localS - list[next].hl - v.localS - v.hl < 0.5)) next++;
+    // Those running up to the stop line are never anyone's leader here, nor is one waiting out there
+    // to zip back in that has to let us by first (it goes in behind us). One still signalling is.
+    while (next < list.length && this.counterflow.outBeside(list[next], seg, v)) next++;
     if (idx >= 0 && next < list.length) {
       const o = list[next];
       const lead = ghost && ghost.localS < o.localS ? ghost : o;

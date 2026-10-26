@@ -61,7 +61,7 @@ export class VehicleAI {
     const front = v.s + v.hl;
 
     // 1. Car following (out in the oncoming lane the queue beside us is no leader)
-    const cfRun = v.cf && v.cf.phase !== 'in';
+    const cfRun = v.cf && v.cf.phase !== 'in' && v.cf.phase !== 'signal';
     // (out there, only another vehicle in the same oncoming stretch is)
     const lead = cfRun ? sim.counterflow.cfLeader(v) : sim.findLeader(v, Math.max(55, v.v * 5));
     if (lead) {

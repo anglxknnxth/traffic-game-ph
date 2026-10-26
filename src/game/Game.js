@@ -103,6 +103,13 @@ export class Game {
     writeSave(this.save);
   }
 
+  /** Chill Endless max traffic (ramp cap, 0 = no limit). Applies to a running Chill game right away. */
+  setChillMaxTraffic(v) {
+    this.save.settings.chillMaxTraffic = v;
+    writeSave(this.save);
+    if (this.session?.mode === 'chill') this.session.sim.rampMax = v || Infinity;
+  }
+
   _options() {
     return { rain: this.save.settings.rain !== false, people: this.save.settings.people !== false };
   }
@@ -117,6 +124,7 @@ export class Game {
     this.audio.unlock();
     const level = this.levels.withOptions(this.levels.get(mode, id), this._options());
     const sim = this.levels.createSim(level);
+    if (mode === 'chill') sim.rampMax = this.save.settings.chillMaxTraffic || Infinity;
     this.session = {
       mode,
       id: level.id,

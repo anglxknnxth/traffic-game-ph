@@ -27,6 +27,7 @@ export const DEFAULT_SAVE = Object.freeze({
     showMetrics: true,
     rain: true, // rain showers in every mode
     people: true, // pedestrians in every mode
+    chillMaxTraffic: 0, // cap on the Chill Endless demand ramp (1–3x); 0 = no limit
   },
 });
 
@@ -97,6 +98,7 @@ export function validateSave(raw) {
     if (typeof s.showMetrics === 'boolean') d.settings.showMetrics = s.showMetrics;
     if (typeof s.rain === 'boolean') d.settings.rain = s.rain;
     if (typeof s.people === 'boolean') d.settings.people = s.people;
+    if (isNum(s.chillMaxTraffic) && (s.chillMaxTraffic === 0 || (s.chillMaxTraffic >= 1 && s.chillMaxTraffic <= 3))) d.settings.chillMaxTraffic = s.chillMaxTraffic;
   }
   return d;
 }

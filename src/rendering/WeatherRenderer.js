@@ -10,9 +10,6 @@ import { Rng } from '../utils/math.js';
 
 const DROPS = 420;
 const SPRITE = 128; // px across a cached radial falloff
-const STREAK_STEP = 0.02; // rain streak length steps (relative), for the streak images
-const RINGS = 48; // splash ring images through one splash
-
 /**
  * A radial falloff, `rgb` at full alpha in the centre to transparent at the rim, as an image. Drawn
  * with globalAlpha = a over a circle of radius r it gives exactly what a fresh
@@ -134,14 +131,9 @@ export class WeatherRenderer {
 
   _night(ctx, canvas, camera, sim, lamps, vehicles, dark, buildings) {
     const lc = this.light;
-    // The light map is all soft falloff: on high-density screens it is drawn at CSS-pixel
-    // resolution and stretched, a quarter of the pixels to fill three times a frame.
-    const q = camera.dpr >= 2 ? 0.5 : 1;
-    const lw = Math.ceil(canvas.width * q);
-    const lh = Math.ceil(canvas.height * q);
-    if (lc.width !== lw || lc.height !== lh) {
-      lc.width = lw;
-      lc.height = lh;
+    if (lc.width !== canvas.width || lc.height !== canvas.height) {
+      lc.width = canvas.width;
+      lc.height = canvas.height;
     }
     const l = lc.getContext('2d');
     l.setTransform(1, 0, 0, 1, 0, 0);
@@ -153,10 +145,6 @@ export class WeatherRenderer {
     // Cut light pools out of the darkness.
     l.globalCompositeOperation = 'destination-out';
     camera.apply(l);
-    if (q !== 1) {
-      const m = l.getTransform();
-      l.setTransform(m.a * q, 0, 0, m.d * q, m.e * q, m.f * q);
-    }
     const vr = camera.visibleRect(10);
     const black = this._sprite('0,0,0');
     const hole = (x, y, r, a) => {
@@ -203,7 +191,7 @@ export class WeatherRenderer {
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(lc, 0, 0, lw / q, lh / q);
+    ctx.drawImage(lc, 0, 0);
     ctx.restore();
 
     // Warm additive glow on top of the pools.
@@ -239,18 +227,19 @@ export class WeatherRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const fall = 1100 * k;
     const len = (12 + 10 * rain) * k;
-    // Streaks and rings are stamped from small pre-drawn images (one per streak length / ring size)
-    // rather than stroked as hundreds of thin paths every frame.
-    const S = this._rainSprites(len, k);
-    ctx.globalAlpha = 0.22 + 0.25 * rain;
+    ctx.strokeStyle = `rgba(205,220,240,${0.22 + 0.25 * rain})`;
+    ctx.lineWidth = 1 * k;
+    ctx.beginPath();
     for (let i = 0; i < n; i++) {
       const d = this.drops[i];
       const y = (((d.y * H + time * fall * d.speed) % (H + len)) + H + len) % (H + len) - len;
       const x = (((d.x * W + y * 0.18) % W) + W) % W;
-      const sp = S.streaks[Math.round((d.len - 0.7) / STREAK_STEP)];
-      ctx.drawImage(sp.c, x - sp.ox, y - sp.oy);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - len * 0.18 * d.len, y + len * d.len);
     }
+    ctx.stroke();
     // Splash rings where drops hit the ground
+    ctx.strokeStyle = `rgba(210,225,245,${0.3 * rain})`;
     const m = Math.round(this.splashes.length * rain);
     for (let i = 0; i < m; i++) {
       const sp = this.splashes[i];
@@ -259,56 +248,11 @@ export class WeatherRenderer {
       const cycle = Math.floor(u); // each ring lands somewhere new every cycle
       const x = ((sp.x + cycle * 0.618034) % 1) * W;
       const y = ((sp.y + cycle * 0.414214) % 1) * H;
-      const ring = S.rings[Math.min(RINGS - 1, Math.round(t * (RINGS - 1)))];
-      ctx.globalAlpha = (1 - t) * 0.3 * rain;
-      ctx.drawImage(ring.c, x - ring.o, y - ring.o / 2);
+      ctx.globalAlpha = 1 - t;
+      ctx.beginPath();
+      ctx.ellipse(x, y, (1 + 5 * t) * k, (0.5 + 2.5 * t) * k, 0, 0, Math.PI * 2);
+      ctx.stroke();
     }
     ctx.restore();
-  }
-
-  /** Streak images for every drop length and ring images through a splash, for this streak length. */
-  _rainSprites(len, k) {
-    const key = `${Math.round(len * 2)}|${k}`;
-    if (this._rainCache?.key === key) return this._rainCache.sprites;
-    const make = (w, h, draw) => {
-      const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.ceil(w));
-      c.height = Math.max(1, Math.ceil(h));
-      const g = c.getContext('2d');
-      g.lineWidth = k;
-      draw(g);
-      return c;
-    };
-    const pad = k + 1;
-    const streaks = [];
-    for (let s = 0; s <= Math.round(0.6 / STREAK_STEP); s++) {
-      const L = len * (0.7 + s * STREAK_STEP);
-      const dx = L * 0.18;
-      const c = make(dx + 2 * pad, L + 2 * pad, (g) => {
-        g.strokeStyle = 'rgb(205,220,240)';
-        g.beginPath();
-        g.moveTo(pad + dx, pad);
-        g.lineTo(pad, pad + L);
-        g.stroke();
-      });
-      streaks.push({ c, ox: pad + dx, oy: pad });
-    }
-    const rings = this._rainCache?.k === k ? this._rainCache.sprites.rings : [];
-    for (let i = rings.length; i < RINGS; i++) {
-      const t = i / (RINGS - 1);
-      const rx = (1 + 5 * t) * k;
-      const ry = (0.5 + 2.5 * t) * k;
-      const o = rx + pad;
-      const c = make(2 * o, o, (g) => {
-        g.strokeStyle = 'rgb(210,225,245)';
-        g.beginPath();
-        g.ellipse(o, o / 2, rx, ry, 0, 0, Math.PI * 2);
-        g.stroke();
-      });
-      rings.push({ c, o });
-    }
-    const sprites = { streaks, rings };
-    this._rainCache = { key, k, sprites };
-    return sprites;
   }
 }

@@ -43,7 +43,7 @@ export class VehicleSpawner {
   /** Arrival rate (veh/s) for an approach at time t. */
   rate(key, t) {
     const perMin = this.baseDemand(key);
-    const ramp = 1 + (this.level.demandRamp || 0) * (Math.max(0, this.sim.scheduleTime) / 60);
+    const ramp = Math.min(this.sim.rampMax ?? Infinity, 1 + (this.level.demandRamp || 0) * (Math.max(0, this.sim.scheduleTime) / 60));
     const amp = this.level.demandWave || 0;
     const phase = this.wavePhase.get(key) || 0;
     const wave = 1 + amp * Math.sin((t / 55) * Math.PI * 2 + phase) * 0.8 + amp * 0.4 * Math.sin((t / 23) * Math.PI * 2 + phase * 1.7);

@@ -8,13 +8,18 @@
 //               it legally to get to the front faster
 //
 // How it stays collision-free: the vehicle never leaves its own lane in the simulation. It keeps its
-// route coordinate and only slides sideways (a lateral offset) into the oncoming lane, so every
+// route coordinate and only moves sideways (a lateral offset) into the oncoming lane, so every
 // move, sideways ones included, passes the collision gate. Before it swings out it reserves the
 // stretch of the oncoming lane it will use as a blockage, and only when no oncoming vehicle is in
 // that stretch or too close to stop before it. It also picks its way back in first: the vehicle it
 // will end up in front of (the follower) sees it as its leader as soon as it is ahead, so the gap
-// stays open; it slides back when the gap beside it is clear. A HULI! click, or 15 s stuck out
-// there, sends it back at once (the vehicle beside or behind it holds).
+// stays open. A HULI! click, or 15 s stuck out there, sends it back (the vehicle behind it holds).
+//
+// Swinging out and back in looks like a normal lane change: the indicator blinks first, then the
+// offset eases across over the next few metres of forward travel (a "sweep", see Vehicle._cfOff)
+// and the nose follows the curve. Only a vehicle stuck halfway falls back to sliding sideways.
+// When the player lifts the cones, those still well short of the stop line zip back in: each waits
+// beside the queue for a gap, never right behind another one that just came back in.
 
 import { laneSAt } from './PedestrianManager.js';
 import { makeObb } from '../utils/math.js';
@@ -32,6 +37,11 @@ const CHECK_EVERY = 30; // steps between decisions per vehicle
 const TAPER = 6; // m of the taper where a contraflow lane begins
 const MAX_YAW = 0.32; // rad: how far the nose turns while swinging out or back
 const YAW_EASE = 0.25; // s: how quickly the nose follows the swing
+const SIGNAL_FIRST = 0.8; // s of indicator before swinging out (as for a lane change)
+const CUT_MIN = 4; // m of travel needed to swing back in
+const CUT_MAX = 10;
+const MERGE_CLEAR = 15; // cones lifted: those this close to the stop line go on through instead
+const ZIP_GAP = 8; // s: nobody zips in right behind someone who just came back from the cones
 
 export const COUNTERFLOW_DEFAULTS = Object.freeze({ moto: 0, car: 0, minWait: 10, minQueue: 4, emergency: false });
 
@@ -113,14 +123,17 @@ export class CounterflowManager {
     const zone = this.zones.find((z) => z.lane === lane && z.state === 'open');
     if (zone) {
       // A coned contraflow lane: queued drivers whose whole body is beside it may use it.
-      if (v.v > 2.5 || v.localS - v.hl < zone.s0 + 1 || v.localS + v.hl > lane.length - 3 || !sim.rng.chance(0.35)) return;
+      if (v.v > 2.5 || v.localS - v.hl < zone.s0 + 1 || v.localS + v.hl > lane.length - 3 || !this._canPullOut(v) || !sim.rng.chance(0.35)) return;
       // It is a lane for those turning left (or U-turning) at the junction ahead.
       const move = v.nextConnEntry()?.seg.movement;
       if (move !== 'left' && move !== 'uturn') return;
-      // Only into a free bit of the lane: nobody already in it close behind or alongside.
+      // Only into a free bit of the lane: nobody already in it close behind, alongside, or within
+      // the stretch it needs to swing out (and room for the swing before the stop line).
+      const out = this._swingL(v);
+      if (v.localS + v.hl + out > lane.length - 1.5) return;
       for (const o of zone.users) {
         const p = this._along(o, lane);
-        if (p !== null && p > v.localS - v.hl - 10 && p < v.localS + v.hl + o.hl + 2) return;
+        if (p !== null && p > v.localS - v.hl - 10 && p < v.localS + v.hl + o.hl + out + 2) return;
       }
       this._startFront(v, lane, opp, { zone, legal: true, target: lane.length - 0.3 });
       return;
@@ -134,6 +147,8 @@ export class CounterflowManager {
     // One at a time on a stretch of road
     if (this.active.some((o) => o.cf && o.cf.opp === opp)) return;
     v.cfNextTry = sim.time + 6;
+    // Too close behind the car ahead to swing the nose out
+    if (!this._canPullOut(v)) return;
     // The longer the wait, the likelier they lose patience.
     const base = moto ? this.cfg.moto : this.cfg.car;
     if (!sim.rng.chance(Math.min(0.9, base * (1 + v.waitTime / 20)))) return;
@@ -154,14 +169,17 @@ export class CounterflowManager {
     const ahead = list.slice(idx + 1).filter((o) => !o.cf);
     if (ahead.length < this.cfg.minQueue) return false;
     const limit = lane.length - STOP_CLEAR;
+    const out = this._swingL(v);
     for (let k = Math.min(maxK, ahead.length); k >= 1; k--) {
       const X = ahead[k - 1];
       const Y = ahead[k] || null;
       const gapRear = X.localS + X.hl + 1.0;
       const gapFront = Math.min(limit, Y ? Y.localS - Y.hl - 1.0 : limit);
       const target = gapRear + v.spec.length + 0.3; // our front once we are just ahead of X
-      if (target > gapFront || target > limit) continue;
-      const sa = this.oppS(lane, opp, target + 3);
+      // Room to swing back in (a few metres of travel) before the vehicle at the front of the gap,
+      // and room to swing out before getting there.
+      if (target + CUT_MIN > gapFront || target > limit || target - v.localS - v.hl < out) continue;
+      const sa = this.oppS(lane, opp, target + CUT_MIN + 3);
       const sb = this.oppS(lane, opp, v.localS - v.hl - 1);
       if (!this._windowClear(opp, Math.min(sa, sb), Math.max(sa, sb))) return false;
       this._start(v, lane, opp, { target, follower: X, sa: Math.min(sa, sb), limit });
@@ -176,7 +194,7 @@ export class CounterflowManager {
    */
   _reach(v, lane, opp, margin) {
     const rear = this.oppS(lane, opp, v.localS - v.hl - 1);
-    const least = v.localS + v.hl + 2 * v.spec.length;
+    const least = v.localS + v.hl + Math.max(2 * v.spec.length, this._swingL(v));
     for (let t = lane.length - 0.3; t >= least; t -= 2) {
       const sa = this.oppS(lane, opp, t + 3);
       if (this._windowClear(opp, Math.min(sa, rear), Math.max(sa, rear), margin)) return t;
@@ -196,7 +214,8 @@ export class CounterflowManager {
     const full = -(lane.offset + opp.offset); // to the left of travel
     const block = zone ? null : { id: `cf:${v.id}`, kind: 'cf', label: '', laneObjs: [opp], s: Math.max(0.5, sa), active: true, done: false, start: -Infinity, end: Infinity };
     if (block) sim.blockages.push(block);
-    v.cf = { lane, opp, phase: 'out', full, target, follower, legal, zone, block, t: 0, emergency, forced: false, limit, front: false };
+    // Indicator first; the swing out starts when it has blinked for a moment.
+    v.cf = { lane, opp, phase: 'signal', signalT: SIGNAL_FIRST, sweep: null, full, target, follower, legal, zone, block, t: 0, emergency, forced: false, limit, front: false };
     v.cfOff = 0;
     v.cfYaw = 0;
     this.active.push(v);
@@ -219,7 +238,7 @@ export class CounterflowManager {
     const lead = this.sim.findLeader(v, 40);
     const held = v.v < 3 && lead && lead.vehicle.v < 4 && lead.gap < 20;
     v.cfSlowT = held ? (v.cfSlowT || 0) + CHECK_EVERY / 60 : 0;
-    if (v.cfSlowT < 1.5) return;
+    if (v.cfSlowT < 1.5 || !this._canPullOut(v)) return;
     const target = this._reach(v, lane, opp, 3);
     if (target !== null) this._startFront(v, lane, opp, { target, emergency: true });
   }
@@ -260,18 +279,65 @@ export class CounterflowManager {
     this._slide(v, 0, y - y * k);
   }
 
-  /** Would the vehicle fit back in its own lane right where it is? */
-  _fitsBack(v) {
+  /** Metres of forward travel over which the vehicle swings across (a tight lane change). */
+  _swingL(v) {
+    // Never sharper than ~38° (motorcycles) or ~33° (everything else) at the steepest point.
+    const w = Math.abs(v.cf?.full ?? -(v.segment.offset + (this.oppOf(v.segment)?.offset ?? 0)));
+    const minL = Math.max(MOTO.has(v.type) ? 4.5 : v.spec.length > 6 ? 1.6 * v.spec.length : 7, w * (MOTO.has(v.type) ? 2.0 : 2.4));
+    return Math.max(minL, Math.min(20, v.v * 2.8));
+  }
+
+  /** Is there room ahead in its own lane for the nose to swing out before the car in front? */
+  _canPullOut(v) {
+    const lead = this.sim.findLeader(v, 30);
+    return !lead || lead.gap >= 0.35 * this._swingL(v);
+  }
+
+  /** Ease the sideways offset to `to` over the next L metres of forward travel. */
+  _sweep(v, to, L) {
+    v.cf.sweep = { s0: v.s, L, from: v._cfOff(v.s), to };
+  }
+
+  /**
+   * Swing back into the own lane like a lane change, into a real gap: room ahead for the sweep, and
+   * the driver behind either far enough back or stopped to let it in. False when there is none.
+   */
+  _cutIn(v) {
     const sim = this.sim;
-    const old = v.cfOff;
-    const oldYaw = v.cfYaw || 0;
-    v.cfOff = 0;
-    v.cfYaw = 0;
-    const tmp = this._tmp2 || (this._tmp2 = makeObb());
-    v.poseAt(v.s, tmp);
-    v.cfOff = old;
-    v.cfYaw = oldYaw;
-    return sim.collision.isClear(tmp, sim.collision.neighbors(v, Math.abs(old) + 0.5));
+    const cf = v.cf;
+    const lane = cf.lane;
+    let A = null;
+    let F = null;
+    const scan = (o) => {
+      if (o === v || (o.cf && o.cf.phase !== 'in' && o.cf.phase !== 'signal')) return;
+      if (o.localS >= v.localS) {
+        if (!A || o.localS < A.localS) A = o;
+      } else if (!F || o.localS > F.localS) F = o;
+    };
+    for (const o of lane.vehicles) scan(o);
+    if (lane.ghosts) for (const o of lane.ghosts) scan(o);
+    // Zipper: one from the cones, then one from the lane; never right behind another one.
+    if (cf.merge) {
+      cf.zipOk = !(A && (A.zipAt > sim.time - ZIP_GAP || A.cf?.merge));
+      if (!cf.zipOk) return false;
+    }
+    const end = A ? A.localS - A.hl : lane.length - 0.3;
+    // (the front limit sits a little past the end of the curve, so it is driven to the very end)
+    const L = Math.min(CUT_MAX, end - Math.max(1.5, v.p.minGap) - 0.5 - v.localS - v.hl);
+    if (L < CUT_MIN) return false;
+    if (F) {
+      const gapBack = v.localS - v.hl - F.localS - F.hl;
+      // A driver who has stopped (or is holding back for us) lets the tail start in a little early:
+      // the body stays well out to the side for the first part of the sweep.
+      const letting = F.v < 0.5 || F.leaderId === v.id;
+      if (gapBack < (letting ? 0.5 - 0.35 * L : 0.5)) return false;
+      if (!letting && sim.laneChanger._accWith(F, null, gapBack) < -(F.p.safeDecel ?? 3)) return false;
+    }
+    if (!this._extend(v, v.localS + v.hl + L)) return false;
+    this._sweep(v, 0, L);
+    cf.phase = 'in';
+    cf.stuckIn = 0;
+    return true;
   }
 
   /** One step of the sideways swing toward offset `goal`: speed and heading follow forward speed. */
@@ -289,18 +355,52 @@ export class CounterflowManager {
     const cf = v.cf;
     if (!cf) return;
     cf.t += dt;
+    // Mid-sweep, the offset follows the distance travelled; keep the plain values in step with it.
+    if (cf.sweep) {
+      v.cfOff = v._cfOff(v.s);
+      v.cfYaw = v._cfYaw(v.s);
+    }
     // Left its lane (crossed into the junction): ease back over the box once the whole body is
     // past the stop line (clear of the queue it came up beside).
     if (v.segment !== cf.lane) {
       const e = v.route.entries[v.segIdx];
       if (!cf.decay && v.s - v.hl > e.start + 1) {
-        cf.decay = { s0: v.s, L: 16, off0: v.cfOff };
-        v.cfYaw = 0;
+        this._sweep(v, 0, 16);
+        cf.decay = cf.sweep;
       }
       if (cf.decay && v.s > cf.decay.s0 + cf.decay.L) this._finish(v);
       return;
     }
+    if (cf.phase === 'signal') {
+      cf.signalT -= dt;
+      if (cf.signalT <= 0) {
+        cf.phase = 'out';
+        this._sweep(v, cf.full, this._swingL(v));
+      }
+      return;
+    }
+    if (cf.phase === 'out' && cf.sweep) {
+      if (v.s >= cf.sweep.s0 + cf.sweep.L - 0.02) {
+        cf.sweep = null;
+        v.cfOff = cf.full;
+        v.cfYaw = 0;
+        cf.phase = 'run';
+      } else {
+        // Can't get out (something in the way, not just someone out there ahead waiting for their
+        // light): stop the sweep here and tuck back in sideways.
+        cf.stuckOut = v.v < 0.05 && !this.cfLeader(v) ? (cf.stuckOut || 0) + dt : 0;
+        if (cf.stuckOut > 3 && !cf.emergency) {
+          cf.sweep = null;
+          cf.phase = 'in';
+          cf.front = false;
+          cf.forced = true;
+          cf.target = Math.min(cf.target, v.localS + v.hl);
+        }
+      }
+      return;
+    }
     if (cf.phase === 'out') {
+      // (sideways fallback: swinging out again after a cut-in that got blocked)
       if (Math.abs(cf.full - v.cfOff) < 0.02) cf.phase = 'run';
       else {
         const before = v.cfOff;
@@ -324,8 +424,18 @@ export class CounterflowManager {
       for (const o of cf.opp.vehicles) o.pullTo = 0.9;
       return;
     }
-    if (!cf.front) {
-      const passed = !cf.follower || cf.follower.segment !== cf.lane || v.localS - v.hl >= cf.follower.localS + cf.follower.hl + 0.6;
+    if (cf.merge) {
+      // Cones lifted: wait beside the queue (no running ahead of it) until there is a gap to zip into.
+      if (cf.phase === 'run') {
+        if (!cf.held) {
+          cf.target = Math.min(cf.target, v.localS + v.hl);
+          cf.held = true;
+        }
+        this._cutIn(v);
+      }
+    } else if (!cf.front) {
+      // Past the vehicle to get in front of (the tail may start in a little early, see _cutIn).
+      const passed = !cf.follower || cf.follower.segment !== cf.lane || v.localS - v.hl >= cf.follower.localS + cf.follower.hl + 0.6 - 0.35 * CUT_MIN;
       // Still beside someone in our own lane (the queue crept up): get just ahead of them, as far
       // as the reserved stretch allows.
       if (cf.phase === 'run') {
@@ -337,9 +447,9 @@ export class CounterflowManager {
           }
         }
       }
-      // Slide back only once the whole space beside us in our own lane is clear.
-      if (cf.phase === 'run' && (passed || cf.forced) && this._fitsBack(v)) cf.phase = 'in';
-    } else if (cf.phase === 'run' && cf.forced && this._fitsBack(v)) cf.phase = 'in';
+      // Swing back in once there is a real gap.
+      if (cf.phase === 'run' && (passed || cf.forced)) this._cutIn(v);
+    } else if (cf.phase === 'run' && cf.forced) this._cutIn(v);
     // Told to get back in but there is no room beside: rather than parking out there (and blocking
     // the oncoming lane), carry on to the stop line and through the junction.
     if (cf.forced && cf.phase === 'run') {
@@ -351,7 +461,17 @@ export class CounterflowManager {
         cf.noRoomT = 0;
       }
     }
-    if (cf.phase === 'in') {
+    if (cf.phase === 'in' && cf.sweep) {
+      if (v.s >= cf.sweep.s0 + cf.sweep.L - 0.02) this._finish(v);
+      else {
+        // Held up halfway in for long: finish the move sideways (below) instead.
+        cf.stuckIn = v.v < 0.05 ? (cf.stuckIn || 0) + dt : 0;
+        if (cf.stuckIn > 6) {
+          cf.sweep = null;
+          cf.stuckIn = 0;
+        }
+      }
+    } else if (cf.phase === 'in') {
       if (v.cfOff > -0.03 && Math.abs(v.cfYaw || 0) < 0.02) this._finish(v);
       else if (v.cfOff > -0.03) this._straighten(v, dt);
       else {
@@ -381,18 +501,26 @@ export class CounterflowManager {
     const cf = v.cf;
     if (cf.zone || !cf.block) {
       cf.target = target;
-      return;
+      return true;
     }
     const sa = Math.min(this.oppS(cf.lane, cf.opp, target + 3), cf.block.s);
-    if (sa < cf.block.s - 0.05 && !this._windowClear(cf.opp, sa, cf.block.s, cf.emergency ? 3 : 1.5)) return;
+    if (sa < cf.block.s - 0.05 && !this._windowClear(cf.opp, sa, cf.block.s, cf.emergency ? 3 : 1.5)) return false;
     cf.block.s = Math.max(0.5, sa);
     cf.target = target;
+    return true;
   }
 
-  /** HULI!, or stuck too long: stop advancing and slide back in beside the nearest vehicle behind. */
+  /** HULI!, or stuck too long: stop advancing and swing back in beside the nearest vehicle behind. */
   forceReturn(v) {
     const cf = v.cf;
     if (!cf || cf.emergency) return;
+    // Caught before it even pulled out, or already on its way back in.
+    if (cf.phase === 'signal') {
+      this._finish(v);
+      return;
+    }
+    v.cfDone = true;
+    if (cf.phase === 'in') return;
     cf.forced = true;
     cf.target = Math.min(cf.target, v.localS + v.hl); // stop here (or just past whoever is beside us)
     cf.follower = null;
@@ -410,6 +538,7 @@ export class CounterflowManager {
       if (k >= 0) sim.blockages.splice(k, 1);
     }
     if (cf.zone) cf.zone.users.delete(v);
+    if (cf.merge) v.zipAt = sim.time;
     v.cf = null;
     v.cfOff = 0;
     v.cfYaw = 0;
@@ -438,6 +567,15 @@ export class CounterflowManager {
     return !lead || lead.vehicle.segment !== cf.lane;
   }
 
+  /** Is o (ahead of v on `lane`) out in the oncoming lane, so not v's leader in its own lane? */
+  outBeside(o, lane, v) {
+    const cf = o.cf;
+    if (!cf || cf.phase === 'in' || cf.phase === 'signal') return false;
+    if (cf.front && cf.lane === lane) return true;
+    if (cf.merge && !cf.zipOk) return true;
+    return o.localS - o.hl - v.localS - v.hl < 0.5;
+  }
+
   /** The next vehicle ahead of v out in the same oncoming stretch (they follow each other there). */
   cfLeader(v) {
     const cf = v.cf;
@@ -445,7 +583,7 @@ export class CounterflowManager {
     if (at === null) return null;
     let best = null;
     for (const o of this.active) {
-      if (o === v || !o.cf || o.cf.lane !== cf.lane || o.cf.phase === 'in') continue;
+      if (o === v || !o.cf || o.cf.lane !== cf.lane || o.cf.phase === 'in' || o.cf.phase === 'signal') continue;
       const p = this._along(o, cf.lane);
       if (p === null || p <= at) continue;
       const gap = p - o.hl - at - v.hl;
@@ -465,6 +603,7 @@ export class CounterflowManager {
   frontLimit(v) {
     const cf = v.cf;
     if (!cf || v.segment !== cf.lane || this.atLine(v)) return null;
+    if (cf.phase === 'signal') return v.front; // stays put while the indicator blinks
     if (cf.emergency && cf.target >= cf.lane.length - 0.5) return null;
     return v.route.entries[v.segIdx].start + cf.target;
   }
@@ -537,11 +676,24 @@ export class CounterflowManager {
     return this.zones.find((z) => z.state !== 'gone' && (z.lane === lane || z.opp === lane)) || null;
   }
 
-  /** Take the cones away: nobody new goes in, the ones inside finish, then the cones come up. */
+  /**
+   * Take the cones away: nobody new goes in and the cones come up. Those already at (or near) the
+   * stop line go on through; the rest zip back into their own lane as gaps come (see _cutIn).
+   */
   closeZone(zone) {
     if (!zone || zone.state === 'closing' || zone.state === 'gone') return false;
     zone.state = 'closing';
     zone.placeT = 0;
+    for (const v of [...zone.users]) {
+      const cf = v.cf;
+      if (!cf || v.segment !== cf.lane || this.atLine(v) || v.localS + v.hl > cf.lane.length - MERGE_CLEAR) continue;
+      if (cf.phase === 'signal') {
+        this._finish(v); // had not pulled out yet
+        continue;
+      }
+      cf.merge = true;
+      cf.front = false;
+    }
     return true;
   }
 

@@ -184,23 +184,25 @@ export class Vehicle {
   _cfOff(s) {
     const cf = this.cf;
     if (!cf) return 0;
-    const d = cf.decay;
-    if (d) {
-      const t = (s - d.s0) / d.L;
-      if (t >= 1) return 0;
-      if (t <= 0) return d.off0;
-      return d.off0 * 0.5 * (1 + Math.cos(Math.PI * t));
+    // Swinging out or back in: the offset eases from `from` to `to` over L metres of travel, the
+    // same curve as a lane change (see lateralAt).
+    const w = cf.sweep;
+    if (w) {
+      const t = (s - w.s0) / w.L;
+      if (t >= 1) return w.to;
+      if (t <= 0) return w.from;
+      return w.from + (w.to - w.from) * 0.5 * (1 - Math.cos(Math.PI * t));
     }
     return this.cfOff || 0;
   }
 
-  /** Heading change while out in (or easing back from) the oncoming lane. */
+  /** Heading change while out in (or swinging to or from) the oncoming lane. */
   _cfYaw(s) {
-    const d = this.cf.decay;
-    if (!d) return this.cfYaw || 0;
-    const t = (s - d.s0) / d.L;
+    const w = this.cf.sweep;
+    if (!w) return this.cfYaw || 0;
+    const t = (s - w.s0) / w.L;
     if (t <= 0 || t >= 1) return 0;
-    return Math.atan((-d.off0 * 0.5 * Math.PI * Math.sin(Math.PI * t)) / d.L);
+    return Math.atan(((w.to - w.from) * 0.5 * Math.PI * Math.sin(Math.PI * t)) / w.L);
   }
 
   _pose(s) {
@@ -303,6 +305,11 @@ export class Vehicle {
   turnSignal() {
     if (this.lc) return this.lc.off > 0 ? -1 : 1; // moving toward the target lane
     if (this.lcPending) return this.lcPending.dir; // signalling before the move
+    if (this.cf && this.segment === this.cf.lane) {
+      const p = this.cf.phase;
+      if (p === 'signal' || p === 'out') return this.cf.full > 0 ? 1 : -1; // out into the oncoming lane
+      if (p === 'in' || this.cf.merge || this.cf.forced) return this.cf.full > 0 ? -1 : 1; // back in
+    }
     const ce = this.nextConnEntry();
     let conn = null;
     if (this.segment.kind === 'connector') conn = this.segment;

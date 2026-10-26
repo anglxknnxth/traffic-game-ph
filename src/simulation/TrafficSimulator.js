@@ -426,7 +426,8 @@ export class TrafficSimulator {
     }
     // Someone out in the oncoming lane beside us is not our leader (until they cut back in).
     let next = idx + 1;
-    while (next < list.length && list[next].cf && list[next].cf.phase !== 'in' && list[next].localS - list[next].hl - v.localS - v.hl < 0.5) next++;
+    // Those running up to the stop line are never anyone's leader here.
+    while (next < list.length && list[next].cf && list[next].cf.phase !== 'in' && ((list[next].cf.front && list[next].cf.lane === seg) || list[next].localS - list[next].hl - v.localS - v.hl < 0.5)) next++;
     if (idx >= 0 && next < list.length) {
       const o = list[next];
       const lead = ghost && ghost.localS < o.localS ? ghost : o;
@@ -487,7 +488,13 @@ export class TrafficSimulator {
   isLaneHead(v, ce) {
     const E = v.route.entries;
     if (E[v.segIdx + 1] !== ce) return false;
-    if (v.cf?.emergency) return true; // it came up the oncoming lane, beside the queue
+    if (v.cf) return this.counterflow.atLine(v); // it came up the oncoming lane, beside the queue
+    // Someone who came up beside the queue is still crossing the box out to the side: wait for them.
+    // (Or is at the line beside us: they go first.)
+    for (const o of this.counterflow.active) {
+      if (o === v || !o.cf || o.cf.lane !== v.segment || o.cf.phase === 'in') continue;
+      if (o.segment !== v.segment || o.reservations.size || this.counterflow.atLine(o)) return false;
+    }
     const list = v.segment.vehicles;
     const id = ce.seg.intersection.id;
     let idx = v.segOrder;
@@ -812,7 +819,7 @@ export class TrafficSimulator {
   updateBlockages() {
     if (this.blockages.some((b) => b.random && b.done)) this.blockages = this.blockages.filter((b) => !(b.random && b.done));
     for (const b of this.blockages) {
-      if (b.done || b.kind === 'ped' || b.kind === 'laneEnd') continue; // pedestrians and lane drops manage themselves
+      if (b.done || b.kind === 'ped' || b.kind === 'laneEnd' || b.kind === 'cf') continue; // pedestrians, lane drops and counterflow manage themselves
       const t = this.scheduleTime;
       if (!b.active && t >= b.start && t < b.end) {
         // A breakdown only "appears" on a free stretch of road.

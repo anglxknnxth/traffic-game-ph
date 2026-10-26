@@ -20,9 +20,10 @@ if (play) {
     const sim = game.session.sim;
     if (q.get('enf')) for (const id of q.get('enf').split(',')) sim.enforcement.toggle(id);
     if (q.get('cone')) {
-      const [cid, arm] = q.get('cone').split(':');
+      // &cone=A:S:40 starts the cones 40 m along the lane (default: 80 m before the junction)
+      const [cid, arm, from] = q.get('cone').split(':');
       const lane = sim.network.byId.get(cid)?.approachLanes[arm]?.[0];
-      if (lane) sim.counterflow.openZone(lane);
+      if (lane) sim.counterflow.openZone(lane, from ? { from: Number(from) } : {});
     }
     if (q.get('enf') || q.get('cone')) {
       game.hud.buildPanels(sim);

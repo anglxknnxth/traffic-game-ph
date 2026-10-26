@@ -176,7 +176,7 @@ describe('Metro Manila: skyway, toll plaza, underpass', () => {
 
 describe('AUTO lights', () => {
   it('serve every road with traffic within about a minute and never show conflicting greens', () => {
-    const sim = lm.createSim({ ...lm.get('career', 7), autoLights: true, fail: null }, 3);
+    const sim = lm.createSim({ ...lm.get('career', 7), autoLights: true, fail: null, counterflow: { moto: 0, car: 0, emergency: false } }, 3);
     const lastGreen = new Map();
     let worst = 0;
     run(sim, 240, (s, i) => {
@@ -316,19 +316,53 @@ describe('Counterflow and enforcers', () => {
     expect(sim.stats.counterflows || 0).toBeGreaterThan(0);
     expect(caught).toBeGreaterThan(0);
     // caught vehicles never try again
-    for (const v of sim.vehicles) if (v.caught) expect(!v.cf || v.cf.forced).toBe(true);
+    for (const v of sim.vehicles) if (v.caught) expect(!v.cf || v.cf.forced || v.cf.noStuck).toBe(true);
   });
 
   it('a contraflow lane opens behind its cones, gets used, and nobody hits anything', () => {
-    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 16, S: 5, E: 5, W: 5 }, mix: { car: 0.6, motorcycle: 0.4 }, initialGroups: { A: 'E' }, enforcer: { count: 2 } }), { seed: 2 });
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 16, S: 5, E: 5, W: 5 }, mix: { car: 0.6, motorcycle: 0.4 }, turns: { left: 0.4, right: 0.15 }, initialGroups: { A: 'E' }, enforcer: { count: 2 } }), { seed: 2 });
     const lane = sim.network.byId.get('A').approachLanes.N[0];
     const users = new Set();
     run(sim, 120, (s, i) => {
       if (i === 10 * 60) expect(typeof s.counterflow.openZone(lane)).toBe('object');
       if (i === 60 * 60) s.requestPhase('A', 'N');
-      for (const v of s.counterflow.active) if (v.cf.legal) users.add(v.id);
+      for (const v of s.counterflow.active) {
+        if (!v.cf.legal || users.has(v.id)) continue;
+        users.add(v.id);
+        // only drivers turning left (or U-turning) take the contraflow lane
+        expect(['left', 'uturn']).toContain(v.route.entries[v.route.connectorIdx[v.nextConn] ?? v.segIdx + 1]?.seg.movement);
+      }
     });
     expect(users.size).toBeGreaterThan(0);
+  });
+
+  it('cones start where the road was tapped, a tap on them finds the zone, and they come up at once', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 16, S: 6, E: 5, W: 5 }, turns: { left: 0.45, right: 0.1 }, initialGroups: { A: 'E' } }), { seed: 3 });
+    const A = sim.network.byId.get('A');
+    const lane = A.approachLanes.N[0];
+    const z = sim.counterflow.openZone(lane, { from: 40 });
+    expect(Math.abs(z.s0 - 40)).toBeLessThan(0.01);
+    const q = { x: 0, y: 0 };
+    lane.path.pointAt(lane.length, q);
+    expect(Math.hypot(z.cones[0].x - q.x, z.cones[0].y - q.y)).toBeLessThan(6);
+    run(sim, 3);
+    // the hit test: on a cone, in the middle of the coned lane, and nowhere near
+    expect(sim.counterflow.zoneAtPoint(z.cones[1].x, z.cones[1].y)).toBe(z);
+    z.opp.path.pointAt(20, q);
+    expect(sim.counterflow.zoneAtPoint(q.x, q.y)).toBe(z);
+    expect(sim.counterflow.zoneAtPoint(q.x + 300, q.y + 300)).toBeNull();
+    run(sim, 60, (s, i) => {
+      if (i === 30 * 60) s.requestPhase('A', 'N');
+    });
+    const before = z.placed;
+    sim.counterflow.closeZone(z);
+    run(sim, 1);
+    expect(z.placed).toBeLessThan(before);
+    expect(z.opp.closed).toBe(z.users.size > 0 || z.placed > 0);
+    sim.requestPhase('A', 'N');
+    run(sim, 60);
+    expect(z.state).toBe('gone');
+    expect(z.opp.closed).toBe(false);
   });
 
   it('contraflow cones line the oncoming lanes, oncoming drivers merge out, one-lane roads are refused', () => {
@@ -341,7 +375,7 @@ describe('Counterflow and enforcers', () => {
     // The main row sits on the line between the borrowed lane and the oncoming lane that stays open.
     const q = { x: 0, y: 0 };
     const dist = (l, c) => Math.min(...Array.from({ length: Math.ceil(l.length) }, (_, s) => (l.path.pointAt(s, q), Math.hypot(q.x - c.x, q.y - c.y))));
-    const row = z.cones.slice(4, -4);
+    const row = z.cones.slice(0, -4);
     expect(row.length).toBeGreaterThan(3);
     for (const c of row) {
       const d0 = dist(o0, c);
@@ -360,6 +394,91 @@ describe('Counterflow and enforcers', () => {
     // A road with a single oncoming lane cannot be coned off.
     const pob = new TrafficSimulator(makeLevel({ map: 'poblacion', prewarm: 0 }), { seed: 1 });
     expect(typeof pob.counterflow.openZone(pob.network.byId.get('A').approachLanes.N[0])).toBe('string');
+  });
+
+  it('cones run up to the junction; oncoming traffic takes the next lane; tap again to remove', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 14, S: 12, E: 8, W: 8 }, mix: { car: 0.7, motorcycle: 0.3 }, turns: { left: 0.25, right: 0.2 }, initialGroups: { A: 'S' }, enforcer: { count: 2 } }), { seed: 6 });
+    const A = sim.network.byId.get('A');
+    const lane = A.approachLanes.N[0];
+    const opp = A.exitLanes.N[0];
+    run(sim, 15);
+    const z = sim.counterflow.openZone(lane);
+    expect(typeof z).toBe('object');
+    // the first cone stands right by the stop line
+    const q = { x: 0, y: 0 };
+    lane.path.pointAt(lane.length, q);
+    expect(Math.hypot(z.cones[0].x - q.x, z.cones[0].y - q.y)).toBeLessThan(6);
+    expect(opp.closed).toBe(true);
+    const users = new Set();
+    let crossed = 0;
+    let entered = 0;
+    const before = new Set(opp.vehicles.map((v) => v.id));
+    const seen = new Set();
+    run(sim, 150, (s, i) => {
+      if (i % (18 * 60) === 0) s.requestPhase('A', ['N', 'S', 'E', 'W'][(i / (18 * 60)) % 4]);
+      for (const v of s.counterflow.active) {
+        if (v.cf.legal) users.add(v.id);
+        if (v.cf.legal && v.segment !== lane && v.cf.decay) crossed++;
+      }
+      if (z.state === 'open') for (const v of opp.vehicles) if (!before.has(v.id) && !seen.has(v.id)) (seen.add(v.id), entered++);
+    });
+    expect(users.size).toBeGreaterThan(0);
+    expect(crossed).toBeGreaterThan(0); // they went through the junction from the borrowed lane
+    expect(entered).toBe(0); // nobody exits into the coned lane while it is open
+    for (const arm of ['S', 'E', 'W']) for (const l of A.approachLanes[arm]) for (const v of l.vehicles) expect(v.greenWait || 0).toBeLessThan(30);
+    // Remove: the cones come up, the lane reopens.
+    expect(sim.counterflow.closeZone(z)).toBe(true);
+    sim.requestPhase('A', 'N'); // the ones still in it go on their green
+    run(sim, 75);
+    expect(z.state).toBe('gone');
+    expect(opp.closed).toBe(false);
+    expect(typeof sim.counterflow.openZone(lane)).toBe('object');
+  });
+
+  it('every road with two oncoming lanes can be coned off, however short', () => {
+    for (const map of Object.keys(MAPS)) {
+      const sim = new TrafficSimulator(makeLevel({ map, prewarm: 0 }), { seed: 1 });
+      for (const l of sim.network.lanes) {
+        const opp = sim.counterflow.oppOf(l);
+        if (!opp) continue;
+        const outs = l.endInt.exitLanes[l.endArm].filter((o) => o.type === 'general');
+        const z = sim.counterflow.openZone(l);
+        if (outs.length < 2) expect(typeof z).toBe('string');
+        else {
+          expect(typeof z, `${map} ${l.id}`).toBe('object');
+          sim.counterflow.closeZone(z);
+          z.state = 'gone';
+          z.opp.closed = false;
+          sim.counterflow.zones = [];
+        }
+      }
+    }
+  });
+
+  it('a pasaway runs up a jammed queue to the stop line (and turns its nose while swinging out)', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 22, S: 3, E: 3, W: 3 }, mix: { car: 0.4, motorcycle: 0.6 }, personalities: { patient: 0, impatient: 0.5, aggressive: 0.5 }, counterflow: { moto: 0.6, car: 0.2, minWait: 6, minQueue: 3, emergency: true }, initialGroups: { A: 'E' } }), { seed: 5 });
+    let front = 0;
+    let yaw = 0;
+    run(sim, 120, (s, i) => {
+      if (i === 70 * 60) s.requestPhase('A', 'N');
+      for (const v of s.counterflow.active) {
+        if (v.cf.front && !v.cf.legal) front++;
+        if (v.cf.phase === 'out' && v.v > 1) yaw = Math.max(yaw, Math.abs(v.cfYaw || 0));
+      }
+    });
+    expect(sim.stats.counterflows || 0).toBeGreaterThan(0);
+    expect(front).toBeGreaterThan(0);
+    expect(yaw).toBeGreaterThan(0.05);
+  });
+
+  it('an ambulance held up in a queue ignores the centre line and goes up the oncoming lane', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 26, S: 3, E: 3, W: 3 }, mix: { car: 0.8, motorcycle: 0.2 }, counterflow: { emergency: true }, initialGroups: { A: 'E' } }), { seed: 1 });
+    let cf = 0;
+    run(sim, 100, (s, i) => {
+      if (i === 40 * 60 || i === 60 * 60) s.spawner.createArrival('A:N', true);
+      for (const v of s.counterflow.active) if (v.cf.emergency) cf++;
+    });
+    expect(cf).toBeGreaterThan(0);
   });
 
   it('an enforcer stands in the middle of the junction', () => {

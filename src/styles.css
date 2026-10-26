@@ -1925,3 +1925,431 @@ summary {
   padding: 0 8px;
   font-size: 12px;
 }
+
+/* Control bar on the left too: bottom-left, with the signal panels stacked right above it */
+@media (min-width: 721px) {
+  #hud .hud-bottom {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    justify-content: flex-end;
+    right: auto;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+  #hud .hud-controls {
+    max-width: min(820px, calc(100vw - 16px));
+  }
+  #hud .vol {
+    width: 80px;
+  }
+}
+
+/* ================================================================== MMDA command-center look
+   One dark theme for the whole game: brushed-steel control panels, glass cards, LED lamps,
+   monospace readouts, and a live CCTV frame over the map (scanlines, grain, LIVE, timestamp). */
+:root {
+  --mono: 'Share Tech Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --steel-hi: #3a4250;
+  --steel-lo: #1b2029;
+  --glass: rgba(10, 15, 24, 0.78);
+  --glass-line: rgba(148, 163, 184, 0.18);
+  --led-red: #ff3b30;
+  --led-amber: #ffb020;
+  --led-green: #2bd96b;
+  --cctv: #9fe6b0;
+}
+
+/* ---- Live CCTV frame over the map (no pointer events, pure CSS) */
+#hud .hud-fx,
+#hud .hud-live {
+  position: absolute;
+  inset: 0;
+  pointer-events: none !important;
+}
+#hud .hud-fx {
+  background:
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.38) 100%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px);
+  mix-blend-mode: normal;
+}
+#hud .hud-fx::after {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  opacity: 0.06;
+  animation: grain 0.9s steps(4) infinite;
+}
+@keyframes grain {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-3%, 2%); }
+  50% { transform: translate(2%, -3%); }
+  75% { transform: translate(-2%, -1%); }
+  100% { transform: translate(1%, 3%); }
+}
+#hud .hud-live .cb {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(220, 255, 230, 0.55);
+}
+#hud .hud-live .cb.tl { top: calc(64px + var(--safe-top)); left: 196px; border-right: 0; border-bottom: 0; }
+#hud .hud-live .cb.tr { top: calc(64px + var(--safe-top)); right: 10px; border-left: 0; border-bottom: 0; }
+#hud .hud-live .cb.bl { bottom: calc(30px + var(--safe-bottom)); left: 196px; border-right: 0; border-top: 0; display: none; }
+#hud .hud-live .cb.br { bottom: calc(30px + var(--safe-bottom)); right: 10px; border-left: 0; border-top: 0; }
+#hud .live-tag {
+  position: absolute;
+  top: calc(72px + var(--safe-top));
+  right: 22px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--cctv);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+}
+#hud .live-dot {
+  color: #fff;
+  background: #d61f1f;
+  padding: 1px 7px 0;
+  border-radius: 3px;
+  letter-spacing: 0.08em;
+  animation: liveBlink 1.6s steps(2, jump-none) infinite;
+}
+@keyframes liveBlink {
+  50% { background: #7f1010; }
+}
+#hud .live-ts {
+  position: absolute;
+  top: calc(94px + var(--safe-top));
+  right: 22px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--cctv);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+  letter-spacing: 0.04em;
+}
+#hud.watch .hud-live .cb.bl { display: block; }
+#hud.watch .hud-live .cb.tl,
+#hud.watch .hud-live .cb.bl { left: 10px; }
+
+/* ---- Top status strip */
+#hud .hud-block {
+  background: linear-gradient(180deg, rgba(22, 28, 38, 0.92), rgba(10, 14, 20, 0.92));
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+#hud .hud-level::before {
+  content: 'MMDA · METROBASE TRAFFIC CONTROL';
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: #7dd3fc;
+  font-weight: 800;
+}
+#hud .hud-time b,
+#hud .hud-score b,
+#hud .hud-env b {
+  font-family: var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: #e8fff0;
+  text-shadow: 0 0 8px rgba(43, 217, 107, 0.35);
+}
+#hud .hud-score b {
+  color: #ffe08a;
+  text-shadow: 0 0 8px rgba(255, 176, 32, 0.4);
+}
+#hud .hud-status {
+  font-family: var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 13px;
+  position: relative;
+  padding-left: 26px;
+}
+#hud .hud-status::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+#hud .hud-status.danger::before { background: #fff; }
+
+/* ---- Signal panels: brushed-steel controller with LED lamps */
+#hud .sig-panel {
+  position: relative;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, var(--steel-hi), var(--steel-lo));
+  border: 1px solid #0b0e13;
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -2px 0 rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.45);
+  padding: 8px 10px 7px;
+}
+#hud .sig-panel::before,
+#hud .sig-panel::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #c7cdd6, #59606b);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+#hud .sig-panel::before { left: 5px; }
+#hud .sig-panel::after { right: 5px; }
+#hud .sig-title {
+  font-family: var(--mono);
+  font-weight: 400;
+  color: #cbd5e1;
+  letter-spacing: 0.12em;
+  margin-left: 8px;
+}
+#hud .sig-btn {
+  flex-direction: column;
+  gap: 3px;
+  height: 46px;
+  min-width: 60px;
+  border-radius: 6px;
+  border: 1px solid #0b0e13;
+  background: linear-gradient(180deg, #2b313b, #171b22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 #090b0f;
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: #cfd6e0;
+}
+#hud .sig-btn:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 0 #090b0f;
+}
+#hud .sig-btn .lamp {
+  width: 13px;
+  height: 13px;
+  border: 1px solid #000;
+  background: radial-gradient(circle at 35% 30%, #5a1a1a, #2a0808);
+  box-shadow: none;
+}
+#hud .sig-btn[data-sig='red'] .lamp {
+  background: radial-gradient(circle at 35% 30%, #ff8a80, var(--led-red) 45%, #8b0000);
+  box-shadow: 0 0 10px rgba(255, 59, 48, 0.75);
+}
+#hud .sig-btn[data-sig='green'] {
+  background: linear-gradient(180deg, #1f3a2a, #12231a);
+  border-color: #0b0e13;
+}
+#hud .sig-btn[data-sig='green'] .lamp {
+  background: radial-gradient(circle at 35% 30%, #b9ffcf, var(--led-green) 45%, #0b6b2e);
+  box-shadow: 0 0 12px rgba(43, 217, 107, 0.85);
+}
+#hud .sig-btn[data-sig='yellow'] .lamp,
+#hud .sig-btn[data-sig='flash'] .lamp {
+  background: radial-gradient(circle at 35% 30%, #ffe2a6, var(--led-amber) 45%, #8a5200);
+  box-shadow: 0 0 12px rgba(255, 176, 32, 0.85);
+}
+#hud .phase {
+  background: #05080b;
+  border: 1px solid #000;
+  border-radius: 5px;
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.9);
+  padding: 4px 6px;
+}
+#hud .phase-label {
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+#hud .phase-count {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: #ffb020;
+  text-shadow: 0 0 6px rgba(255, 176, 32, 0.55);
+}
+#hud .flash-btn {
+  font-family: var(--mono);
+  font-weight: 400;
+  border-radius: 4px;
+  border: 1px solid #000;
+  background:
+    repeating-linear-gradient(135deg, rgba(250, 204, 21, 0.18) 0 4px, transparent 4px 8px),
+    linear-gradient(180deg, #2b313b, #171b22);
+  color: #fde68a;
+}
+#hud .flash-btn.active {
+  background: #facc15;
+  color: #111;
+}
+#hud .auto-btn,
+#hud .auto-all {
+  font-family: var(--mono);
+}
+#hud .ctl-tab {
+  font-family: var(--mono);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #2b313b, #171b22);
+  border: 1px solid #000;
+}
+#hud .ctl-tab b::before {
+  content: 'CH ';
+  opacity: 0.6;
+}
+#hud .ctl-tab.active {
+  background: linear-gradient(180deg, #31506a, #1b2c3c);
+  box-shadow: 0 0 0 1px #38bdf8 inset;
+}
+
+/* ---- Control bar: rocker switches */
+#hud .hud-controls {
+  background: linear-gradient(180deg, var(--steel-hi), var(--steel-lo));
+  border: 1px solid #0b0e13;
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+#hud .hud-controls .icon-btn,
+#hud .hud-actions .icon-btn {
+  border-radius: 6px;
+  border: 1px solid #0b0e13;
+  background: linear-gradient(180deg, #2f3540, #181c23);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 #090b0f;
+}
+#hud .hud-controls .icon-btn.active,
+#hud .hud-actions .icon-btn.active {
+  color: var(--led-amber);
+  box-shadow: inset 0 0 8px rgba(255, 176, 32, 0.35), 0 1px 0 #090b0f;
+}
+#hud .seg {
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: #05080b;
+}
+#hud .seg button {
+  font-family: var(--mono);
+  font-weight: 400;
+  background: transparent;
+  color: #6b7280;
+}
+#hud .seg button.active {
+  background: #05080b;
+  color: var(--led-green);
+  text-shadow: 0 0 8px rgba(43, 217, 107, 0.8);
+}
+
+/* ---- Left column: terminal cards and the radio log */
+#hud .hud-metrics {
+  background: rgba(5, 9, 13, 0.86);
+  border: 1px solid rgba(43, 217, 107, 0.25);
+  border-radius: 6px;
+  font-family: var(--mono);
+  color: #c8f7d7;
+}
+#hud .hud-metrics h4 {
+  font-family: var(--mono);
+  font-weight: 400;
+  color: var(--led-green);
+}
+#hud .hud-metrics h4::before {
+  content: '▮ ';
+  animation: liveBlink 1.2s steps(2, jump-none) infinite;
+}
+#hud .hud-metrics .row span {
+  color: #7fae8e;
+}
+#hud .note.radio {
+  background: rgba(5, 9, 13, 0.9);
+  border-left-color: #38bdf8;
+  font-family: var(--mono);
+  font-weight: 400;
+  color: #e0f2fe;
+  flex-wrap: wrap;
+}
+#hud .note.radio .radio-time {
+  color: #7dd3fc;
+  opacity: 0.8;
+  font-size: 10px;
+}
+#hud .note.radio .radio-from {
+  background: #0369a1;
+  color: #fff;
+}
+#hud .hud-feed {
+  border-radius: 14px;
+  border: 3px solid #0b0e13;
+  box-shadow: 0 0 0 1px #3a4250, 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* ---- Ticker */
+#hud .hud-ticker {
+  background: rgba(5, 8, 11, 0.94);
+  font-family: var(--mono);
+  color: #fde68a;
+}
+#hud .hud-ticker .tk-tag {
+  background: #c81e1e;
+  color: #fff;
+  font-family: 'Overpass', sans-serif;
+  font-weight: 900;
+}
+
+/* ---- Toasts and banners */
+#hud .hud-toast {
+  font-family: var(--mono);
+  background: rgba(5, 9, 13, 0.94);
+  border-radius: 6px;
+}
+
+/* ---- Menus: the same control-room look */
+.overlay.dim {
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, rgba(8, 12, 18, 0.55), rgba(2, 4, 8, 0.92));
+}
+.panel {
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.015) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, rgba(34, 40, 50, 0.97), rgba(13, 17, 23, 0.97));
+  border: 1px solid #0b0e13;
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.panel h2,
+.panel h4 {
+  font-family: var(--mono);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+.btn {
+  border-radius: 6px;
+  border: 1px solid #0b0e13;
+  background: linear-gradient(180deg, #2f3540, #181c23);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 #090b0f;
+}
+.btn.primary {
+  background: linear-gradient(180deg, #ffd34d, #e0a800);
+  color: #111;
+  border-color: #6b4f00;
+}
+.logo .tagline::after {
+  content: '  ● LIVE';
+  color: #ef4444;
+  font-family: var(--mono);
+  animation: liveBlink 1.6s steps(2, jump-none) infinite;
+}
+
+@media (max-width: 720px) {
+  #hud .hud-live .cb { display: none; }
+  #hud .live-tag { top: calc(56px + var(--safe-top)); right: 10px; font-size: 11px; }
+  #hud .live-ts { top: calc(74px + var(--safe-top)); right: 10px; font-size: 11px; }
+  #hud .hud-level::before { display: none; }
+}

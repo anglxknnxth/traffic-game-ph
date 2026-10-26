@@ -459,63 +459,77 @@ export class Network {
     for (const X of ARMS) {
       const lanes = I.approachLanes[X];
       if (!lanes) continue;
-      const d = { x: -DIRS[X].x, y: -DIRS[X].y };
       const laneMoves = this.laneMoves(I, X);
       for (let k = 0; k < lanes.length; k++) {
         const lane = lanes[k];
         lane.moves = laneMoves[k];
         for (const m of laneMoves[k]) {
-          const Y = this._exitArm(X, m);
           const toLane = this._targetLane(I, X, lane, m, laneMoves);
           if (!toLane) continue;
-          const kOut = toLane.laneIndex;
-          const exitVec = m === 'uturn' ? { x: -d.x, y: -d.y } : DIRS[Y];
-          const p0 = lane.end;
-          const p3 = toLane.start;
-          let pts;
-          let widePts = null;
-          if (m === 'straight') {
-            const lateral = Math.abs((p3.x - p0.x) * -d.y + (p3.y - p0.y) * d.x);
-            if (lateral < 1e-6) pts = [p0, p3];
-            else {
-              const len = Math.hypot(p3.x - p0.x, p3.y - p0.y) / 3;
-              pts = cubicBezierPoints(p0, { x: p0.x + d.x * len, y: p0.y + d.y * len }, { x: p3.x - d.x * len, y: p3.y - d.y * len }, p3, 24);
-            }
-          } else if (m === 'uturn') {
-            const k3 = (2 * Math.hypot(p3.x - p0.x, p3.y - p0.y)) / 3;
-            pts = cubicBezierPoints(p0, { x: p0.x + d.x * k3, y: p0.y + d.y * k3 }, { x: p3.x + d.x * k3, y: p3.y + d.y * k3 }, p3, 40);
-          } else {
-            const q = Math.abs(d.x) < 1e-6 ? { x: p0.x, y: p3.y } : { x: p3.x, y: p0.y };
-            const r1 = Math.hypot(q.x - p0.x, q.y - p0.y);
-            const r2 = Math.hypot(q.x - p3.x, q.y - p3.y);
-            const curve = (kappa) =>
-              cubicBezierPoints(p0, { x: p0.x + d.x * r1 * kappa, y: p0.y + d.y * r1 * kappa }, { x: p3.x - exitVec.x * r2 * kappa, y: p3.y - exitVec.y * r2 * kappa }, p3, 32);
-            pts = curve(0.5523);
-            // Long vehicles run deeper into the box before turning (a wider swing).
-            widePts = curve(0.82);
-          }
-          const conn = new Segment('connector', `${I.id}:${X}${k}>${Y}${kOut}`, new Path(pts));
-          conn.intersection = I;
-          conn.arm = X;
-          conn.exitArm = Y;
-          conn.movement = m;
-          conn.laneIndex = k;
-          conn.fromLane = lane;
-          conn.toLane = toLane;
-          // Tunnel lanes go under an underpass node: no lights, no conflicts with the junction above.
-          conn.under = !!(I.def.underpass && lane.type === 'tunnel' && m === 'straight');
-          this._addConnector(I, conn);
-          lane.connectors[m] = conn;
-          if (widePts) {
-            const wide = new Segment('connector', `${conn.id}w`, new Path(widePts));
-            Object.assign(wide, { intersection: I, arm: X, exitArm: Y, movement: m, laneIndex: k, fromLane: lane, toLane, wide: true });
-            this._addConnector(I, wide);
-            lane.connectorsWide = lane.connectorsWide || {};
-            lane.connectorsWide[m] = wide;
+          const made = this._connect(I, X, k, lane, m, toLane);
+          lane.connectors[m] = made.conn;
+          if (made.wide) (lane.connectorsWide = lane.connectorsWide || {})[m] = made.wide;
+          // An inner exit lane can be coned off for a contraflow: the same movement into the next
+          // lane is built too (only used while that lane is closed).
+          const outs = I.exitLanes[made.conn.exitArm].filter((l) => l.type === 'general');
+          if (toLane === outs[0] && outs[1] && m !== 'uturn') {
+            const alt = this._connect(I, X, k, lane, m, outs[1], 'a');
+            (lane.connectorsAlt = lane.connectorsAlt || {})[m] = alt.conn;
+            if (alt.wide) (lane.connectorsAltWide = lane.connectorsAltWide || {})[m] = alt.wide;
           }
         }
       }
     }
+  }
+
+  /** Connector (and a wide-swing twin for turns) from approach lane `lane` doing `m` into `toLane`. */
+  _connect(I, X, k, lane, m, toLane, tag = '') {
+    const d = { x: -DIRS[X].x, y: -DIRS[X].y };
+    const Y = this._exitArm(X, m);
+    const kOut = toLane.laneIndex;
+    const exitVec = m === 'uturn' ? { x: -d.x, y: -d.y } : DIRS[Y];
+    const p0 = lane.end;
+    const p3 = toLane.start;
+    let pts;
+    let widePts = null;
+    if (m === 'straight') {
+      const lateral = Math.abs((p3.x - p0.x) * -d.y + (p3.y - p0.y) * d.x);
+      if (lateral < 1e-6) pts = [p0, p3];
+      else {
+        const len = Math.hypot(p3.x - p0.x, p3.y - p0.y) / 3;
+        pts = cubicBezierPoints(p0, { x: p0.x + d.x * len, y: p0.y + d.y * len }, { x: p3.x - d.x * len, y: p3.y - d.y * len }, p3, 24);
+      }
+    } else if (m === 'uturn') {
+      const k3 = (2 * Math.hypot(p3.x - p0.x, p3.y - p0.y)) / 3;
+      pts = cubicBezierPoints(p0, { x: p0.x + d.x * k3, y: p0.y + d.y * k3 }, { x: p3.x + d.x * k3, y: p3.y + d.y * k3 }, p3, 40);
+    } else {
+      const q = Math.abs(d.x) < 1e-6 ? { x: p0.x, y: p3.y } : { x: p3.x, y: p0.y };
+      const r1 = Math.hypot(q.x - p0.x, q.y - p0.y);
+      const r2 = Math.hypot(q.x - p3.x, q.y - p3.y);
+      const curve = (kappa) =>
+        cubicBezierPoints(p0, { x: p0.x + d.x * r1 * kappa, y: p0.y + d.y * r1 * kappa }, { x: p3.x - exitVec.x * r2 * kappa, y: p3.y - exitVec.y * r2 * kappa }, p3, 32);
+      pts = curve(0.5523);
+      // Long vehicles run deeper into the box before turning (a wider swing).
+      widePts = curve(0.82);
+    }
+    const conn = new Segment('connector', `${I.id}:${X}${k}>${Y}${kOut}${tag}`, new Path(pts));
+    conn.intersection = I;
+    conn.arm = X;
+    conn.exitArm = Y;
+    conn.movement = m;
+    conn.laneIndex = k;
+    conn.fromLane = lane;
+    conn.toLane = toLane;
+    // Tunnel lanes go under an underpass node: no lights, no conflicts with the junction above.
+    conn.under = !!(I.def.underpass && lane.type === 'tunnel' && m === 'straight');
+    this._addConnector(I, conn);
+    let wide = null;
+    if (widePts) {
+      wide = new Segment('connector', `${conn.id}w`, new Path(widePts));
+      Object.assign(wide, { intersection: I, arm: X, exitArm: Y, movement: m, laneIndex: k, fromLane: lane, toLane, wide: true });
+      this._addConnector(I, wide);
+    }
+    return { conn, wide };
   }
 
   /** Levels of lanes and connectors (see RAMP_LAYER etc.). Lanes may change level along their length. */
@@ -554,6 +568,11 @@ export class Network {
 
   /** Connector a vehicle of this size takes for `move` from `lane` (wide swing for buses and trucks). */
   static connectorFor(lane, move, spec) {
+    // A coned-off exit lane (contraflow): the same movement into the next lane instead.
+    if (lane.connectors[move]?.toLane.closed && lane.connectorsAlt?.[move]) {
+      if (spec && spec.length > 8 && lane.connectorsAltWide?.[move]) return lane.connectorsAltWide[move];
+      return lane.connectorsAlt[move];
+    }
     if (spec && spec.length > 8 && lane.connectorsWide?.[move]) return lane.connectorsWide[move];
     return lane.connectors[move];
   }

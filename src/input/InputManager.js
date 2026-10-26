@@ -79,6 +79,13 @@ export class InputManager {
     return best;
   }
 
+  /** A contraflow zone whose cones are within reach of (x, y). */
+  hitZone(x, y) {
+    const sim = this.game.sim;
+    if (!sim?.counterflow) return null;
+    return sim.counterflow.zoneAtPoint(x, y, Math.max(4, 20 / this.game.camera.scale));
+  }
+
   hitBlockage(x, y) {
     const sim = this.game.sim;
     if (!sim) return null;
@@ -174,6 +181,9 @@ export class InputManager {
     if (v && g.wavePass(v)) return;
     if (v && g.waveThrough(v)) return;
     if (v && g.followVehicle?.(v)) return;
+    // Contraflow cones: tap them to take them away
+    const zone = this.hitZone(w.x, w.y);
+    if (zone && g.closeZone(zone)) return;
     // A jaywalker waiting at the curb: saway
     const ped = this.hitJaywalker(w.x, w.y);
     if (ped && g.saway(ped)) return;

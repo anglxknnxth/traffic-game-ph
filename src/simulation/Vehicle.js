@@ -183,6 +183,15 @@ export class Vehicle {
     return this.cfOff || 0;
   }
 
+  /** Heading change while out in (or easing back from) the oncoming lane. */
+  _cfYaw(s) {
+    const d = this.cf.decay;
+    if (!d) return this.cfYaw || 0;
+    const t = (s - d.s0) / d.L;
+    if (t <= 0 || t >= 1) return 0;
+    return Math.atan((-d.off0 * 0.5 * Math.PI * Math.sin(Math.PI * t)) / d.L);
+  }
+
   _pose(s) {
     this.route.sample(s, _p);
     if (this.cf) {
@@ -192,8 +201,8 @@ export class Vehicle {
         const sn = Math.sin(_p.angle);
         _p.x += -sn * off;
         _p.y += c * off;
-        _p.angle += this.cfYaw || 0;
       }
+      _p.angle += this._cfYaw(s);
     }
     if (this.lc) {
       lateralAt(this.lc, s, _lat);

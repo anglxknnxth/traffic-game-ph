@@ -43,6 +43,12 @@ export class HUD {
     this.notes = [];
     this.tutorialStep = -1;
     this.root.innerHTML = `
+      <div class="hud-fx" aria-hidden="true"></div>
+      <div class="hud-live" aria-hidden="true">
+        <i class="cb tl"></i><i class="cb tr"></i><i class="cb bl"></i><i class="cb br"></i>
+        <div class="live-tag"><b class="live-dot">● LIVE</b><span class="live-cam">CAM 01</span></div>
+        <div class="live-ts">--</div>
+      </div>
       <div class="hud-top">
         <div class="hud-block hud-level"><span class="hud-mode"></span><span class="hud-name"></span></div>
         <div class="hud-block hud-time"><span class="lbl">Time</span><b data-k="time">0:00</b></div>
@@ -78,7 +84,7 @@ export class HUD {
           <button class="icon-btn mon-btn" data-act="monitor" title="Monitor: queues, throughput, green timeline (T)">📡</button>
           <button class="icon-btn heat-btn" data-act="heat" title="Speed heatmap and queue counts on the map (O)">🌡️</button>
           <button class="icon-btn tool-btn" data-act="enforcer" title="Station a traffic enforcer at a junction" hidden>👮<small class="tool-n"></small></button>
-          <button class="icon-btn tool-btn" data-act="contraflow" title="Cone off a contraflow lane (60 s)" hidden>🚧</button>
+          <button class="icon-btn tool-btn" data-act="contraflow" title="Cone off a contraflow lane (tap the cones to remove)" hidden>🚧</button>
           <button class="icon-btn watch-btn" data-act="watch" title="Watch mode: hide the controls and let the camera find the action (H)">👁</button>
           <button class="icon-btn auto-all" data-act="autoall" title="AUTO LAHAT: every light runs itself (click a light to take it over)" hidden>AUTO</button>
         </div>
@@ -109,6 +115,9 @@ export class HUD {
       music: root.querySelector('[data-act="music"]'),
       bottom: root.querySelector('.hud-bottom'),
       top: root.querySelector('.hud-top'),
+      side: root.querySelector('.hud-side'),
+      cam: root.querySelector('.live-cam'),
+      ts: root.querySelector('.live-ts'),
       autoAll: root.querySelector('[data-act="autoall"]'),
       feed: root.querySelector('.hud-feed'),
       ticker: root.querySelector('.tk-text'),
@@ -392,7 +401,7 @@ export class HUD {
     // Notices arrive over the radio, MMDA dispatch style.
     const div = document.createElement('div');
     div.className = `note radio ${e.severity || 'info'}`;
-    div.innerHTML = `<i class="radio-ico">📻</i><span class="radio-from">BASE</span><span class="radio-txt"></span>`;
+    div.innerHTML = `<span class="radio-time">${this._stamp(false)}</span><span class="radio-from">BASE</span><span class="radio-txt"></span>`;
     div.querySelector('.radio-txt').textContent = e.text;
     this.game.audio.radio?.();
     this.el.notify.prepend(div);
@@ -412,9 +421,17 @@ export class HUD {
     const m = sim.metrics;
     const lvl = s.level;
     this._street(sim);
+    this._live(sim);
     this.monitor.sample(sim, Math.max(0, sim.time - this._simT));
     this._simT = sim.time;
     if (this.game.state.showMonitor) this.monitor.render(sim);
+    // The side column stops above the stack of panels and controls at the bottom-left.
+    const sideTop = this.el.side.getBoundingClientRect().top;
+    const room = Math.round(this.el.bottom.getBoundingClientRect().top - sideTop - 8);
+    if (room > 0 && room !== this._sideRoom) {
+      this._sideRoom = room;
+      this.el.side.style.maxHeight = `${room}px`;
+    }
     this.el.time.textContent = lvl.duration ? formatTime(Math.max(0, lvl.duration - s.elapsed)) : formatTime(s.elapsed);
     this.el.score.textContent = sim.scoring.total().toLocaleString();
     // Clock and weather (levels with an environment only)
@@ -498,6 +515,41 @@ export class HUD {
     } else {
       this.el.emergency.hidden = true;
     }
+  }
+
+  // ------------------------------------------------------------------ live feed frame
+  /** Sim time of day as HH:MM (or the full CCTV timestamp: date and HH:MM:SS). */
+  _stamp(withDate = true) {
+    const sim = this.session?.sim;
+    if (!sim) return '';
+    const secs = this.session.level.env ? sim.env.hour * 3600 : 7 * 3600 + sim.time;
+    const t = Math.floor(secs) % 86400;
+    const p = (n) => String(n).padStart(2, '0');
+    const hms = `${p(Math.floor(t / 3600))}:${p(Math.floor(t / 60) % 60)}:${p(t % 60)}`;
+    if (!withDate) return hms.slice(0, 5);
+    const d = new Date();
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}  ${hms}`;
+  }
+
+  /** CCTV overlay: the camera named after the junction in view, and a running timestamp. */
+  _live(sim) {
+    const cam = this.game.camera;
+    let best = null;
+    let bestD = Infinity;
+    for (const I of sim.network.intersections) {
+      if (I.kind !== 'signal' && I.kind !== 'yield') continue;
+      const d = Math.hypot(I.x - cam.centerX, I.y - cam.centerY);
+      if (d < bestD) {
+        bestD = d;
+        best = I;
+      }
+    }
+    if (best) {
+      const n = sim.network.intersections.indexOf(best) + 1;
+      const label = `CAM ${String(n).padStart(2, '0')} · ${this._junctionName(sim, best.id).toUpperCase() || best.id}`;
+      if (this.el.cam.textContent !== label) this.el.cam.textContent = label;
+    }
+    this.el.ts.textContent = this._stamp(true);
   }
 
   // ------------------------------------------------------------------ street talk

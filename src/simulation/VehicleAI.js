@@ -61,7 +61,8 @@ export class VehicleAI {
 
     // 1. Car following (out in the oncoming lane the queue beside us is no leader)
     const cfRun = v.cf && v.cf.phase !== 'in';
-    const lead = cfRun ? null : sim.findLeader(v, Math.max(55, v.v * 5));
+    // (out there, only another vehicle in the same oncoming stretch is)
+    const lead = cfRun ? sim.counterflow.cfLeader(v) : sim.findLeader(v, Math.max(55, v.v * 5));
     if (lead) {
       v.leaderId = lead.vehicle.id;
       let s0 = P.minGap * env.gapFactor;
@@ -128,7 +129,7 @@ export class VehicleAI {
 
     // 2. Intersection entry (tunnel lanes simply drive on under an underpass)
     const ce = v.nextConnEntry();
-    if (ce && !ce.seg.under && !(v.cf && !v.cf.emergency)) {
+    if (ce && !ce.seg.under && !(v.cf && !sim.counterflow.atLine(v))) {
       const conn = ce.seg;
       const I = conn.intersection;
       const distToStop = ce.start - front;
@@ -451,7 +452,7 @@ export class VehicleAI {
     if (!stuck) return;
     const atGreen = v.signal === 'green' && v.stoppedTime > P.hornDelay;
     const inBox = v.state === AI_STATE.BLOCKED_IN_INTERSECTION && v.stoppedTime > P.hornDelay * 1.5;
-    const behindStuckLeader = v.leaderId !== null && v.stoppedTime > P.hornDelay * 2 && v.waitTime > P.patience * 0.5;
+    const behindStuckLeader = v.leaderId !== null && v.stoppedTime > P.hornDelay * 2 && v.waitTime > P.patience * 1.5;
     const longWait = v.waitTime > P.patience && v.stoppedTime > 2;
     if (!(atGreen || inBox || behindStuckLeader || longWait)) {
       v.hornCooldown = 0.5;

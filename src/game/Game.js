@@ -367,7 +367,7 @@ export class Game {
     this.state.tool = this.state.tool === tool ? null : tool;
     this.hud.syncControls();
     if (this.state.tool === 'enforcer') this.hud.toast('👮 Tap a junction to station an enforcer there (tap again to take them off)', 'info');
-    if (this.state.tool === 'contraflow') this.hud.toast('🚧 Tap an undivided road near a junction to cone off a contraflow lane for 60 s', 'info');
+    if (this.state.tool === 'contraflow') this.hud.toast('🚧 Tap an undivided road near a junction to cone off a contraflow lane (tap a coned road again to remove)', 'info');
   }
 
   /** The player tapped the map with a tool, or tapped something the enforcer deals with. */
@@ -387,10 +387,20 @@ export class Game {
       return true;
     }
     if (t === 'contraflow') {
-      const lane = this._laneAt(sim, x, y);
-      if (!lane) return false;
-      const z = sim.counterflow.openZone(lane);
-      this.hud.toast(typeof z === 'string' ? z : '🚧 Contraflow: cones going up, the lane opens once it is clear', typeof z === 'string' ? 'info' : 'ok');
+      // Tapping the cones (or the coned lane, or that road again) takes them away.
+      const hit = sim.counterflow.zoneAtPoint(x, y, Math.max(4, 20 / this.camera.scale));
+      const at = this._laneAt(sim, x, y);
+      const had = hit || (at && sim.counterflow.zoneAt(at.lane));
+      if (had) {
+        this.closeZone(had);
+        this.state.tool = null;
+        this.hud.syncControls();
+        return true;
+      }
+      if (!at) return false;
+      // The contraflow runs from where the road was tapped all the way to the junction.
+      const z = sim.counterflow.openZone(at.lane, { from: at.s });
+      this.hud.toast(typeof z === 'string' ? z : '🚧 Contraflow para sa mga kakaliwa: mula dito hanggang kanto · tap the cones to remove', typeof z === 'string' ? 'info' : 'ok');
       this.state.tool = null;
       this.hud.syncControls();
       return true;
@@ -398,9 +408,21 @@ export class Game {
     return false;
   }
 
-  /** The inner approach lane nearest to (x, y) (within 5 m), for the contraflow tool. */
+  /** Take a contraflow's cones away (the drivers already in it finish first). */
+  closeZone(zone) {
+    if (!this.session || this.session.ended || this.state.paused) return false;
+    const ok = this.session.sim.counterflow.closeZone(zone);
+    if (ok) {
+      this.audio.whistle(0);
+      this.hud.toast('🚧 Cones being picked up', 'ok');
+    }
+    return ok;
+  }
+
+  /** The inner approach lane nearest to (x, y) (within 5 m) and where along it, for the contraflow tool. */
   _laneAt(sim, x, y) {
     let best = null;
+    let bestS = 0;
     let bestD = 5;
     const p = { x: 0, y: 0, dx: 0, dy: 0 };
     for (const lane of sim.network.lanes) {
@@ -414,10 +436,11 @@ export class Game {
         if (d < bestD) {
           bestD = d;
           best = lane;
+          bestS = s;
         }
       }
     }
-    return best;
+    return best ? { lane: best, s: bestS } : null;
   }
 
   /** HULI! Catch a violator (red-! vehicle). */

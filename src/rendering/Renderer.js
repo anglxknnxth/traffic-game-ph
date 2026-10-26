@@ -80,6 +80,7 @@ export class Renderer {
     const x0 = cam.centerX - (cam.screenCX * dpr + mx) * k;
     const y0 = cam.centerY - (cam.screenCY * dpr + my) * k;
     this.road.view = { minX: x0, minY: y0, maxX: x0 + W * k, maxY: y0 + H * k };
+    this.road.ppm = cam.scale * dpr; // device pixels per metre (thin paint fades when zoomed out)
     const paint = (canvas, draw) => {
       if (canvas.width !== W || canvas.height !== H) {
         canvas.width = W;

@@ -92,7 +92,8 @@ export class LaneChanger {
       return lead.localS - lead.hl - v.localS - v.hl < 40;
     }
     // Sirens: an emergency vehicle stuck behind slow traffic looks for a clearer lane.
-    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40) return true;
+    // (On the inner lane of a road with painted lines it takes the oncoming lane instead.)
+    if (v.emergency && lead && lead.v < 2 && lead.localS - lead.hl - v.localS - v.hl < 40 && !(this.sim.counterflow.cfg.emergency && this.sim.counterflow.oppOf(lane))) return true;
     // ... and drivers with sirens close behind them move over to let it through.
     if (!v.emergency && this._sirenBehind(v, lane)) return true;
     // A lane that ends: start merging well before the end, as drivers do.
@@ -153,6 +154,8 @@ export class LaneChanger {
       if (this.sim.blockageOnLane(B, v.localS - v.hl - 2, v.localS + 45)) continue;
       // Never move into a lane that ends further on.
       if (B.dropAt !== undefined) continue;
+      // ... or into one coned off for a contraflow.
+      if (B.closed) continue;
       // Do not drift into a dedicated lane you may use but did not pick (buses stay in the busway, motos in the moto lane, unless forced).
       if (B.allowed && !forced && seg.allowed !== B.allowed && !B.allowed.has(v.type)) continue;
       // No weaving: don't go straight back to the lane just left unless forced.

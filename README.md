@@ -130,12 +130,23 @@ What you'll see on the map:
   lane through when nothing crossing is coming. Anywhere you can HULI! violators (counterflow,
   beating the red, blocking the box, unloading inside the junction), send a waiting jaywalker to
   the crosswalk, and call a tow truck for a stalled vehicle (cleared in 8 s).
-- **Contraflow lane** (🚧): the enforcers cone off the oncoming inner lane beside a queue for 60 s.
-  The cones go up one by one; once the lane is clear, queued drivers use it to reach the front and
-  cut back in before the junction. When time is up nobody new goes in, the last ones finish, and
-  the cones come down.
+- **Contraflow lane** (🚧): the enforcers cone off the oncoming inner lane beside a queue, on any
+  road with two oncoming lanes, right up to the junction, for as long as you like. The cones go up
+  one by one; oncoming traffic that would have used that lane takes the next one, and once the lane
+  is clear queued drivers use it to drive up to the stop line and go on their own green. Tap the
+  cones (or the road again with 🚧) to take them away: nobody new goes in, the last ones finish,
+  and the cones come down.
+- Pasaway riders (and now and then a car) who have waited long enough swing out and overtake: into
+  a gap in the queue, or all the way up to the stop line. Ambulances and fire trucks ignore the
+  centre line: held up for a moment, they go up the oncoming lane (never over a concrete median).
 - Notices come over the radio, a news ticker runs along the bottom, and commuters post about the
   roads you are running.
+- The screen is an MMDA command center: a live CCTV frame over the map (LIVE, the camera named
+  after the junction in view, a running timestamp, scanlines and grain), steel signal controllers
+  with LED lamps and a countdown readout, and every panel in one column on the left. Roads carry
+  DPWH-style worn thermoplastic paint (broken white lane lines, double yellow, solid lines before
+  the stop line) that follows every bend; buildings cast shadows by their height and trees are
+  layered canopies or coconut palms.
 
 ### Modes
 
@@ -401,8 +412,8 @@ On every simulated step the soak and integration tests assert:
 ## Assets
 
 Graphics are drawn procedurally on the canvas (textures included) and all sounds are synthesized
-at runtime. The Metro Manila map also uses eight photo textures (asphalt, paving, grass, soil,
+at runtime. Every map also uses eight photo textures (asphalt, paving, grass, soil,
 corrugated roofing, clay tiles, concrete) from [ambientCG](https://ambientcg.com), released under
 CC0 1.0 (public domain); see `public/textures/metro/CREDITS.txt`. If they can't be loaded, the
-procedural textures are used. The HUD uses the Overpass font from Google Fonts (with a system font
-fallback).
+procedural textures are used. The HUD uses the Overpass and Share Tech Mono fonts from Google Fonts (with system font
+fallbacks).

@@ -150,6 +150,63 @@ export function worldText(ctx, text, x, y, size, color, angle = 0, align = 'cent
   ctx.restore();
 }
 
+/**
+ * A tree seen from above: a shadow toward the lower right, then a canopy of overlapping lobes in
+ * three greens with the sun side lit (acacia and mango), or now and then a coconut palm's fronds.
+ */
+function drawTree(ctx, t) {
+  const seed = Math.abs(Math.sin(t.x * 3.7 + t.y * 9.1) * 1e4) % 1;
+  const r = t.r;
+  ctx.fillStyle = 'rgba(0,0,0,0.24)';
+  ctx.beginPath();
+  ctx.ellipse(t.x + r * 0.55, t.y + r * 0.75, r * 1.05, r * 0.9, 0, 0, Math.PI * 2);
+  ctx.fill();
+  if (seed < 0.14) {
+    // coconut palm: radial fronds round a small crown
+    ctx.strokeStyle = '#4d7f2c';
+    ctx.lineCap = 'round';
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 9) * Math.PI * 2 + seed * 10;
+      ctx.lineWidth = r * 0.28;
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y);
+      ctx.quadraticCurveTo(t.x + Math.cos(a) * r * 0.7, t.y + Math.sin(a) * r * 0.7 - 0.2, t.x + Math.cos(a) * r * 1.25, t.y + Math.sin(a) * r * 1.25);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#6b4f2a';
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, r * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  const dark = `rgb(${34 + Math.round(t.shade * 14)},${78 + Math.round(t.shade * 26)},${36 + Math.round(t.shade * 10)})`;
+  const mid = `rgb(${48 + Math.round(t.shade * 18)},${104 + Math.round(t.shade * 30)},${44 + Math.round(t.shade * 12)})`;
+  const lit = `rgb(${84 + Math.round(t.shade * 20)},${140 + Math.round(t.shade * 26)},${62 + Math.round(t.shade * 12)})`;
+  const lobes = 5;
+  ctx.fillStyle = dark;
+  for (let k = 0; k < lobes; k++) {
+    const a = (k / lobes) * Math.PI * 2 + seed * 6;
+    ctx.beginPath();
+    ctx.arc(t.x + Math.cos(a) * r * 0.42, t.y + Math.sin(a) * r * 0.42, r * 0.66, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = mid;
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * Math.PI * 2 + seed * 3;
+    ctx.beginPath();
+    ctx.arc(t.x - r * 0.12 + Math.cos(a) * r * 0.28, t.y - r * 0.12 + Math.sin(a) * r * 0.28, r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = lit;
+  ctx.beginPath();
+  ctx.arc(t.x - r * 0.3, t.y - r * 0.32, r * 0.36, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.beginPath();
+  ctx.arc(t.x - r * 0.4, t.y - r * 0.42, r * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 export class RoadRenderer {
   constructor(network) {
     this.network = network;
@@ -159,7 +216,7 @@ export class RoadRenderer {
     // Surface textures (procedural; photo textures on maps that have a set). The static layer is
     // re-rendered when photos finish loading (version is part of the renderer's cache key).
     this.version = 0;
-    this.tex = new TextureBank(network.map.textures || null, () => this.version++);
+    this.tex = new TextureBank(network.map.textures || 'metro', () => this.version++); // CC0 photo set on every map
   }
 
   /** Every drawn arm as { g, len, half } (for bridge detection). */
@@ -994,13 +1051,9 @@ export class RoadRenderer {
       const lanes = I.approachLanes[arm] || [];
       const exits = I.exitLanes[arm] || [];
 
-      // ---- Markings that run the length of the arm (they follow its bends)
-      // Centre: double yellow on undivided roads
-      if (m < 0.3) {
-        ctx.fillStyle = COLORS.yellow;
-        strip(ctx, g, xs, len, -0.27, -0.14);
-        strip(ctx, g, xs, len, 0.14, 0.27);
-      }
+      // ---- Markings that run the length of the road. Each is one stroked line along the centre
+      // line, so it follows bends and keeps an even dash rhythm; a link road is painted once, from
+      // its `a` end all the way to the stop line at the other end.
       // Dedicated lane tints and legends
       // Outer edge of lane k (lanes may differ in width: bike lanes are narrow)
       const outer = (k) => p.offsets[k] + p.widths[k] / 2;
@@ -1029,30 +1082,45 @@ export class RoadRenderer {
           }
         }
       }
-      // Edge lines
-      ctx.fillStyle = COLORS.white;
-      strip(ctx, g, xs, len, -h + 0.25, -h + 0.37);
-      strip(ctx, g, xs, len, h - 0.37, h - 0.25);
-      // Lane dividers. Approach: solid near the stop line, dashed further out. Exit: dashed.
-      // Lines next to a dedicated lane are solid (yellow for the busway).
-      const divider = (y, approach, special) => {
-        ctx.fillStyle = special === 'bus' ? COLORS.yellow : COLORS.white;
-        if (special) {
-          strip(ctx, g, xs - 0.15, len, y - 0.07, y + 0.07);
-          return;
+      const link = A.type === 'link' ? A.link : null;
+      if (!link || link.a === I.id) {
+        // Far end: the other node's stop line (links) or the end of the drawn road.
+        let farStop = len + 40;
+        let farExit = len + 40;
+        if (link) {
+          const BA = net.byId.get(link.b).arms[link.bArm];
+          farStop = g.length - BA.stop;
+          farExit = g.length - BA.exitStop;
         }
-        if (approach) {
-          strip(ctx, g, A.stop + 0.45, A.stop + 18.45, y - 0.06, y + 0.06);
-          dashes(ctx, g, A.stop + 22, len, y, 3, 7, 0.12);
-        } else {
-          dashes(ctx, g, A.exitStop + 1.5, len, y, 3, 7, 0.12);
+        const limit = link ? farStop : len;
+        const end = Math.min(limit, farStop - 0.6);
+        const paint = (y, w, kind, x0, x1, dash) => this._paintLine(ctx, g, x0, Math.min(x1, limit), y, w, kind, dash);
+        // Centre: double solid yellow on undivided roads
+        if (m < 0.3) {
+          paint(-0.2, 0.12, 'yellow', xs, end);
+          paint(0.2, 0.12, 'yellow', xs, end);
         }
-      };
-      for (let k = 0; k < p.lanes - 1; k++) {
+        // Edge lines along both curbs
+        paint(-h + 0.31, 0.12, 'white', xs, end);
+        paint(h - 0.31, 0.12, 'white', xs, end);
+        // Lane lines: broken white (3 m paint, 6 m gap), solid for the last 18 m before a stop line;
+        // solid next to a dedicated lane (yellow along the busway).
         const special = (t1, t2) => (t1 === 'bus' || t2 === 'bus' ? 'bus' : [t1, t2].includes('moto') ? 'moto' : [t1, t2].includes('bike') ? 'bike' : null);
-        const sp = special(p.types[k], p.types[k + 1]);
-        divider(-outer(k), true, sp);
-        divider(outer(k), false, sp);
+        for (let k = 0; k < p.lanes - 1; k++) {
+          const sp = special(p.types[k], p.types[k + 1]);
+          if (sp) {
+            for (const y of [-outer(k), outer(k)]) paint(y, 0.14, sp === 'bus' ? 'yellow' : 'white', xs - 0.15, end);
+            continue;
+          }
+          // Lanes heading into this node (left of the outward direction, -y)
+          paint(-outer(k), 0.12, 'white', A.stop + 0.45, A.stop + 18.45);
+          paint(-outer(k), 0.12, 'white', A.stop + 22, link ? farExit - 1.5 : len, [3, 6]);
+          // Lanes leaving it (+y): on a link they head into the far node's stop line
+          if (link) {
+            paint(outer(k), 0.12, 'white', A.exitStop + 1.5, farStop - 22, [3, 6]);
+            paint(outer(k), 0.12, 'white', farStop - 18.45, farStop - 0.45);
+          } else paint(outer(k), 0.12, 'white', A.exitStop + 1.5, len, [3, 6]);
+        }
       }
 
       // ---- Markings near the junction (always on the straight lead)
@@ -1081,7 +1149,7 @@ export class RoadRenderer {
         }
         worldText(ctx, 'YIELD', A.stop + 3.4, -(m / 2 + (h - m / 2) / 2), 1.4, COLORS.white, Math.PI / 2);
       } else if (I.kind === 'signal' || minor || I.kind === 'toll') {
-        ctx.fillStyle = COLORS.white;
+        ctx.fillStyle = this._paintStyle(ctx, 'white');
         ctx.fillRect(A.stop, -h + 0.2, 0.45, h - m / 2 - 0.45);
         if (minor) worldText(ctx, 'STOP', A.stop + 3.2, -(m / 2 + (h - m / 2) / 2), 1.6, COLORS.white, Math.PI / 2);
       }
@@ -1101,7 +1169,7 @@ export class RoadRenderer {
       }
       // Zebra crossing
       if (A.cwStart != null) {
-        ctx.fillStyle = COLORS.white;
+        ctx.fillStyle = this._paintStyle(ctx, 'white');
         for (let y = -h + 0.45; y < h - 0.4; y += 1.0) ctx.fillRect(A.cwStart, y, CROSSWALK_WIDTH, 0.55);
       }
       // Lane arrows (pointing toward the intersection = local -x)
@@ -1136,6 +1204,65 @@ export class RoadRenderer {
         }
       }
     }
+  }
+
+  /**
+   * Road paint: thermoplastic off-white or yellow with a little grain and wear (the asphalt shows
+   * through here and there). A pattern in world units, made once per canvas.
+   */
+  _paintStyle(ctx, kind) {
+    this._paints = this._paints || new WeakMap();
+    let set = this._paints.get(ctx);
+    if (!set) this._paints.set(ctx, (set = {}));
+    if (set[kind] !== undefined) return set[kind];
+    const base = kind === 'yellow' ? '#e9b934' : '#ebe8dd';
+    let style = base;
+    if (typeof document !== 'undefined') {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const k = c.getContext('2d');
+      k.fillStyle = base;
+      k.fillRect(0, 0, 64, 64);
+      const rng = new Rng(kind === 'yellow' ? 71 : 37);
+      // grain
+      for (let i = 0; i < 260; i++) {
+        k.fillStyle = rng.chance(0.5) ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.18)';
+        k.fillRect(rng.int(0, 63), rng.int(0, 63), 1, 1);
+      }
+      // worn spots where the asphalt shows through
+      k.globalCompositeOperation = 'destination-out';
+      for (let i = 0; i < 26; i++) {
+        k.fillStyle = 'rgba(0,0,0,' + rng.range(0.25, 0.7).toFixed(2) + ')';
+        k.beginPath();
+        k.arc(rng.range(0, 64), rng.range(0, 64), rng.range(0.6, 2.4), 0, Math.PI * 2);
+        k.fill();
+      }
+      const pat = ctx.createPattern(c, 'repeat');
+      if (pat && pat.setTransform && typeof DOMMatrix !== 'undefined') {
+        pat.setTransform(new DOMMatrix().scale(1 / 40)); // 64 px of pattern = 1.6 m of road
+        style = pat;
+      }
+    }
+    set[kind] = style;
+    return style;
+  }
+
+  /** One painted line along offset y from x0 to x1 (dash = [paint, gap] in metres, or solid). */
+  _paintLine(ctx, g, x0, x1, y, w, kind, dash) {
+    if (x1 - x0 < 0.2) return;
+    ctx.save();
+    ctx.strokeStyle = this._paintStyle(ctx, kind);
+    ctx.lineWidth = w;
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'round';
+    // Thinner than a pixel at this zoom: fade it instead of letting it shimmer.
+    const px = w * (this.ppm || 10);
+    if (px < 1) ctx.globalAlpha = Math.max(0.35, px);
+    if (dash) ctx.setLineDash(dash);
+    ctx.beginPath();
+    addLine(ctx, g, x0, x1, y);
+    ctx.stroke();
+    ctx.restore();
   }
 
   /** Lane arrow pointing toward the junction (local -x); left of travel is local +y. */
@@ -1186,6 +1313,10 @@ export class RoadRenderer {
       if (l.kind !== 'promenade' && this._off(l.x, l.y, Math.max(l.w, l.h))) continue;
       drawLandmark(ctx, l, { river: this.network.river, text: worldText });
     }
+    // Level of detail from the zoom (device pixels per metre): far out, signs and rooftop clutter
+    // are smaller than a pixel, so they are left out (a full redraw of a big map stays quick).
+    const ppm = this.ppm || 10;
+    const lod = ppm < 2.2 ? 0 : ppm < 5 ? 1 : 2;
     for (const b of buildings) {
       if (this._off(b.cx, b.cy, Math.max(b.w, b.h) + 4)) continue;
       const w = b.w;
@@ -1194,12 +1325,43 @@ export class RoadRenderer {
       const minY = -h / 2;
       const maxX = w / 2;
       const maxY = h / 2;
-      ctx.save();
-      ctx.translate(b.cx + 0.5, b.cy + 0.7);
-      ctx.rotate(b.angle);
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(minX, minY, w, h);
-      ctx.restore();
+      // Height in storeys (fixed per building): taller shops on the avenues, low houses behind.
+      const storeys = b.storeys || (b.storeys = 1 + (Math.abs(Math.sin(b.cx * 12.9898 + b.cy * 78.233) * 43758.5453) % 1) * (b.shop ? 6 : 3.2));
+      // Shadow: the roof outline swept away from the sun (upper left), longer for taller buildings.
+      const sl = 0.55 + storeys * 0.75;
+      if (lod === 0) {
+        ctx.save();
+        ctx.translate(b.cx + sl * 0.35, b.cy + sl * 0.5);
+        ctx.rotate(b.angle);
+        ctx.fillStyle = 'rgba(0,0,0,0.26)';
+        ctx.fillRect(minX, minY, w + sl * 0.3, h + sl * 0.3);
+        ctx.restore();
+        ctx.save();
+        ctx.translate(b.cx, b.cy);
+        ctx.rotate(b.angle);
+        ctx.fillStyle = b.color;
+        ctx.fillRect(minX, minY, w, h);
+        ctx.restore();
+        continue;
+      }
+      const corners = [
+        [minX, minY],
+        [maxX, minY],
+        [maxX, maxY],
+        [minX, maxY],
+      ].map(([x, y]) => [b.cx + x * Math.cos(b.angle) - y * Math.sin(b.angle), b.cy + x * Math.sin(b.angle) + y * Math.cos(b.angle)]);
+      ctx.fillStyle = 'rgba(0,0,0,0.26)';
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const [ax, ay] = corners[i];
+        const [bx2, by2] = corners[(i + 1) % 4];
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx2, by2);
+        ctx.lineTo(bx2 + sl * 0.7, by2 + sl);
+        ctx.lineTo(ax + sl * 0.7, ay + sl);
+        ctx.closePath();
+      }
+      ctx.fill('nonzero');
       ctx.save();
       ctx.translate(b.cx, b.cy);
       ctx.rotate(b.angle);
@@ -1224,10 +1386,23 @@ export class RoadRenderer {
         else for (let y = minY + 0.6; y < maxY; y += 0.6) { ctx.moveTo(minX, y); ctx.lineTo(maxX, y); }
         ctx.stroke();
       }
-      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-      ctx.lineWidth = 0.2;
+      // Bevel: the parapet catches the light on the sun side and falls into shade on the other.
+      ctx.fillStyle = 'rgba(255,255,255,0.16)';
+      ctx.fillRect(minX, minY, w, 0.3);
+      ctx.fillRect(minX, minY, 0.3, h);
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.fillRect(minX, maxY - 0.3, w, 0.3);
+      ctx.fillRect(maxX - 0.3, minY, 0.3, h);
+      if (!b.ribbed) {
+        // Concrete roof deck: a parapet wall all round
+        ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+        ctx.lineWidth = 0.18;
+        ctx.strokeRect(minX + 0.5, minY + 0.5, w - 1, h - 1);
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 0.15;
       ctx.strokeRect(minX, minY, w, h);
-      for (const d of b.details) {
+      for (const d of lod === 2 ? b.details : []) {
         const x = minX + d.u * w;
         const y = minY + d.v * h;
         if (d.kind === 'tank') {
@@ -1263,7 +1438,11 @@ export class RoadRenderer {
           if (horiz) ctx.fillRect(ax + (aw * i) / n, ay, aw / n + 0.01, ah);
           else ctx.fillRect(ax, ay + (ah * i) / n, aw, ah / n + 0.01);
         }
-        // Sign on the roof edge
+        // Sign on the roof edge (only once it is big enough to read)
+        if (lod < 2) {
+          ctx.restore();
+          continue;
+        }
         const sx = f.x !== 0 ? (f.x > 0 ? maxX - 1.3 : minX + 1.3) : 0;
         const sy = f.y !== 0 ? (f.y > 0 ? maxY - 1.3 : minY + 1.3) : 0;
         const ang = f.x !== 0 ? -Math.PI / 2 : 0;
@@ -1309,19 +1488,16 @@ export class RoadRenderer {
     }
     for (const t of trees) {
       if (this._off(t.x, t.y, t.r + 1)) continue;
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
-      ctx.beginPath();
-      ctx.arc(t.x + 0.5, t.y + 0.6, t.r, 0, Math.PI * 2);
-      ctx.fill();
-      const g = Math.round(110 + t.shade * 40);
-      ctx.fillStyle = `rgb(${40 + Math.round(t.shade * 20)},${g},${50 + Math.round(t.shade * 15)})`;
-      ctx.beginPath();
-      ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.12)';
-      ctx.beginPath();
-      ctx.arc(t.x - t.r * 0.3, t.y - t.r * 0.3, t.r * 0.55, 0, Math.PI * 2);
-      ctx.fill();
+      if (lod === 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        ctx.beginPath();
+        ctx.arc(t.x + t.r * 0.5, t.y + t.r * 0.7, t.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#3c7a35';
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+        ctx.fill();
+      } else drawTree(ctx, t);
     }
   }
 

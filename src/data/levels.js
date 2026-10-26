@@ -38,7 +38,7 @@ const DETAILS = {
   env: { hour: 9.5, rate: 0.3, random: true },
   // Pasaway counterflow on undivided roads (chance per try for a motorcycle / a private car or
   // jeepney), emergency vehicles using the oncoming lane, and traffic enforcers to station.
-  counterflow: { moto: 0.25, car: 0.05, minWait: 10, minQueue: 4, emergency: true },
+  counterflow: { moto: 0.35, car: 0.08, minWait: 10, minQueue: 4, emergency: true },
   enforcer: { count: 2 },
 };
 

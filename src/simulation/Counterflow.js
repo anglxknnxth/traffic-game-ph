@@ -41,6 +41,7 @@ const STUCK_LIMIT = 15; // s out there before it is made to come back
 const PASAWAY_STALL = 12; // s standing still out there (any reason but its own red) before it gives up
 const EMERGENCY_STALL = 20; // the same for a siren
 const CF_AGAIN = 30; // s after giving up before the same vehicle tries again
+const BOX_TUCK_AFTER = 6; // s stopped in the box still out to the side before it tucks back in sideways
 const PED_MARGIN = 0.3; // m kept from people crossing in front of a body out in the oncoming lane
 const STOP_CLEAR = 18; // a pasaway gets back in at least this far before the stop line
 const CHECK_EVERY = 30; // steps between decisions per vehicle
@@ -408,6 +409,33 @@ export class CounterflowManager {
     return false;
   }
 
+  /** Sideways back toward its own path while stopped in the box (see _step); done once straight in. */
+  _tuckInBox(v, dt) {
+    const cf = v.cf;
+    // From here on the offset is the plain value (no longer tied to distance travelled).
+    if (cf.sweep || cf.decay) {
+      v.cfOff = v._cfOff(v.s);
+      v.cfYaw = v._cfYaw(v.s);
+      cf.sweep = null;
+      cf.decay = null;
+    }
+    const sim = this.sim;
+    const tmp = this._tmp || (this._tmp = makeObb());
+    const oldOff = v.cfOff || 0;
+    const oldYaw = v.cfYaw || 0;
+    const d = -Math.sign(oldOff) * Math.min(Math.abs(oldOff), LAT_SPEED * dt);
+    const nb = sim.collision.neighbors(v, Math.abs(d) + 1.2);
+    v.cfOff = oldOff + d;
+    v.cfYaw = oldYaw * 0.9;
+    v.poseAt(v.s, tmp);
+    if (sim.collision.isPoseSafe(v, tmp, nb)) v.updatePose();
+    else {
+      v.cfOff = oldOff;
+      v.cfYaw = oldYaw;
+    }
+    if (Math.abs(v.cfOff) < 0.02 && Math.abs(v.cfYaw) < 0.02) this._finish(v);
+  }
+
   /** Ease the nose back toward straight, through the gate. */
   _straighten(v, dt) {
     const y = v.cfYaw || 0;
@@ -569,6 +597,12 @@ export class CounterflowManager {
         cf.decay = cf.sweep;
       }
       if (cf.decay && v.s > cf.decay.s0 + cf.decay.L) this._finish(v);
+      else if (v.cf) {
+        // Pinned in the box still half out to the side (the ease-back only moves with it): tuck the
+        // body back over its own path sideways instead, as far as the gate allows.
+        cf.boxStall = v.v < 0.05 ? (cf.boxStall || 0) + dt : 0;
+        if (cf.boxStall > BOX_TUCK_AFTER) this._tuckInBox(v, dt);
+      }
       return;
     }
     if (cf.phase === 'signal') {

@@ -19,6 +19,14 @@ export const ICONS = {
   stats: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="12" width="3.5" height="8" rx="1"/><rect x="10.25" y="7" width="3.5" height="13" rx="1"/><rect x="16.5" y="4" width="3.5" height="16" rx="1"/></svg>',
 };
 
+/** el[prop] = value, skipping the write (and the style / layout work it triggers) when unchanged. */
+function set(el, prop, value) {
+  const memo = el._hudSet || (el._hudSet = {});
+  if (memo[prop] === value) return;
+  memo[prop] = value;
+  el[prop] = value;
+}
+
 const LEVEL_TEXT = {
   [CONGESTION.NORMAL]: ['Flowing', 'ok'],
   [CONGESTION.HEAVY]: ['Heavy traffic', 'warn'],
@@ -420,30 +428,31 @@ export class HUD {
     const sim = s.sim;
     const m = sim.metrics;
     const lvl = s.level;
-    this._street(sim);
-    this._live(sim);
-    this.monitor.sample(sim, Math.max(0, sim.time - this._simT));
-    this._simT = sim.time;
-    if (this.game.state.showMonitor) this.monitor.render(sim);
-    // The side column stops above the stack of panels and controls at the bottom-left.
+    // The side column stops above the stack of panels and controls at the bottom-left. (Measured
+    // before anything below writes to the page, so reading the layout costs nothing.)
     const sideTop = this.el.side.getBoundingClientRect().top;
     const room = Math.round(this.el.bottom.getBoundingClientRect().top - sideTop - 8);
     if (room > 0 && room !== this._sideRoom) {
       this._sideRoom = room;
       this.el.side.style.maxHeight = `${room}px`;
     }
-    this.el.time.textContent = lvl.duration ? formatTime(Math.max(0, lvl.duration - s.elapsed)) : formatTime(s.elapsed);
-    this.el.score.textContent = sim.scoring.total().toLocaleString();
+    this._street(sim);
+    this._live(sim);
+    this.monitor.sample(sim, Math.max(0, sim.time - this._simT));
+    this._simT = sim.time;
+    if (this.game.state.showMonitor) this.monitor.render(sim);
+    set(this.el.time, 'textContent', lvl.duration ? formatTime(Math.max(0, lvl.duration - s.elapsed)) : formatTime(s.elapsed));
+    set(this.el.score, 'textContent', sim.scoring.total().toLocaleString());
     // Clock and weather (levels with an environment only)
     this.el.env.hidden = !lvl.env;
     if (lvl.env) {
       const icon = sim.env.weather === 'clear' ? (sim.env.darkness > 0.5 ? '🌙' : '☀️') : sim.env.weather === 'rain' ? '🌧️' : '⛈️';
-      this.el.clock.textContent = sim.env.clock();
-      this.el.weather.textContent = `${icon} ${sim.env.label()}`;
+      set(this.el.clock, 'textContent', sim.env.clock());
+      set(this.el.weather, 'textContent', `${icon} ${sim.env.label()}`);
     }
     const [txt, cls] = LEVEL_TEXT[m.level] || LEVEL_TEXT.NORMAL;
-    this.el.status.textContent = txt;
-    this.el.status.className = `hud-block hud-status ${cls}`;
+    set(this.el.status, 'textContent', txt);
+    set(this.el.status, 'className', `hud-block hud-status ${cls}`);
 
     // Signal panels
     this._autoTimer = (this._autoTimer || 0) + 1;
@@ -454,15 +463,15 @@ export class HUD {
     for (const p of this.panelEls || []) {
       const mgr = sim.lights.manager(p.id);
       const d = mgr.describe();
-      p.label.textContent = d.label;
-      p.label.className = `phase-label ${d.state === 'GREEN' ? 'g' : d.state === 'YELLOW' || d.state === 'FLASH' ? 'y' : 'r'}`;
-      p.count.textContent = d.state === 'GREEN' || d.state === 'FLASH' ? `${d.elapsed.toFixed(0)}s` : `${d.countdown.toFixed(1)}s → ${mgr.labelOf(d.pending)}`;
+      set(p.label, 'textContent', d.label);
+      set(p.label, 'className', `phase-label ${d.state === 'GREEN' ? 'g' : d.state === 'YELLOW' || d.state === 'FLASH' ? 'y' : 'r'}`);
+      set(p.count, 'textContent', d.state === 'GREEN' || d.state === 'FLASH' ? `${d.elapsed.toFixed(0)}s` : `${d.countdown.toFixed(1)}s → ${mgr.labelOf(d.pending)}`);
       p.flash.classList.toggle('active', mgr.flashing || mgr.nextGroup === FLASH_GROUP);
       p.label.parentElement.classList.toggle('paired', mgr.paired);
       for (const b of p.btns) {
         const group = b.dataset.group;
         const sig = mgr.signalForGroup(group);
-        b.dataset.sig = sig;
+        if (b.dataset.sig !== sig) b.dataset.sig = sig;
         b.classList.toggle('partner', mgr.partner === group || (mgr.paired && mgr.activeGroup === group));
         b.classList.toggle('pending', mgr.pendingGroup === group || (mgr.state !== 'GREEN' && mgr.nextGroup === group));
         b.classList.toggle('priority', mgr.priorityGroup === group && sig !== 'green');
@@ -471,20 +480,20 @@ export class HUD {
 
     // Objectives
     const st = this.game.levels.objectiveStatus(lvl, sim, s.tracker);
-    this.el.objectives.innerHTML = st.length
+    set(this.el.objectives, 'innerHTML', st.length
       ? st.map((o) => `<div class="obj ${o.pass ? 'pass' : ''}"><span>${o.label}</span><b>${o.value}</b><i style="width:${Math.round(Math.max(0, Math.min(1, o.progress)) * 100)}%"></i></div>`).join('')
       : sim.growth
         ? `<div class="obj"><span>${sim.growth.nextAt ? `Next district at ${sim.growth.nextAt} vehicles` : 'The whole city is open'}</span><b>${sim.stats.processed} through</b>${sim.growth.nextAt ? `<i style="width:${Math.round(Math.min(1, sim.stats.processed / sim.growth.nextAt) * 100)}%"></i>` : ''}</div>`
         : lvl.mode === 'endless' || lvl.mode === 'chill'
           ? `<div class="obj"><span>${lvl.mode === 'chill' ? 'Chill · no game over' : 'Survive and move traffic'}</span><b>${sim.stats.processed} through</b></div>`
-          : '';
+          : '');
 
     // Metrics
     if (this.game.state.showMetrics) {
       const cong = Math.round(m.congestion * 100);
       const mgrs = [...sim.lights.managers.values()];
       const phases = mgrs.length > 2 ? `${mgrs.length} signals · ${[...sim.lights.managers.keys()].filter((id) => sim.autopilot.isAuto(id)).length} on AUTO` : mgrs.map((m) => m.describe().label).join(' · ');
-      this.el.metrics.innerHTML = `
+      set(this.el.metrics, 'innerHTML', `
         <h4>Traffic</h4>
         <div class="row"><span>Level</span><b>${typeof lvl.id === 'number' ? lvl.id : lvl.name}</b></div>
         <div class="row"><span>Vehicles through</span><b>${m.processed}</b></div>
@@ -498,7 +507,7 @@ export class HUD {
         <div class="row"><span>Congestion</span><b class="${cong > 70 ? 'bad' : cong > 45 ? 'warnc' : ''}">${cong}%</b></div>
         <div class="bar"><i style="width:${cong}%;background:${cong > 70 ? '#ef4444' : cong > 45 ? '#f59e0b' : '#22c55e'}"></i></div>
         <div class="row small"><span>Phase</span><b>${phases}</b></div>
-        <div class="row small"><span>Safety rating</span><b>${Math.round(sim.scoring.safety)}%</b></div>`;
+        <div class="row small"><span>Safety rating</span><b>${Math.round(sim.scoring.safety)}%</b></div>`);
     }
 
     // Emergency banner
@@ -509,9 +518,9 @@ export class HUD {
       const mgr = sim.lights.manager(p.intersectionId);
       const ok = mgr.signalForGroup(p.group) === 'green';
       this.el.emergency.hidden = false;
-      this.el.emergency.className = `hud-emergency ${ok ? 'ok' : ''}`;
+      set(this.el.emergency, 'className', `hud-emergency ${ok ? 'ok' : ''}`);
       const I = sim.network.byId.get(p.intersectionId);
-      this.el.emergency.innerHTML = `<b>${p.label.toUpperCase()}</b> on ${sim.network.armName(I, p.arm)} ${ok ? 'has a green light' : `will run the red · give <b>${mgr.labelOf(p.group)}</b> green to clear the way`}${multi ? ` at ${p.intersectionId}` : ''} · ${Math.max(0, p.dist).toFixed(0)} m`;
+      set(this.el.emergency, 'innerHTML', `<b>${p.label.toUpperCase()}</b> on ${sim.network.armName(I, p.arm)} ${ok ? 'has a green light' : `will run the red · give <b>${mgr.labelOf(p.group)}</b> green to clear the way`}${multi ? ` at ${p.intersectionId}` : ''} · ${Math.max(0, p.dist).toFixed(0)} m`);
     } else {
       this.el.emergency.hidden = true;
     }
@@ -549,7 +558,7 @@ export class HUD {
       const label = `CAM ${String(n).padStart(2, '0')} · ${this._junctionName(sim, best.id).toUpperCase() || best.id}`;
       if (this.el.cam.textContent !== label) this.el.cam.textContent = label;
     }
-    this.el.ts.textContent = this._stamp(true);
+    set(this.el.ts, 'textContent', this._stamp(true));
   }
 
   // ------------------------------------------------------------------ street talk

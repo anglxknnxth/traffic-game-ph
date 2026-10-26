@@ -7,13 +7,25 @@
 // always checks the real body sweeping across both lanes. While it is still partly in the old lane
 // it stays visible there as a "ghost" leader for the traffic behind it.
 
-import { Route } from './Vehicle.js';
+import { Route, clearFraction } from './Vehicle.js';
 import { Network } from './LaneManager.js';
 import { idm } from './VehicleAI.js';
 import { LOADING_ZONE_S, SIM_DT } from '../data/config.js';
 
 const CHECK_EVERY = 30; // steps between checks per vehicle (0.5 s at 60 Hz), staggered by id
 const SIGNAL_FIRST = 0.8; // seconds of indicator before a discretionary lane change starts
+
+/** A short, sharp pull-out round something stopped ahead (slow speed allows a tight swing). */
+function pullOutLength(v, speed = v.v) {
+  return Math.max(v.spec.length * 1.3, 6 + speed * 1.5);
+}
+
+/** Lead is stopped to load passengers, or braking for its stop just ahead. */
+export function isLoadingStop(lead, within = 15) {
+  const L = lead.loading;
+  if (!L) return false;
+  return L.state === 'stopped' || (L.state === 'pending' && L.s - lead.front < within && lead.v < 4);
+}
 
 export class LaneChanger {
   constructor(sim) {
@@ -88,7 +100,8 @@ export class LaneChanger {
 
   /** Is the own lane blocked ahead (loading stop, breakdown, roadworks)? */
   _blockedAhead(v, lane, lead) {
-    if (lead && lead.v < 0.5 && (lead.loading?.state === 'stopped' || lead.broken)) {
+    // A jeep stopping to load (or a breakdown): go round it, already while it brakes for its stop.
+    if (lead && ((lead.v < 0.5 && lead.broken) || isLoadingStop(lead))) {
       return lead.localS - lead.hl - v.localS - v.hl < 40;
     }
     // Sirens: an emergency vehicle stuck behind slow traffic looks for a clearer lane.
@@ -101,6 +114,22 @@ export class LaneChanger {
     if (lane.dropAt !== undefined && lane.dropAt > lf - 0.5 && lane.dropAt - lf < 90) return true;
     const blk = this.sim.nextBlockage(v);
     return blk !== null && blk - v.front < 45;
+  }
+
+  /**
+   * Standstill gap to leave behind a vehicle stopped to load so v can still pull out round it
+   * (null when there is no lane beside to pull out into).
+   */
+  pullOutGap(v, lead) {
+    const seg = v.segment;
+    if (seg.kind !== 'lane' || v.type === 'bicycle') return null;
+    let best = null;
+    for (const B of LaneChanger.neighbours(seg)) {
+      if (!B.allows(v.type) || B.type === 'bike' || B.dropAt !== undefined || B.closed) continue;
+      const g = clearFraction(seg.offset - B.offset, v.spec.width, lead.spec.width) * pullOutLength(v, 0) + 0.6;
+      if (best === null || g < best) best = g;
+    }
+    return best;
   }
 
   /** An emergency vehicle close behind v in its own lane. */
@@ -140,6 +169,7 @@ export class LaneChanger {
     const hop = !forced && v.v < minSpeed && !!own.lead && own.lead.v < 0.5 && own.lead.localS - own.lead.hl - v.localS - v.hl < 12;
     if (v.v < minSpeed && !forced && !hop) return null;
     const accCur = forced ? -3 : this._accWith(v, own.lead);
+    if (forced && !dropping) L = Math.min(L, pullOutLength(v));
 
     const P = v.p;
     let threshold = P.laneChangeGain ?? 0.6;
@@ -169,7 +199,12 @@ export class LaneChanger {
       // Sliding over from a standstill only into real space, not to the next car's bumper.
       if (hop && (gapFront < Math.max(14, v.spec.length * 2.5) || (lead && lead.v < 0.5 && gapFront < 20))) continue;
       // The vehicle must have room to straighten up before reaching whatever is ahead in its own lane.
-      if (own.lead && own.lead.localS - own.lead.hl - v.localS - v.hl < 0.45 * L) continue;
+      // (Round a stopped one: until the body is out far enough to pass it.)
+      if (own.lead) {
+        const gapOwn = own.lead.localS - own.lead.hl - v.localS - v.hl;
+        const need = own.lead.v < 0.5 ? clearFraction(seg.offset - B.offset, v.spec.width, own.lead.spec.width) * L + 0.4 : 0.45 * L;
+        if (gapOwn < need) continue;
+      }
       let followerLoss = 0;
       if (follow) {
         const after = this._accWith(follow, null, gapBack);

@@ -16,7 +16,16 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+const _shades = new Map();
+
 function shade(hex, amt) {
+  const key = hex + amt;
+  let out = _shades.get(key);
+  if (out === undefined) _shades.set(key, (out = shadeOf(hex, amt)));
+  return out;
+}
+
+function shadeOf(hex, amt) {
   const n = parseInt(hex.slice(1), 16);
   let r = (n >> 16) & 255;
   let g = (n >> 8) & 255;
@@ -137,7 +146,7 @@ function drawTricycle(ctx, L, W, color, helmet) {
 
 const ROUTES = ['QUIAPO', 'CUBAO', 'BACLARAN', 'DIVISORIA', 'LAWTON', 'MOA', 'NOVALICHES', 'FAIRVIEW', 'PASAY', 'STA. MESA', 'ESPAÑA', 'MONUMENTO', 'ALABANG', 'PROJECT 4'];
 
-function drawJeepney(ctx, L, W, color, accent, vh = 0) {
+function drawJeepney(ctx, L, W, color, accent, vh = 0, flip = false) {
   const hl = L / 2;
   const hw = W / 2;
   ctx.fillStyle = shade(color, -0.1);
@@ -186,8 +195,7 @@ function drawJeepney(ctx, L, W, color, accent, vh = 0) {
   ctx.save();
   ctx.translate(-hl + 0.6 + L * 0.25, 0);
   // Keep the board readable whichever way the jeepney is heading
-  const t = ctx.getTransform();
-  if (Math.cos(Math.atan2(t.b, t.a)) < -0.1) ctx.rotate(Math.PI);
+  if (flip) ctx.rotate(Math.PI);
   const k = Math.min(0.03, (L * 0.48) / Math.max(1, route.length * 13));
   ctx.scale(k, k);
   ctx.font = '900 20px system-ui, sans-serif';
@@ -595,20 +603,15 @@ function busDetails(ctx, L, W, vh) {
 const HELMETS = ['#f8fafc', '#111827', '#dc2626', '#facc15', '#2563eb', '#16a34a'];
 const JEEP_ACCENTS = ['#fdc500', '#c1121f', '#0077b6', '#ffffff', '#2b9348', '#ff6d00'];
 
-export function drawVehicle(ctx, v, time) {
+/** Drop shadow and body (everything but the lights), in vehicle-local coordinates. */
+function drawBody(ctx, v, time, vh, flip) {
   const L = v.spec.length;
   const W = v.spec.width;
   const hl = L / 2;
   const hw = W / 2;
-  ctx.save();
-  ctx.translate(v.x, v.y);
-  ctx.rotate(v.angle);
-  // drop shadow
   ctx.fillStyle = 'rgba(0,0,0,0.28)';
   roundRect(ctx, -hl + 0.22, -hw + 0.28, L, W, 0.4);
   ctx.fill();
-
-  const vh = variantHash(v);
   switch (v.type) {
     case 'motorcycle':
       drawMotorcycle(ctx, L, W, v.color, HELMETS[v.id % HELMETS.length]);
@@ -618,7 +621,7 @@ export function drawVehicle(ctx, v, time) {
       drawTricycle(ctx, L, W, v.color, HELMETS[(v.id + 2) % HELMETS.length]);
       break;
     case 'jeepney':
-      drawJeepney(ctx, L, W, v.color, JEEP_ACCENTS[v.id % JEEP_ACCENTS.length], vh);
+      drawJeepney(ctx, L, W, v.color, JEEP_ACCENTS[v.id % JEEP_ACCENTS.length], vh, flip);
       break;
     case 'bus':
       drawBus(ctx, L, W, v.color);
@@ -666,6 +669,89 @@ export function drawVehicle(ctx, v, time) {
     default:
       drawCar(ctx, L, W, v.color);
   }
+}
+
+// ---------------------------------------------------------------- body sprites
+// A body looks the same every frame (apart from the jeepney's route board turning to stay readable
+// and the emergency strobes), so it is drawn once into a small image at (just above) the current
+// zoom and then stamped. The lights on top stay live.
+
+const SPRITE_MARGIN = 0.5; // metres around the body (shadow, mirrors, rear step)
+const ZOOM_STEP = 2 ** 0.25; // sprite resolution steps (always at least the screen's)
+const MAX_SPRITES = 600;
+const sprites = new Map();
+let spriteRes = 0;
+
+/** What a sprite depends on besides type and paint: the variant bits each type actually reads. */
+function lookKey(v, vh) {
+  const h = HELMETS.length;
+  switch (v.type) {
+    case 'motorcycle':
+      return `${v.id % h}|${vh % 5}`;
+    case 'tricycle':
+      return `${(v.id + 2) % h}`;
+    case 'jeepney':
+      return `${v.id % JEEP_ACCENTS.length}|${vh % ROUTES.length}`;
+    case 'bus':
+      return `${vh % 3}`;
+    case 'truck':
+      return `${vh % 4}|${vh % LIVERIES.length}`;
+    case 'pickup':
+      return `${vh % 3 === 0 ? 'x' : vh % CARGO.length}`;
+    case 'ejeep':
+      return `${vh % JEEP_ACCENTS.length}`;
+    case 'tanker':
+      return `${vh % 3 === 0}`;
+    case 'car':
+      return `${vh % 7}`;
+    default:
+      return '';
+  }
+}
+
+function bodySprite(v, time, vh, ppm) {
+  const res = ZOOM_STEP ** Math.ceil(Math.log(Math.max(0.5, ppm)) / Math.log(ZOOM_STEP));
+  if (res !== spriteRes || sprites.size > MAX_SPRITES) {
+    sprites.clear();
+    spriteRes = res;
+  }
+  const flip = v.type === 'jeepney' && Math.cos(v.angle) < -0.1;
+  const strobe = v.type === 'ambulance' ? Math.floor(time * 6) % 2 : v.type === 'firetruck' ? Math.floor(time * 5) % 2 : 0;
+  if (v._look === undefined) v._look = `${v.type}|${v.color}|${lookKey(v, vh)}`;
+  const key = `${v._look}|${flip ? 1 : 0}${strobe}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const m = SPRITE_MARGIN;
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.ceil((v.spec.length + 2 * m) * res));
+  c.height = Math.max(1, Math.ceil((v.spec.width + 2 * m) * res));
+  const g = c.getContext('2d');
+  g.setTransform(res, 0, 0, res, (v.spec.length / 2 + m) * res, (v.spec.width / 2 + m) * res);
+  // the strobe phase the key was made with (a whole number of half-periods)
+  const t = v.type === 'ambulance' ? (strobe ? 1 / 6 : 0) : v.type === 'firetruck' ? (strobe ? 1 / 5 : 0) : time;
+  drawBody(g, v, t + 1e-6, vh, flip);
+  s = { canvas: c, w: c.width / res, h: c.height / res };
+  sprites.set(key, s);
+  return s;
+}
+
+/**
+ * Draw a vehicle. `ppm` is device pixels per metre: with it the body is stamped from a cached
+ * sprite (bicycles, whose legs pedal, are always drawn directly).
+ */
+export function drawVehicle(ctx, v, time, ppm = 0) {
+  const L = v.spec.length;
+  const W = v.spec.width;
+  const hl = L / 2;
+  const hw = W / 2;
+  ctx.save();
+  ctx.translate(v.x, v.y);
+  ctx.rotate(v.angle);
+  const vh = variantHash(v);
+  if (ppm > 0 && v.type !== 'bicycle' && typeof document !== 'undefined') {
+    const s = bodySprite(v, time, vh, ppm);
+    ctx.drawImage(s.canvas, -hl - SPRITE_MARGIN, -hw - SPRITE_MARGIN, s.w, s.h);
+  } else drawBody(ctx, v, time, vh, v.type === 'jeepney' && Math.cos(v.angle) < -0.1);
 
   // Lights: headlights, brake lights, indicators
   const twoWheel = v.type === 'motorcycle' || v.type === 'bicycle';

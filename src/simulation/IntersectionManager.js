@@ -89,8 +89,9 @@ export class IntersectionManager {
 
   /** Footprint of `spec` traversing `conn`: cells + the connector progress after which each is free. */
   footprint(conn, spec) {
-    const key = `${conn.id}|${spec.key}`;
-    let fp = this.cache.get(key);
+    let byType = this.cache.get(conn);
+    if (!byType) this.cache.set(conn, (byType = new Map()));
+    let fp = byType.get(spec.key);
     if (fp) return fp;
     const hl = spec.length / 2 + this.pad;
     const hw = spec.width / 2 + this.pad;
@@ -169,8 +170,28 @@ export class IntersectionManager {
     }
 
     fp = { cells, firstS: first, lastS: last, index, keepClear };
-    this.cache.set(key, fp);
+    byType.set(spec.key, fp);
     return fp;
+  }
+
+  /** True when the footprint of `spec` on `conn` is already built. */
+  hasFootprint(conn, spec) {
+    return !!this.cache.get(conn)?.has(spec.key);
+  }
+
+  /**
+   * Build what crossConflicts(conn) needs one footprint at a time, stopping once performance.now()
+   * passes `until`. True when everything is ready.
+   */
+  warmConflicts(conn, until) {
+    if (this.crossCache.has(conn)) return true;
+    for (const other of this.I.connectors) {
+      if (this.hasFootprint(other, VEHICLE_TYPES.car)) continue;
+      this.footprint(other, VEHICLE_TYPES.car);
+      if (performance.now() > until) return false;
+    }
+    this.crossConflicts(conn);
+    return true;
   }
 
   /** True when every footprint cell is free of conflicting reservations. */

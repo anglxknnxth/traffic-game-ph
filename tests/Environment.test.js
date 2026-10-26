@@ -86,6 +86,26 @@ describe('Lane changes', () => {
     expect(sim.stats.processed).toBeGreaterThan(30);
   });
 
+  it('drivers behind a jeepney stopped to load pull out round it', () => {
+    const lvl = makeLevel({ map: 'commonwealth', prewarm: 0, demand: { N: 6, S: 6, E: 22, W: 22 }, mix: { car: 0.6, jeepney: 0.4 }, loadingStops: 1 });
+    const sim = new TrafficSimulator(lvl, { seed: 3 });
+    const prevLc = new Map();
+    let pulledOut = 0;
+    let stuck = 0;
+    soak(sim, 200, (s) => {
+      const byId = new Map(s.vehicles.map((o) => [o.id, o]));
+      for (const v of s.vehicles) {
+        // A change that leaves a jeepney stopping / stopped to load ahead in the old lane
+        if (v.lc && prevLc.get(v) === false && v.lc.fromLane.vehicles.some((o) => o.localS > v.localS && o.loading && o.loading.state !== 'done')) pulledOut++;
+        prevLc.set(v, !!v.lc);
+        const lead = byId.get(v.leaderId);
+        if (lead?.loading?.state === 'stopped' && lead.segment === v.segment && v.v < 0.3 && v.stoppedTime > 4) stuck++;
+      }
+    });
+    expect(pulledOut).toBeGreaterThan(5);
+    expect(stuck).toBe(0);
+  });
+
   it('a lane change keeps the route coordinate continuous', () => {
     const lvl = makeLevel({ map: 'espana', prewarm: 0, demand: { N: 12, S: 12, E: 12, W: 12 }, mix: { car: 0.6, jeepney: 0.4 }, loadingStops: 1, personalities: { impatient: 1 } });
     const sim = new TrafficSimulator(lvl, { seed: 2 });

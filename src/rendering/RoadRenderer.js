@@ -451,7 +451,7 @@ export class RoadRenderer {
       for (const I of net.intersections) {
         if (this._elevated(I)) continue;
         for (const arm of this._arms(I)) {
-          if (sidewalks && this._ramp(I, arm)) continue;
+          if ((sidewalks && this._ramp(I, arm)) || this._armOff(I, arm)) continue;
           fn(I, arm, I.arms[arm], armLength(net, I, arm), this._g(I, arm));
         }
       }
@@ -483,7 +483,7 @@ export class RoadRenderer {
     ctx.fillStyle = '#b9b5ad';
     for (const I of net.intersections) {
       for (const arm of this._arms(I)) {
-        if (!this._ramp(I, arm)) continue;
+        if (!this._ramp(I, arm) || this._armOff(I, arm)) continue;
         const A = I.arms[arm];
         strip(ctx, this._g(I, arm), this._cross(I, arm) + 2, armLength(net, I, arm), -(A.half + 0.7), A.half + 0.7);
       }
@@ -494,7 +494,7 @@ export class RoadRenderer {
     eachArm((I, arm, A, len, g) => strip(ctx, g, 0, len, -A.half, A.half));
     // Rounded curbs where two roads meet
     for (const I of net.intersections) {
-      if (SLOT_KINDS.has(I.kind) || this._elevated(I)) continue;
+      if (SLOT_KINDS.has(I.kind) || this._elevated(I) || this._off(I.x, I.y, Math.max(I.hx, I.hy) + R + 2)) continue;
       for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
           if (I.arms[sx > 0 ? 'E' : 'W'].type === 'none' || I.arms[sy > 0 ? 'S' : 'N'].type === 'none') continue;
@@ -541,6 +541,8 @@ export class RoadRenderer {
         const rx = rng.range(0.6, 2.2);
         const ry = rng.range(0.3, 1.0);
         const rot = rng.range(0, 3);
+        // (every random draw above is made even for a patch outside the view, so the rest match)
+        if (this.view && this._off(at(this._g(I, arm), x, y, p1).x, p1.y, 3)) continue;
         withFrame(ctx, this._g(I, arm), x, y, () => {
           ctx.beginPath();
           ctx.ellipse(0, 0, rx, ry, rot, 0, Math.PI * 2);
@@ -551,7 +553,7 @@ export class RoadRenderer {
     // Medians
     eachArm((I, arm, A, len, g) => this._drawMedian(ctx, I, A, len, g));
 
-    for (const I of net.intersections) if (!this._elevated(I)) this._drawNodeMarkings(ctx, I);
+    for (const I of net.intersections) if (!this._elevated(I) && !this._arms(I).every((arm) => this._armOff(I, arm))) this._drawNodeMarkings(ctx, I);
     this._drawTunnels(ctx);
     this._drawLaneDrops(ctx);
     if (net.river) drawBridgeRails(ctx, this.bridges, SW, net.river.name);
@@ -569,8 +571,10 @@ export class RoadRenderer {
         const A = I.arms[arm];
         const g = this._g(I, arm);
         const len = armLength(this.network, I, arm);
+        // Outside the view: nothing is drawn, but the random draws below are still made.
+        const off = this._armOff(I, arm);
         // Tyre-darkened strip in each approach lane before the stop line
-        if (I.kind === 'signal' || (I.kind === 'yield' && !I.major.has(arm))) {
+        if (!off && (I.kind === 'signal' || (I.kind === 'yield' && !I.major.has(arm)))) {
           for (const lane of I.approachLanes[arm] || []) {
             if (lane.type === 'tunnel' && I.def.underpass) continue;
             ctx.fillStyle = 'rgba(10,10,12,0.13)';
@@ -583,6 +587,7 @@ export class RoadRenderer {
           const lane = rng.pick([...(I.approachLanes[arm] || []), ...(I.exitLanes[arm] || [])]);
           if (!lane || u >= len) continue;
           const q = at(g, u, (lane.role === 'exit' || (lane.startInt === I && lane.role === 'link') ? 1 : -1) * lane.offset + rng.range(-0.6, 0.6));
+          if (off) continue;
           ctx.fillStyle = '#2b2d31';
           ctx.beginPath();
           ctx.arc(q.x, q.y, 0.42, 0, Math.PI * 2);
@@ -607,7 +612,7 @@ export class RoadRenderer {
       if (this._elevated(I)) continue;
       this._arms(I).forEach((arm, idx) => {
         const A = I.arms[arm];
-        if (this._ramp(I, arm)) return;
+        if (this._ramp(I, arm) || this._armOff(I, arm)) return;
         const g = this._g(I, arm);
         const name = net.roadName(I, arm);
         if (name) {
@@ -724,6 +729,7 @@ export class RoadRenderer {
     for (const I of net.intersections) {
       if (!this._elevated(I)) continue;
       for (const arm of this._arms(I)) {
+        if (this._armOff(I, arm)) continue;
         const A = I.arms[arm];
         const g = this._g(I, arm);
         const len = armLength(net, I, arm);
@@ -748,7 +754,9 @@ export class RoadRenderer {
     const nodes = net.intersections.filter((I) => this._elevated(I));
     if (!nodes.length) return;
     for (const I of nodes) {
+      if (this._arms(I).every((arm) => this._armOff(I, arm))) continue;
       for (const arm of this._arms(I)) {
+        if (this._armOff(I, arm)) continue;
         const A = I.arms[arm];
         const g = this._g(I, arm);
         const len = armLength(net, I, arm);
@@ -1041,6 +1049,7 @@ export class RoadRenderer {
 
     const q = {};
     for (const arm of this._arms(I)) {
+      if (this._armOff(I, arm)) continue;
       const A = I.arms[arm];
       const g = this._g(I, arm);
       const len = armLength(net, I, arm);
@@ -1211,9 +1220,8 @@ export class RoadRenderer {
    * through here and there). A pattern in world units, made once per canvas.
    */
   _paintStyle(ctx, kind) {
-    this._paints = this._paints || new WeakMap();
-    let set = this._paints.get(ctx);
-    if (!set) this._paints.set(ctx, (set = {}));
+    // One pattern per kind, shared by every canvas the static layer is drawn into.
+    const set = this._paints || (this._paints = {});
     if (set[kind] !== undefined) return set[kind];
     const base = kind === 'yellow' ? '#e9b934' : '#ebe8dd';
     let style = base;
@@ -1305,6 +1313,59 @@ export class RoadRenderer {
   _off(x, y, r) {
     const V = this.view;
     return !!V && (x + r < V.minX || x - r > V.maxX || y + r < V.minY || y - r > V.maxY);
+  }
+
+  /**
+   * World box around everything drawn along an arm: its centre line out to the end of the drawn
+   * road (and the far stop line of a link), widened past the sidewalks to take in signs and shadows.
+   */
+  _armBox(I, arm) {
+    const boxes = this._armBoxes || (this._armBoxes = new Map());
+    const key = `${I.id}:${arm}`;
+    let b = boxes.get(key);
+    if (b) return b;
+    const A = I.arms[arm];
+    const g = this._g(I, arm);
+    const len = Math.max(armLength(this.network, I, arm), g.length) + 40;
+    b = { minX: I.x, minY: I.y, maxX: I.x, maxY: I.y };
+    const p = {};
+    const add = (u) => {
+      g.point(u, 0, p);
+      if (p.x < b.minX) b.minX = p.x;
+      if (p.x > b.maxX) b.maxX = p.x;
+      if (p.y < b.minY) b.minY = p.y;
+      if (p.y > b.maxY) b.maxY = p.y;
+    };
+    for (let u = 0; u < len; u += 4) add(u);
+    add(len);
+    for (const q of g.pts) if (q.u < len) add(q.u);
+    const r = A.half + SW + 12;
+    b.minX -= r;
+    b.minY -= r;
+    b.maxX += r;
+    b.maxY += r;
+    boxes.set(key, b);
+    return b;
+  }
+
+  /** Does anything on the expressway level reach into world rectangle V? */
+  elevatedIn(V) {
+    for (const I of this.network.intersections) {
+      if (!this._elevated(I)) continue;
+      for (const arm of this._arms(I)) {
+        const b = this._armBox(I, arm);
+        if (!(b.maxX < V.minX || b.minX > V.maxX || b.maxY < V.minY || b.minY > V.maxY)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** The arm lies wholly outside the area being drawn. */
+  _armOff(I, arm) {
+    const V = this.view;
+    if (!V) return false;
+    const b = this._armBox(I, arm);
+    return b.maxX < V.minX || b.minX > V.maxX || b.maxY < V.minY || b.minY > V.maxY;
   }
 
   _drawScenery(ctx) {

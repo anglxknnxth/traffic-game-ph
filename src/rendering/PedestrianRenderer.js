@@ -10,6 +10,7 @@ const SKIN = '#b9825a';
 const DRAW_SCALE = 1.35;
 const SIGNAL_SCALE = 1.4;
 const _p = {};
+const SIDES = [-1, 1];
 
 function ellipse(ctx, x, y, rx, ry) {
   ctx.beginPath();
@@ -92,14 +93,16 @@ export function drawPedestrians(ctx, peds, rain, rect) {
 }
 
 /** Walk / don't-walk lights on both kerbs of every crosswalk. */
-export function drawPedSignals(ctx, sim, time) {
+export function drawPedSignals(ctx, sim, time, rect = null) {
   const peds = sim.peds;
   for (const c of peds.crossings) {
-    const state = peds.walkState(c);
-    const blink = Math.floor(time * 3) % 2 === 0;
-    const on = state === 'walk' ? '#22c55e' : state === 'flash' || state === 'gap' ? (blink ? '#f97316' : '#3f3f46') : '#ef4444';
-    for (const side of [-1, 1]) {
+    let state = null;
+    for (const side of SIDES) {
       c.g.point(c.A.cwStart + 3.9, side * (c.A.half + 0.8), _p);
+      if (rect && (_p.x < rect.minX || _p.x > rect.maxX || _p.y < rect.minY || _p.y > rect.maxY)) continue;
+      state ??= peds.walkState(c);
+      const blink = Math.floor(time * 3) % 2 === 0;
+      const on = state === 'walk' ? '#22c55e' : state === 'flash' || state === 'gap' ? (blink ? '#f97316' : '#3f3f46') : '#ef4444';
       ctx.save();
       ctx.translate(_p.x, _p.y);
       ctx.rotate(_p.angle);

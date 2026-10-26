@@ -8,6 +8,7 @@ import { clamp } from '../utils/math.js';
 import { MIN_BUFFER, SIM_DT } from '../data/config.js';
 import { AI_STATE } from './Vehicle.js';
 import { CORNER_STOP_TYPES } from '../data/vehicles.js';
+import { isLoadingStop } from './LaneChange.js';
 
 const JERK = 5; // m/s^3: how quickly comfortable acceleration may change
 const SIREN_CROSS_SPEED = 6; // m/s: emergency vehicles slow to this before crossing against a red
@@ -67,6 +68,8 @@ export class VehicleAI {
       v.leaderId = lead.vehicle.id;
       let s0 = P.minGap * env.gapFactor;
       if (v.emergency) s0 = Math.max(s0, 2.0);
+      // A jeep stopping to load just ahead: hang back a few metres, enough room to pull out round it.
+      if (lead.vehicle.segment === v.segment && isLoadingStop(lead.vehicle, 20)) s0 = Math.max(s0, sim.laneChanger.pullOutGap(v, lead.vehicle) ?? s0);
       if (P.creep && v.stoppedTime > 1.5 && lead.vehicle.v < 0.3 && lead.gap > P.creepGap + 0.15) {
         s0 = P.creepGap;
         v.creeping = true;
@@ -91,16 +94,20 @@ export class VehicleAI {
         v.yieldingTo = ml.vehicle.id;
       }
     } else v.yieldingTo = null;
-    // Mid lane change: keep a safe gap to traffic in the lane being left as well.
-    if (v.lc && v.lc.fromLane && Math.abs(v.lateralOffset()) > 0.9) {
+    // Mid lane change: keep a safe gap to traffic in the lane being left as well, as long as the
+    // body still overlaps it sideways.
+    if (v.lc && v.lc.fromLane) {
+      const out = Math.abs(v.lc.off) - Math.abs(v.lateralOffset());
       let best = null;
       for (const o of v.lc.fromLane.vehicles) {
         if (o === v || o.localS <= v.localS) continue;
+        if (out > (v.spec.width + o.spec.width) / 2 + 0.2) continue;
         if (!best || o.localS < best.localS) best = o;
       }
       if (best) {
         const gap = best.localS - best.hl - v.localS - v.hl;
-        const aF = idm(v.v, best.v, gap, v0, aMax, b, P.minGap * env.gapFactor, T);
+        // Squeezing past one that is stopped: just do not touch it.
+        const aF = idm(v.v, best.v, gap, v0, aMax, b, best.v < 0.5 ? 0.4 : P.minGap * env.gapFactor, T);
         if (aF < acc) {
           acc = aF;
           constraint = 'leader';

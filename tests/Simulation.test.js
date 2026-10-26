@@ -115,8 +115,9 @@ describe('Vehicle behaviour', () => {
     }
   });
 
-  it('patient drivers never enter a box whose exit is blocked', () => {
+  it('with waitForExit, patient drivers never enter a box whose exit is blocked', () => {
     const lvl = base({
+      waitForExit: true,
       demand: { N: 0, S: 22, E: 0, W: 0 },
       initialGroups: { A: 'S' },
       blockages: [{ exit: 'A:N', lanes: [0, 1], s: 12, start: 0, end: 999, label: 'TEST' }],
@@ -131,6 +132,19 @@ describe('Vehicle behaviour', () => {
     for (const v of sim.vehicles) {
       if (v.segment.kind === 'connector') expect(v.v).toBeGreaterThan(-1); // sanity
     }
+  });
+
+  it('on a green, drivers cross into the box even when the road beyond is full', () => {
+    const lvl = base({
+      demand: { N: 0, S: 22, E: 0, W: 0 },
+      initialGroups: { A: 'S' },
+      blockages: [{ exit: 'A:N', lanes: [0, 1], s: 12, start: 0, end: 999, label: 'TEST' }],
+    });
+    const sim = new TrafficSimulator(lvl, { seed: 2 });
+    let inBox = 0;
+    runChecked(sim, 80, { onStep: (s) => (inBox += s.vehicles.filter((v) => v.state === AI_STATE.BLOCKED_IN_INTERSECTION).length) });
+    expect(sim.stats.boxBlockEntries).toBeGreaterThan(0);
+    expect(inBox).toBeGreaterThan(0);
   });
 });
 

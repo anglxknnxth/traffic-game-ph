@@ -108,6 +108,17 @@ export function lateralAt(lc, s, out) {
 }
 const _lat = { off: 0, slope: 0 };
 
+/**
+ * Inverse of the lane-change easing: the fraction of L after which a body of width wA that started
+ * `off` metres to the side has moved far enough out to pass a vehicle of width wB in the old lane.
+ */
+export function clearFraction(off, wA, wB) {
+  const d = Math.abs(off);
+  if (d < 1e-6) return 1;
+  const r = Math.min(1, Math.max(0, (d - (wA + wB) / 2 - 0.25) / d));
+  return Math.acos(2 * r - 1) / Math.PI;
+}
+
 export class Vehicle {
   constructor({ spec, personality, route, color, s = 0, v = 0, time = 0, speedVar = 1 }) {
     this.id = nextId++;

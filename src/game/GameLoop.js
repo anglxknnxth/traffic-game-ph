@@ -4,6 +4,9 @@
 
 import { SIM_DT, MAX_FRAME_DT, MAX_STEPS_PER_FRAME } from '../data/config.js';
 
+const STEP_BUDGET_MS = 10; // simulation work allowed per frame, leaving the rest for drawing
+const MAX_BACKLOG = 3; // steps carried over to the next frame when the budget ran out
+
 export class GameLoop {
   constructor(update, render) {
     this.update = update;
@@ -42,12 +45,17 @@ export class GameLoop {
     if (!this.paused) {
       this.acc += dt * this.speed;
       let steps = 0;
+      // Time budget: on a slow frame the simulation falls a little behind real time instead of
+      // running a burst of catch-up steps (which would make the next frame slow too, and so on).
+      const until = performance.now() + STEP_BUDGET_MS;
       while (this.acc >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
         this.update(SIM_DT);
         this.acc -= SIM_DT;
         steps++;
+        if (performance.now() > until) break;
       }
       if (steps >= MAX_STEPS_PER_FRAME) this.acc = 0;
+      else if (this.acc > MAX_BACKLOG * SIM_DT) this.acc = MAX_BACKLOG * SIM_DT;
     }
     try {
       // alpha: how far real time has run past the last simulated step (0..1), for interpolation.

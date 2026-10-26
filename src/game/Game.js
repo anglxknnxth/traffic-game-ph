@@ -14,6 +14,7 @@ import { CAREER_COUNT, PINOY_COUNT } from '../data/levels.js';
 import { FLASH_GROUP, playerPhaseRequest } from '../simulation/TrafficPhaseManager.js';
 import { Director } from './Director.js';
 import { Network } from '../simulation/LaneManager.js';
+import { PerfOverlay } from '../ui/PerfOverlay.js';
 
 export class Game {
   constructor(root) {
@@ -39,7 +40,16 @@ export class Game {
     this.hud = new HUD(root.querySelector('#hud'), this);
     this.menu = new Menu(root.querySelector('#overlay'), this);
     this.input = new InputManager(this.canvas, this);
-    this.loop = new GameLoop((dt) => this.update(dt), (dt) => this.render(dt));
+    this.perf = PerfOverlay.wanted() ? new PerfOverlay() : null;
+    const step = this.perf
+      ? (dt) => {
+          const t = performance.now();
+          this.update(dt);
+          this.perf.sim += performance.now() - t;
+        }
+      : (dt) => this.update(dt);
+    this.loop = new GameLoop(step, (dt, alpha) => this.render(dt, alpha));
+    this._em = [];
     this.session = null;
     this.demo = null;
     this.hoveredHead = null;
@@ -593,7 +603,9 @@ export class Game {
     this.uiTime += dtReal;
     const sim = this.sim;
     if (!sim) return;
+    sim.prefetch();
     const playing = !!this.session && !this.session.ended;
+    const drawStart = this.perf ? performance.now() : 0;
     this.renderer.render(sim, {
       time: sim.time,
       debug: this.state.debug,
@@ -605,6 +617,7 @@ export class Game {
       tool: this.state.tool,
       emergencyInfo: playing && !this.state.watch ? (v) => this.emergencyInfo(v) : null,
     });
+    this.perf?.frame(dtReal, performance.now() - drawStart, this.renderer.tiles.renders);
     const events = sim.drainEvents();
     this.audio.updateMusic(this.musicMood());
     if (this.session && !this.session.ended) {
@@ -621,11 +634,15 @@ export class Game {
         }
       }
       if (playing) {
-        const em = sim.vehicles.filter((v) => v.emergency);
+        const em = this._em;
+        em.length = 0;
+        let heavy = 0;
+        for (const v of sim.vehicles) {
+          if (v.emergency) em.push(v);
+          if (v.spec.length > 6) heavy++;
+        }
         this.audio.updateSiren(em, sim.time, (v) => (this.camera.worldToScreen(v.x, v.y).x / this.camera.w) * 2 - 1);
         const moving = sim.metrics.vehicles ? sim.metrics.avgSpeed / 10 : 0;
-        let heavy = 0;
-        for (const v of sim.vehicles) if (v.spec.length > 6) heavy++;
         this.audio.updateAmbient(Math.min(1, (sim.metrics.vehicles / 50) * (0.45 + moving)), sim.vehicles.length ? heavy / sim.vehicles.length : 0);
       }
       this.hud.update(dtReal);

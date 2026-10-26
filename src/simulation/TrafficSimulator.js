@@ -188,6 +188,27 @@ export class TrafficSimulator {
     }
   }
 
+  /**
+   * Build ahead of time the junction footprints that vehicles on the road will ask for, within a
+   * time budget (ms). Footprints are pure, cached geometry: building one early never changes the
+   * simulation, it only keeps that work out of the step that first needs it (a frame hitch).
+   */
+  prefetch(budgetMs = 1.5) {
+    const until = performance.now() + budgetMs;
+    for (const v of this.vehicles) {
+      const ce = v.nextConnEntry();
+      if (!ce || ce.seg.under) continue;
+      const mgr = this.imgr.get(ce.seg.intersection.id);
+      if (!mgr) continue;
+      if (!mgr.hasFootprint(ce.seg, v.spec)) {
+        mgr.footprint(ce.seg, v.spec);
+        if (performance.now() > until) return false;
+      }
+      if (!mgr.warmConflicts(ce.seg, until)) return false;
+    }
+    return true;
+  }
+
   move(v, dt) {
     let newV = v.v + v.a * dt;
     if (newV < 0) newV = 0;
@@ -725,7 +746,14 @@ export class TrafficSimulator {
     // On green the box may fill up behind a queue that is still moving out: nobody gets stuck,
     // the vehicle simply rolls on as the exit lane drains.
     const flowing = (space === 'tight' && sig === 'green' && this.exitFlowing(conn)) || (space !== 'strict' && this.hasPass(v));
-    if (space !== 'ok' && !flowing) {
+    // On a green, Filipino drivers cross anyway when the road beyond is full: they fill the box
+    // and wait in it for the queue ahead (an enforcer at the junction keeps them honest).
+    const fillBox = sig === 'green' && !this.level.waitForExit && !this.enforcement.near(I) && space !== 'strict' && !v.emergency;
+    if (space !== 'ok' && !flowing && fillBox) {
+      v.boxBlocker = true;
+      this.enforcement.mark(v, 'box', 20);
+      this.stats.boxBlockEntries++;
+    } else if (space !== 'ok' && !flowing) {
       v.blockReason = 'exit';
       if (space === 'strict' || v.emergency || onRed) return false;
       if (distToStop > 3 || v.v > 2 || v.decisionTimer > 0) return false;

@@ -471,6 +471,69 @@ describe('Counterflow and enforcers', () => {
     expect(yaw).toBeGreaterThan(0.05);
   });
 
+  it('swinging out and back in is a lane change: indicator first, then sideways only while rolling forward', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 22, S: 3, E: 3, W: 3 }, mix: { car: 0.4, motorcycle: 0.6 }, personalities: { patient: 0, impatient: 0.5, aggressive: 0.5 }, counterflow: { moto: 0.6, car: 0.2, minWait: 6, minQueue: 3, emergency: true }, initialGroups: { A: 'E' } }), { seed: 5 });
+    const prev = new Map();
+    let signalled = 0;
+    let swung = 0;
+    let yaw = 0;
+    run(sim, 120, (s, i) => {
+      if (i === 70 * 60) s.requestPhase('A', 'N');
+      for (const v of s.counterflow.active) {
+        const cf = v.cf;
+        if (!cf) continue;
+        if (cf.phase === 'signal') {
+          signalled++;
+          expect(v.turnSignal()).toBe(-1);
+          expect(v.cfOff).toBe(0);
+        }
+        if (cf.phase === 'out' && cf.sweep) {
+          swung++;
+          expect(v.turnSignal()).toBe(-1);
+          yaw = Math.max(yaw, Math.abs(v.cfYaw));
+        }
+        // On the curve the offset moves only with the distance travelled: no crabbing on the spot.
+        const off = v._cfOff(v.s);
+        const p = prev.get(v);
+        if (p && cf.sweep && p.sweep === cf.sweep && Math.abs(v.s - p.s) < 1e-9) expect(Math.abs(off - p.off)).toBeLessThan(1e-6);
+        prev.set(v, { s: v.s, off, sweep: cf.sweep });
+      }
+    });
+    expect(signalled).toBeGreaterThan(0);
+    expect(swung).toBeGreaterThan(0);
+    expect(yaw).toBeGreaterThan(0.05);
+    expect(yaw).toBeLessThan(0.86); // a lane change (under ~48° even when squeezed), not a turn on the spot
+  });
+
+  it('lifting the cones: those short of the stop line zip back into their lane, one at a time', () => {
+    const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 18, S: 6, E: 6, W: 6 }, mix: { car: 0.5, motorcycle: 0.5 }, turns: { left: 0.6, right: 0.1 }, initialGroups: { A: 'E' } }), { seed: 2 });
+    const lane = sim.network.byId.get('A').approachLanes.N[0];
+    const z = sim.counterflow.openZone(lane, { from: 30 });
+    let closed = false;
+    const merged = [];
+    run(sim, 220, (s, i) => {
+      if (!closed && i % (20 * 60) === 0) s.requestPhase('A', ['E', 'W', 'S'][(i / (20 * 60)) % 3]);
+      if (closed && i % (25 * 60) === 0) s.requestPhase('A', ['N', 'E'][(i / (25 * 60)) % 2]);
+      if (!closed && i > 20 * 60 && [...z.users].filter((v) => v.cf?.phase === 'run' && v.localS + v.hl < lane.length - 20).length >= 3) {
+        closed = true;
+        s.counterflow.closeZone(z);
+        for (const v of z.users) if (v.cf?.merge) merged.push(v);
+      }
+      for (const v of merged) {
+        if (v.cf || v.zipChecked) continue;
+        v.zipChecked = true;
+        // Back in its own lane, short of the stop line, and not right behind another one from the cones.
+        expect(v.segment).toBe(lane);
+        const ahead = lane.vehicles[lane.vehicles.indexOf(v) + 1];
+        if (ahead && ahead.zipAt !== undefined && ahead !== v) expect(v.zipAt - ahead.zipAt).toBeGreaterThanOrEqual(8);
+      }
+    });
+    expect(closed).toBe(true);
+    expect(merged.length).toBeGreaterThanOrEqual(2);
+    expect(merged.every((v) => v.zipChecked)).toBe(true);
+    expect(z.state).toBe('gone');
+  });
+
   it('an ambulance held up in a queue ignores the centre line and goes up the oncoming lane', () => {
     const sim = new TrafficSimulator(makeLevel({ prewarm: 0, demandScale: 1, demand: { N: 26, S: 3, E: 3, W: 3 }, mix: { car: 0.8, motorcycle: 0.2 }, counterflow: { emergency: true }, initialGroups: { A: 'E' } }), { seed: 1 });
     let cf = 0;

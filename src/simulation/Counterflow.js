@@ -279,18 +279,30 @@ export class CounterflowManager {
     this._slide(v, 0, y - y * k);
   }
 
-  /** Metres of forward travel over which the vehicle swings across (a tight lane change). */
-  _swingL(v) {
-    // Never sharper than ~38° (motorcycles) or ~33° (everything else) at the steepest point.
+  /**
+   * Metres of forward travel over which the vehicle swings across (a tight lane change): gentle
+   * (~38° motorcycles, ~33° the rest at the steepest point) with room ahead, sharper (~48° / ~40°)
+   * when pulling out from close behind the car in front.
+   */
+  _swingL(v, room = this._roomAhead(v)) {
+    const moto = MOTO.has(v.type);
     const w = Math.abs(v.cf?.full ?? -(v.segment.offset + (this.oppOf(v.segment)?.offset ?? 0)));
-    const minL = Math.max(MOTO.has(v.type) ? 4.5 : v.spec.length > 6 ? 1.6 * v.spec.length : 7, w * (MOTO.has(v.type) ? 2.0 : 2.4));
-    return Math.max(minL, Math.min(20, v.v * 2.8));
+    const floor = moto ? 4.5 : v.spec.length > 6 ? 1.6 * v.spec.length : 7;
+    const sharp = Math.max(floor, w * (moto ? 1.4 : 1.9));
+    const gentle = Math.max(floor, w * (moto ? 2.0 : 2.4), Math.min(20, v.v * 2.8));
+    return Math.max(sharp, Math.min(gentle, room / 0.35));
+  }
+
+  /** Free road ahead of v in its own lane (to the rear of the car in front). */
+  _roomAhead(v) {
+    const lead = this.sim.findLeader(v, 30);
+    return lead ? lead.gap : Infinity;
   }
 
   /** Is there room ahead in its own lane for the nose to swing out before the car in front? */
   _canPullOut(v) {
-    const lead = this.sim.findLeader(v, 30);
-    return !lead || lead.gap >= 0.35 * this._swingL(v);
+    const room = this._roomAhead(v);
+    return room >= 0.35 * this._swingL(v, room);
   }
 
   /** Ease the sideways offset to `to` over the next L metres of forward travel. */
@@ -322,9 +334,11 @@ export class CounterflowManager {
       if (!cf.zipOk) return false;
     }
     const end = A ? A.localS - A.hl : lane.length - 0.3;
-    // (the front limit sits a little past the end of the curve, so it is driven to the very end)
-    const L = Math.min(CUT_MAX, end - Math.max(1.5, v.p.minGap) - 0.5 - v.localS - v.hl);
-    if (L < CUT_MIN) return false;
+    const L = Math.max(CUT_MIN, Math.min(CUT_MAX, 4 + v.v * 1.5));
+    // Room for the whole curve ahead (its front limit sits a little past the end, so it is driven
+    // to the very end), or half of it when the vehicle ahead is pulling away.
+    const room = end - Math.max(1.5, v.p.minGap) - 0.5 - v.localS - v.hl;
+    if (room < (A && A.v > 0.8 && A.a > -0.5 ? 0.5 * L : L)) return false;
     if (F) {
       const gapBack = v.localS - v.hl - F.localS - F.hl;
       // A driver who has stopped (or is holding back for us) lets the tail start in a little early:
@@ -333,7 +347,7 @@ export class CounterflowManager {
       if (gapBack < (letting ? 0.5 - 0.35 * L : 0.5)) return false;
       if (!letting && sim.laneChanger._accWith(F, null, gapBack) < -(F.p.safeDecel ?? 3)) return false;
     }
-    if (!this._extend(v, v.localS + v.hl + L)) return false;
+    if (!this._extend(v, v.localS + v.hl + L + 0.5)) return false;
     this._sweep(v, 0, L);
     cf.phase = 'in';
     cf.stuckIn = 0;
@@ -375,7 +389,7 @@ export class CounterflowManager {
       cf.signalT -= dt;
       if (cf.signalT <= 0) {
         cf.phase = 'out';
-        this._sweep(v, cf.full, this._swingL(v));
+        this._sweep(v, cf.full, Math.min(this._swingL(v), cf.target - v.localS - v.hl));
       }
       return;
     }
@@ -477,13 +491,14 @@ export class CounterflowManager {
       else {
         const before = v.cfOff;
         this._swing(v, 0, dt);
-        // Someone took the space while it was cutting back in: swing back out and carry on.
+        // Someone took the space while it was cutting back in: swing back out and carry on (or,
+        // when the cones are coming up, wait out there for the next gap).
         cf.stuckIn = v.cfOff === before ? (cf.stuckIn || 0) + dt : 0;
         if (cf.stuckIn > 3 && cf.opp && !cf.zone?.state?.startsWith('gon')) {
           cf.stuckIn = 0;
           cf.phase = 'out';
           cf.forced = false;
-          cf.front = true;
+          cf.front = !cf.merge;
           cf.noStuck = true;
         }
       }

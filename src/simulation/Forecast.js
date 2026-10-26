@@ -108,8 +108,9 @@ export class Forecast {
       const last = this.warned.get(it.key);
       if (last !== undefined && sim.time - last < NOTIFY_GAP) continue;
       this.warned.set(it.key, sim.time);
-      const what = it.link ? 'mapupuno ang kalsada sa pagitan ng mga kanto (gridlock!)' : 'aabot na sa dulo ang pila';
-      sim.notify(`FC_${it.key}`, `🔮 HULA: ${it.label} · ${what} in ~${Math.round(it.inS)} s`, 'warn');
+      const full = it.inS < 1;
+      const what = it.link ? (full ? 'puno na ang kalsada sa pagitan ng mga kanto (gridlock!)' : 'mapupuno ang kalsada sa pagitan ng mga kanto (gridlock!)') : full ? 'umabot na sa dulo ang pila' : 'aabot na sa dulo ang pila';
+      sim.notify(`FC_${it.key}`, `🔮 HULA: ${it.label} · ${what}${full ? '' : ` in ~${Math.round(it.inS)} s`}`, 'warn');
       break; // one warning at a time
     }
   }

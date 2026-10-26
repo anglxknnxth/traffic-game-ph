@@ -128,7 +128,7 @@ export class TrafficSimulator {
     const cal = this.env.calendar;
     const tag = cal.tags.find((t) => t !== 'fridayNight' && t !== 'ber');
     const extra = tag ? ` · ${SPECIAL_LABEL[tag]}` : '';
-    this.notify('NEW_DAY', `📅 ${cal.dayName().toUpperCase()}, ${cal.label()}${extra}`, 'info');
+    this.notify('NEW_DAY', `📅 ${cal.dayName().toUpperCase()} · ${cal.label().split(', ')[1]}${extra}`, 'info');
   }
 
   resetStats() {

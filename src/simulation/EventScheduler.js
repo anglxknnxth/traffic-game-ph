@@ -57,14 +57,20 @@ export class EventScheduler {
     else this._jeepWave(t);
   }
 
-  /** A free general curb-side exit lane on a road that keeps another lane open: { key, lane } or null. */
+  /**
+   * A free general curb-side exit lane for a long closure (fire, reblocking): { key, lanes, lane } or
+   * null. Only on roads where the traffic squeezed out of it does not end up right beside the
+   * oncoming lanes: three lanes or more, or a median between the two directions.
+   */
   _pickExitLane() {
     const sim = this.sim;
     const keys = [...new Set(sim.network.exitLanes.map((l) => l.exitKey))].filter((k) => !sim.blockages.some((b) => b.active && b.exit === k && !b.done));
-    for (let n = 0; n < 6 && keys.length; n++) {
+    for (let n = 0; n < 8 && keys.length; n++) {
       const key = keys.splice(this.rng.int(0, keys.length - 1), 1)[0];
       const lanes = sim.network.exitLanesByKey(key).filter((l) => l.type === 'general');
-      if (lanes.length >= 2) return { key, lanes, lane: lanes[lanes.length - 1] };
+      const lane = lanes[lanes.length - 1];
+      const median = lane?.startInt?.arms[lane.startArm]?.median ?? 0;
+      if (lanes.length >= 3 || (lanes.length >= 2 && median >= 1)) return { key, lanes, lane };
     }
     return null;
   }

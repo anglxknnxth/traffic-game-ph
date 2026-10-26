@@ -409,3 +409,96 @@ export const bacolod = {
     { kind: 'mall', x: 0, y: 50, w: 60, h: 34 },
   ],
 };
+
+// ---------------------------------------------------------------- batch C: player-sketched towns
+
+export const bayanihan = {
+  id: 'bayanihan',
+  name: 'Bayanihan Rotonda',
+  region: 'Lalawigan',
+  blurb: 'A busy town centre: five junctions on Rizal Avenue and its side streets, a signalised rotonda by the plaza, a U-turn slot and a barangay road that merges without lights.',
+  sceneSeed: 1898,
+  theme: 'province',
+  roads: {
+    rizal: { name: 'Rizal Ave', lanes: 3, median: 1 },
+    mabini: { name: 'Mabini St', lanes: 2, median: 0 },
+    bonifacio: { name: 'Bonifacio St', lanes: 2, median: 0 },
+    luna: { name: 'Luna St', lanes: 2, median: 0 },
+    burgos: { name: 'Burgos St', lanes: 2, median: 0 },
+    delpilar: { name: 'Del Pilar St', lanes: 2, median: 0 },
+    sampaguita: { name: 'Sampaguita St', lanes: 1, median: 0 },
+  },
+  nodes: [
+    { id: 'A', x: -90, y: -135, kind: 'signal', arms: { N: 'mabini', W: 'luna', S: 'mabini' } },
+    { id: 'B', x: -25, y: 0, kind: 'signal', arms: { W: 'mabini', N: 'bonifacio', E: 'rizal', S: 'burgos' } },
+    { id: 'C', x: 200, y: -150, kind: 'signal', arms: { N: 'delpilar', E: 'luna', W: 'bonifacio', S: 'rizal' }, footbridge: { N: 40 } },
+    { id: 'U', x: 50, y: 0, kind: 'uturn', arms: { W: 'rizal', E: 'rizal' }, uturn: ['W', 'E'], uturnRate: 0.2 },
+    { id: 'D', x: 125, y: 0, kind: 'signal', rotonda: { island: 12, lanes: 2 }, arms: { W: 'rizal', N: 'rizal', E: 'delpilar', S: 'burgos' }, shape: { E: [{ straight: 40 }, { curve: 30, radius: 90 }] } },
+    { id: 'F', x: -25, y: 110, kind: 'signal', arms: { N: 'burgos', W: 'luna', E: 'luna', S: 'burgos' } },
+    { id: 'G', x: 125, y: 110, kind: 'signal', arms: { N: 'burgos', W: 'luna', S: 'burgos' } },
+    { id: 'Y', x: -150, y: 110, kind: 'yield', arms: { E: 'luna', W: 'luna', S: 'sampaguita' }, major: ['E', 'W'], shape: { S: [{ straight: 36 }, { curve: -40, radius: 30 }, { straight: 20 }, { curve: 55, radius: 28 }] } },
+  ],
+  links: [
+    { a: 'A', aArm: 'S', b: 'B', bArm: 'W' },
+    { a: 'B', aArm: 'N', b: 'C', bArm: 'W' },
+    { a: 'B', aArm: 'E', b: 'U', bArm: 'W' },
+    { a: 'U', aArm: 'E', b: 'D', bArm: 'W' },
+    { a: 'C', aArm: 'S', b: 'D', bArm: 'N' },
+    { a: 'B', aArm: 'S', b: 'F', bArm: 'N' },
+    { a: 'D', aArm: 'S', b: 'G', bArm: 'N' },
+    { a: 'F', aArm: 'E', b: 'G', bArm: 'W' },
+    { a: 'Y', aArm: 'E', b: 'F', bArm: 'W' },
+  ],
+  armLength: 110,
+  focus: { minX: -200, maxX: 250, minY: -210, maxY: 170 },
+  landmarks: [
+    { kind: 'church', x: -150, y: -175, w: 40, h: 28 },
+    { kind: 'palengke', x: 60, y: -55, w: 60, h: 34 },
+    { kind: 'park', x: 200, y: 40, w: 48, h: 40 },
+  ],
+};
+
+// A mountain town where the main road winds inward up the hill, Baguio-style.
+export const ikotbundok = {
+  id: 'ikotbundok',
+  name: 'Ikot-Bundok',
+  region: 'Cordillera',
+  blurb: 'Up the mountain: Zigzag Road spirals inward past five junctions and two rotondas to the hilltop crossing, with vegetable trucks coming down from the farms.',
+  sceneSeed: 1925,
+  theme: 'province',
+  roads: {
+    zigzag: { name: 'Zigzag Rd', lanes: 2, median: 0 },
+    pino: { name: 'Pino St', lanes: 2, median: 0 },
+    ulap: { name: 'Ulap Rd', lanes: 1, median: 0 },
+    strawberry: { name: 'Strawberry Farm Rd', lanes: 1, median: 0 },
+    minahan: { name: 'Minahan Rd', lanes: 1, median: 0 },
+    palengke: { name: 'Palengke St', lanes: 2, median: 0 },
+  },
+  nodes: [
+    { id: 'I1', x: -200, y: 150, kind: 'signal', arms: { N: 'zigzag', E: 'pino', W: 'minahan', S: 'zigzag' }, shape: { S: [{ straight: 34 }, { curve: -50, radius: 40 }, { straight: 22 }, { curve: 100, radius: 36 }, { straight: 22 }, { curve: -50, radius: 40 }] } },
+    { id: 'I2', x: -200, y: -120, kind: 'signal', arms: { S: 'zigzag', E: 'zigzag', N: 'ulap', W: 'pino' } },
+    { id: 'R1', x: 60, y: -170, kind: 'signal', rotonda: { island: 12, lanes: 2 }, arms: { W: 'zigzag', E: 'zigzag', S: 'palengke', N: 'strawberry' }, shape: { N: [{ straight: 48 }, { curve: -30, radius: 40 }, { straight: 14 }, { curve: 30, radius: 40 }] } },
+    { id: 'I3', x: 220, y: -20, kind: 'signal', arms: { N: 'zigzag', S: 'zigzag', W: 'palengke', E: 'ulap' } },
+    { id: 'I4', x: 120, y: 140, kind: 'signal', arms: { E: 'zigzag', W: 'zigzag', N: 'palengke', S: 'minahan' } },
+    { id: 'R2', x: -60, y: 60, kind: 'yield', rotonda: { island: 9, lanes: 1 }, major: [], rolling: true, arms: { E: 'zigzag', W: 'pino', N: 'zigzag', S: 'pino' } },
+    { id: 'I5', x: 40, y: -40, kind: 'signal', arms: { N: 'palengke', E: 'palengke', S: 'palengke', W: 'zigzag' } },
+  ],
+  links: [
+    { a: 'I1', aArm: 'N', b: 'I2', bArm: 'S' },
+    { a: 'I2', aArm: 'E', b: 'R1', bArm: 'W' },
+    { a: 'R1', aArm: 'E', b: 'I3', bArm: 'N' },
+    { a: 'I3', aArm: 'S', b: 'I4', bArm: 'E' },
+    { a: 'I4', aArm: 'W', b: 'R2', bArm: 'E' },
+    { a: 'R2', aArm: 'N', b: 'I5', bArm: 'W' },
+    { a: 'I1', aArm: 'E', b: 'R2', bArm: 'W' },
+    { a: 'R1', aArm: 'S', b: 'I5', bArm: 'N' },
+    { a: 'I3', aArm: 'W', b: 'I5', bArm: 'E' },
+    { a: 'I4', aArm: 'N', b: 'I5', bArm: 'S' },
+  ],
+  armLength: 110,
+  focus: { minX: -260, maxX: 280, minY: -230, maxY: 210 },
+  landmarks: [
+    { kind: 'park', x: -120, y: -40, w: 60, h: 60 },
+    { kind: 'church', x: 120, y: -80, w: 36, h: 26 },
+  ],
+};

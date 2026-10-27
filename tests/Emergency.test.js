@@ -4,6 +4,7 @@ import { CollisionAvoidance } from '../src/simulation/CollisionAvoidance.js';
 import { makeLevel } from '../src/data/levels.js';
 import { SIM_DT } from '../src/data/config.js';
 import { LevelManager } from '../src/game/LevelManager.js';
+import { registerRotondaMaps } from './fixtures/rotondaMaps.js';
 
 const MIN_SEP = 0.44;
 
@@ -147,8 +148,20 @@ describe('Emergency vehicles ignore red lights', () => {
   it('a siren up the oncoming lane and a truck coming off the rotonda into that road never wedge each other', () => {
     // Welcome Rotonda (2-lane undivided arms): a fire truck up the oncoming lane at the stop line, and
     // a truck crossing the ring into the next lane over, whose swing runs into it where it stands.
+    // (The Welcome level no longer has a rotonda: the old map lives on as a test fixture.)
+    registerRotondaMaps();
     const lm = new LevelManager();
-    const sim = lm.createSim({ ...lm.get('pinoy', 'welcome'), autoLights: true, emergency: { times: [20, 28, 36, 60, 68, 76, 100, 108, 116] } }, 8);
+    const sim = lm.createSim(
+      {
+        ...lm.get('pinoy', 'welcome'),
+        map: 'rotondaWelcome',
+        initialGroups: { A: 'E' },
+        demand: { N: 6, S: 7, E: 12, W: 11 },
+        autoLights: true,
+        emergency: { times: [20, 28, 36, 60, 68, 76, 100, 108, 116] },
+      },
+      8,
+    );
     const I = sim.network.byId.get('A');
     const since = new Map(); // crossing vehicle -> time first seen wedged against a siren out there
     run(sim, 180, (s) => {

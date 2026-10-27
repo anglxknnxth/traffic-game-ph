@@ -7,6 +7,7 @@ import { makeLevel } from '../src/data/levels.js';
 import { MAPS } from '../src/data/maps/index.js';
 import { SIM_DT, OPPOSITE } from '../src/data/config.js';
 import { Rng } from '../src/utils/math.js';
+import { registerRotondaMaps } from './fixtures/rotondaMaps.js';
 
 const lm = new LevelManager();
 
@@ -164,7 +165,9 @@ describe('Flashing yellow at a rotonda', () => {
   it('the first to stop being held (a bus swinging over the next head) does not lock the ring', () => {
     // Bayanihan seed 3: a bus held by the van at the next approach (its ring swing) stopped first;
     // the van waited its turn behind it, and everyone else behind the van.
-    const sim = new TrafficSimulator(lm.get('pinoy', 'bayanihan'), { seed: 3 });
+    // (Bayanihan's D is a plain junction now: the rotonda version lives on as a test fixture.)
+    registerRotondaMaps();
+    const sim = new TrafficSimulator({ ...lm.get('pinoy', 'bayanihan'), map: 'rotondaBayanihan' }, { seed: 3 });
     for (let i = 0; i < 40 / SIM_DT; i++) sim.step(SIM_DT);
     sim.requestFlash('D');
     const seen = new Set();

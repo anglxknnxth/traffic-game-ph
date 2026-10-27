@@ -159,13 +159,17 @@ What you'll see on the map:
   signals, lots of students), España in the rain, Commonwealth (motorcycle lane and a U-turn slot),
   EDSA (Carousel busway, MRT-3, dusk into night), Liko-Liko (a mountain S-bend over a river),
   Tatlong Kanto (three signals: build a green wave), Dalawang Pampang (a signal on each bank of a
-  city river, one short bridge between them), Sa Highway (side streets that join MacArthur Highway
-  with no light, and a lane that ends) and Grid ng Maynila (four signals).
-  Sixteen more follow (`src/data/maps/buhayKalsada.js`): Ayala–EDSA (footbridge, underpass, U-turn
-  slots), Ortigas on payday, Quiapo with its procession, Baclaran, Cubao when the game lets out,
-  C5–Kalayaan, Masinag, Alabang on Undas, the signalised Welcome Rotonda, Session Road with
-  the Burnham rotonda, Cebu's Fuente Osmeña rotonda at Sinulog, Intramuros with kalesas, disciplined
-  Davao, fast Diversion Road in Iloilo, the unsignalised Tagaytay rotonda, and Bacolod at MassKara.
+  city river: one skewed bridge, then a riverside street on the far bank), Sa Highway (side streets
+  that join MacArthur Highway with no light, and a lane that ends) and Grid ng Maynila (four signals).
+  Sixteen more follow (`src/data/maps/buhayKalsada.js`), each with its own road layout: Ayala–EDSA
+  (footbridge, underpass, a U-turn slot, an offset T at Paseo de Roxas), Ortigas on payday (an L
+  around the malls), Quiapo with its procession (a triangle round the church), Baclaran (a T on the
+  bay, a U-turn slot and a yield), Cubao when the game lets out (an upside-down T), C5–Kalayaan
+  (staggered T-junctions), Masinag (a yield up the side road), Alabang on Undas (a fork), Quezon
+  Ave–España (a dogleg), Session Road (a hairpin), Cebu at Sinulog (a staircase), Intramuros with
+  kalesas (a square of one-lane streets), disciplined Davao (a three-light crescent), Diversion Road
+  in Iloilo (an underpass), the Tagaytay ridge (a crossroads with no lights) and Bacolod at MassKara
+  (yields on both sides of one signal).
 - Every mode has the same street life: people crossing at the lights and the odd jaywalker, a
   clock and changing weather (lighter in the first career levels).
 - **Endless:** demand grows every minute through the afternoon rush into the night, with passing

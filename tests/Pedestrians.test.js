@@ -20,6 +20,7 @@ function distToVehicle(px, py, o) {
 /** Throws if any pedestrian is closer than `margin` to any vehicle. */
 function auditPeds(sim, margin = 0.1) {
   for (const p of sim.peds.peds) {
+    if (p.state === 'over') continue; // up on a footbridge or down in a pedestrian underpass
     for (const v of sim.vehicles) {
       if (Math.abs(v.x - p.x) > 8 || Math.abs(v.y - p.y) > 8) continue;
       if (Math.abs(v.layer || 0) >= 1) continue; // up on the expressway or down in the underpass

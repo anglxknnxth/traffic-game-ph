@@ -251,37 +251,42 @@ export const tulay = {
   id: 'tulay',
   name: 'Dalawang Pampang',
   region: 'Metro Manila',
-  blurb: 'A city river with a signal on each bank, joined by one short bridge. Riverside streets feed both ends.',
+  blurb: 'A city river crossed by one skewed bridge: a signal on the north bank, and on the south bank the road turns along the river past two more.',
   sceneSeed: 1947,
   theme: 'old-manila',
   roads: {
     avenida: { name: 'Avenida', lanes: 3, median: 0, types: ['general', 'general', 'bike'] },
     tulay: { name: 'Tulay Ave', lanes: 2, median: 0 },
     pampang: { name: 'Pampang St', lanes: 1, median: 0 },
-    ilaya: { name: 'Ilaya St', lanes: 1, median: 0 },
+    ilaya: { name: 'Ilaya St', lanes: 2, median: 0 },
   },
+  // A Γ: the bridge lands at B, and Ilaya St runs along the south bank to C.
   nodes: [
     {
       id: 'A',
       x: 0,
-      y: -40,
+      y: -50,
       kind: 'signal',
       arms: { N: 'avenida', S: 'tulay', E: 'pampang', W: 'pampang' },
       shape: { N: [{ straight: 34 }, { curve: 25, radius: 70 }], E: [{ straight: 40 }, { curve: -12, radius: 160 }], W: [{ straight: 40 }, { curve: 10, radius: 180 }] },
     },
+    { id: 'B', x: -55, y: 50, kind: 'signal', arms: { N: 'tulay', W: 'ilaya', E: 'ilaya' }, shape: { W: [{ straight: 40 }, { curve: -12, radius: 160 }] } },
     {
-      id: 'B',
-      x: 0,
-      y: 40,
+      id: 'C',
+      x: 60,
+      y: 50,
       kind: 'signal',
-      arms: { N: 'tulay', S: 'avenida', E: 'ilaya', W: 'ilaya' },
-      shape: { S: [{ straight: 34 }, { curve: -30, radius: 60 }], E: [{ straight: 40 }, { curve: 10, radius: 180 }], W: [{ straight: 40 }, { curve: -12, radius: 160 }] },
+      arms: { W: 'ilaya', E: 'ilaya', S: 'avenida' },
+      shape: { S: [{ straight: 34 }, { curve: -30, radius: 60 }], E: [{ straight: 40 }, { curve: 10, radius: 180 }] },
     },
   ],
-  links: [{ a: 'A', aArm: 'S', b: 'B', bArm: 'N' }],
+  links: [
+    { a: 'A', aArm: 'S', b: 'B', bArm: 'N' },
+    { a: 'B', aArm: 'E', b: 'C', bArm: 'W' },
+  ],
   river: { points: [[-280, 8], [-150, -3], [-60, 3], [0, 0], [60, -4], [150, 4], [280, -6]], width: 22, name: 'TULAY NG PAMPANG', boats: 3 },
   armLength: 115,
-  focus: { minX: -70, maxX: 70, minY: -92, maxY: 92 },
+  focus: { minX: -100, maxX: 110, minY: -95, maxY: 95 },
 };
 
 // A highway town strip: two side streets join the highway with no traffic light (they give way and
